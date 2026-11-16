@@ -143,6 +143,70 @@ fn paint_normal_covers_and_merges_with_raw_shapes() {
 }
 
 #[test]
+fn a_wash_stays_its_own_shape_and_composites() {
+    let mut s = blank(false);
+    run(&mut s, "draw.rect", json!({"x": 100, "y": 100, "w": 200, "h": 100, "fill": BLUE, "stroke": null}));
+    let r = run(&mut s, "draw.brush", json!({"points": stroke(50.0, 150.0, 350.0, 150.0), "size": 20, "color": "#ff000080"}));
+    assert_eq!(r["merged"], false, "a wash is not cut into the drawing");
+    let blue = shapes(&s).iter().filter(|(sh, _)| fill_of(sh) == Some(Rgba::hex(0x0000ff))).count();
+    assert_eq!(blue, 1, "the rectangle behind the wash is still one shape");
+    let drawn = shapes(&s);
+    let wash = drawn.iter().find(|(sh, _)| fill_of(sh).is_some_and(|c| c.r > 0.9 && c.a < 1.0));
+    let wash_a = wash.and_then(|(sh, _)| fill_of(sh)).map(|c| c.a).unwrap_or(1.0);
+    let stays = wash.is_some_and(|(sh, _)| !sh.merge);
+    assert!(stays && (wash_a - 128.0 / 255.0).abs() < 0.01, "{wash_a}");
+    // A second wash of the same colour crosses it and stays separate, so the overlap darkens.
+    run(&mut s, "draw.brush", json!({"points": stroke(200.0, 60.0, 200.0, 240.0), "size": 20, "color": "#ff000080"}));
+    let washes = shapes(&s).iter().filter(|(sh, _)| fill_of(sh).is_some_and(|c| c.a < 1.0)).count();
+    assert_eq!(washes, 2, "washes of one colour do not join");
+    let px = |x, y| anicraft_render::render_frame(&s.doc, 0, 1.0).unwrap().pixel(x, y).unwrap();
+    let one = px(120, 150);
+    let two = px(200, 150);
+    let bare = px(150, 120);
+    assert!(bare[2] > 0.9 && bare[0] < 0.1, "blue only: {bare:?}");
+    assert!(one[0] > 0.35 && one[0] < 0.65 && one[2] > 0.35 && one[2] < 0.65, "one wash over blue: {one:?}");
+    assert!(two[0] > one[0] + 0.1 && two[2] < one[2] - 0.1, "two washes darken: {one:?} {two:?}");
+}
+
+#[test]
+fn pressure_opacity_and_a_clear_gradient_stay_separate() {
+    let mut s = blank(false);
+    let pts: Vec<Value> = (0..=20).map(|i| json!([i as f32 * 10.0, 80.0, 0.25])).collect();
+    let r = run(&mut s, "draw.brush", json!({"points": pts, "size": 16, "color": RED, "pressure_opacity": true, "pressure_size": false}));
+    assert_eq!(r["merged"], false);
+    let drawn = shapes(&s);
+    let last = drawn.last();
+    let a = last.and_then(|(sh, _)| fill_of(sh)).map(|c| c.a).unwrap_or(1.0);
+    let stays = last.is_some_and(|(sh, _)| !sh.merge);
+    assert!(stays && (a - 0.25).abs() < 0.02, "average pressure is the alpha: {a}");
+
+    let mut g = blank(false);
+    run(&mut g, "draw.rect", json!({"x": 40, "y": 40, "w": 80, "h": 40, "fill": BLUE, "stroke": null}));
+    run(&mut g, "paint.set_fill", json!({"type": "linear", "selection": false, "stops": [{"offset": 0, "color": "#ff0000ff"}, {"offset": 1, "color": "#ff000000"}]}));
+    let r = run(&mut g, "draw.brush", json!({"points": stroke(20.0, 60.0, 140.0, 60.0), "size": 12}));
+    assert_eq!(r["merged"], false);
+    assert_eq!(shapes(&g).iter().filter(|(sh, _)| fill_of(sh) == Some(Rgba::hex(0x0000ff))).count(), 1, "the rectangle is not cut");
+    assert!(shapes(&g).iter().any(|(sh, _)| matches!(sh.fill, Some(Paint::Linear { .. })) && !sh.merge));
+
+    // An opaque gradient still joins the drawing.
+    let mut o = blank(false);
+    run(&mut o, "draw.rect", json!({"x": 40, "y": 40, "w": 80, "h": 40, "fill": BLUE, "stroke": null}));
+    run(&mut o, "paint.set_fill", json!({"type": "linear", "selection": false, "stops": [{"offset": 0, "color": "#ff0000"}, {"offset": 1, "color": "#00ff00"}]}));
+    let r = run(&mut o, "draw.brush", json!({"points": stroke(20.0, 60.0, 140.0, 60.0), "size": 12}));
+    assert_eq!(r["merged"], true);
+}
+
+#[test]
+fn a_translucent_paint_brush_line_does_not_merge() {
+    let mut s = blank(false);
+    let r = run(&mut s, "draw.brush", json!({"points": stroke(10.0, 10.0, 80.0, 10.0), "size": 8, "as_stroke": true, "color": "#ff000080"}));
+    assert_ne!(r["merged"], true);
+    let (sh, _) = &shapes(&s)[0];
+    let a = sh.stroke.as_ref().map(|st| st.color.a).unwrap_or(1.0);
+    assert!(!sh.merge && (a - 128.0 / 255.0).abs() < 0.01, "{a}");
+}
+
+#[test]
 fn paint_behind_only_fills_empty_areas() {
     for object in [false, true] {
         let mut s = blank(object);

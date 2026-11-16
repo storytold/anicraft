@@ -135,8 +135,19 @@ pub fn tilted(angle: f32, lean: Vec2, response: TiltResponse) -> (f32, f32) {
 
 /// The tip's size factor at `pressure`: from `MIN_PRESSURE_SIZE` at none to 1 at full.
 pub fn size_factor(pressure: f32) -> f32 {
+    pressure_factor(pressure, 0.0, 0.0)
+}
+
+/// The tip's size factor at `pressure`. `min_size` is the diameter at no pressure and `size`
+/// the diameter at full pressure. A `min_size` of 0 keeps the tenth-of-the-size floor.
+pub fn pressure_factor(pressure: f32, min_size: f32, size: f32) -> f32 {
     let p = if pressure.is_finite() { pressure.clamp(0.0, 1.0) } else { 1.0 };
-    MIN_PRESSURE_SIZE + (1.0 - MIN_PRESSURE_SIZE) * p
+    let floor = if min_size.is_finite() && min_size > 0.0 && size.is_finite() && size > 0.0 {
+        (min_size.min(size) / size).clamp(1e-6, 1.0)
+    } else {
+        MIN_PRESSURE_SIZE
+    };
+    floor + (1.0 - floor) * p
 }
 
 /// How a stroke is shaped beyond its tip (ADR 0068): tapered ends, separate dabs and a ragged
@@ -161,6 +172,8 @@ pub struct Shaping {
     pub scatter: f32,
     /// What the pen's tilt shapes.
     pub tilt: TiltResponse,
+    /// Diameter at no pressure, in stage units. `0` keeps the tenth-of-the-size floor.
+    pub min_size: f32,
 }
 
 /// Most dabs one stroke stamps (the spacing widens past it).
@@ -183,6 +196,7 @@ impl Shaping {
             texture: c(self.texture, 1.0),
             scatter: c(self.scatter, 2.0),
             tilt: self.tilt,
+            min_size: if self.min_size.is_finite() && self.min_size > 0.0 { self.min_size } else { 0.0 },
         }
     }
 
@@ -212,13 +226,13 @@ impl Shaping {
 /// curve fit's tolerance (stage units); `flatness` how closely the points follow the fitted
 /// curves. One distinct sample gives one point (a dab).
 pub fn centreline(samples: &[Sample], smoothing: f32, flatness: f32) -> Vec<(Vec2, f32)> {
-    centreline_shaped(samples, smoothing, flatness, &Shaping::default())
+    centreline_shaped(samples, smoothing, flatness, &Shaping::default(), 0.0)
 }
 
 /// The centre line with the shaping's tapers applied to the size factors (and the tilt's
-/// widening, when the shaping says tilt shapes the width).
-pub fn centreline_shaped(samples: &[Sample], smoothing: f32, flatness: f32, shaping: &Shaping) -> Vec<(Vec2, f32)> {
-    centre_points(samples, smoothing, flatness, shaping).into_iter().map(|p| (p.at, p.f)).collect()
+/// widening, when the shaping says tilt shapes the width). `size` is the tip's full diameter.
+pub fn centreline_shaped(samples: &[Sample], smoothing: f32, flatness: f32, shaping: &Shaping, size: f32) -> Vec<(Vec2, f32)> {
+    centre_points(samples, smoothing, flatness, shaping, size).into_iter().map(|p| (p.at, p.f)).collect()
 }
 
 /// A point of the centre line: where, the tip's size factor, and the pen's lean there (a vector
@@ -236,7 +250,7 @@ impl Pt {
     }
 }
 
-fn centre_points(samples: &[Sample], smoothing: f32, flatness: f32, shaping: &Shaping) -> Vec<Pt> {
+fn centre_points(samples: &[Sample], smoothing: f32, flatness: f32, shaping: &Shaping, size: f32) -> Vec<Pt> {
     let shaping = shaping.sanitized();
     let mut pts: Vec<Vec2> = Vec::with_capacity(samples.len().min(MAX_SAMPLES));
     let mut press: Vec<f32> = Vec::with_capacity(pts.capacity());
@@ -246,13 +260,13 @@ fn centre_points(samples: &[Sample], smoothing: f32, flatness: f32, shaping: &Sh
         if pts.last().is_some_and(|l| l.distance(s.at) <= 1e-4) {
             // A held pointer: keep the latest pressure and tilt.
             if let (Some(p), Some(l)) = (press.last_mut(), leans.last_mut()) {
-                *p = size_factor(s.pressure);
+                *p = pressure_factor(s.pressure, shaping.min_size, size);
                 *l = lean_of(s);
             }
             continue;
         }
         pts.push(s.at);
-        press.push(size_factor(s.pressure));
+        press.push(pressure_factor(s.pressure, shaping.min_size, size));
         leans.push(lean_of(s));
     }
     // The tilt's widening multiplies the size factor (ADR 0093).
@@ -321,8 +335,8 @@ fn subdivide(line: &[Vec2], n: usize) -> Vec<Vec2> {
 /// The Paint Brush's line (ADR 0068): the smoothed centre line as an open path, and the tip's
 /// size factor along it as `(fraction of length, factor)` at `max` (2..) evenly spaced places.
 /// An empty path when the samples don't make a line (one point, or none finite).
-pub fn centre_stroke(samples: &[Sample], shaping: &Shaping, smoothing: f32, flatness: f32, max: usize) -> (Path, Vec<(f32, f32)>) {
-    let line = centreline_shaped(samples, smoothing, flatness, shaping);
+pub fn centre_stroke(samples: &[Sample], shaping: &Shaping, size: f32, smoothing: f32, flatness: f32, max: usize) -> (Path, Vec<(f32, f32)>) {
+    let line = centreline_shaped(samples, smoothing, flatness, shaping, size);
     if line.len() < 2 {
         return (Path::new(), Vec::new());
     }
@@ -401,7 +415,7 @@ pub fn outline(samples: &[Sample], tip: &Tip, smoothing: f32, tolerance: f32) ->
 pub fn outline_shaped(samples: &[Sample], tip: &Tip, shaping: &Shaping, smoothing: f32, tolerance: f32) -> Path {
     let shaping = shaping.sanitized();
     let tol = if tolerance.is_finite() && tolerance > 1e-3 { tolerance } else { 0.25 };
-    let mut line = centre_points(samples, smoothing, tol * 0.25, &shaping);
+    let mut line = centre_points(samples, smoothing, tol * 0.25, &shaping, tip.size);
     let spacing = shaping.dab_spacing();
     let dabbed = spacing > 0.0 && line.len() > 1;
     if dabbed {
@@ -890,7 +904,7 @@ mod tests {
     #[test]
     fn the_paint_brush_line_has_a_profile() {
         let s = line(Vec2::ZERO, Vec2::new(200.0, 0.0), 40, |t| t);
-        let (path, prof) = centre_stroke(&s, &Shaping::default(), 1.0, 0.1, 16);
+        let (path, prof) = centre_stroke(&s, &Shaping::default(), 10.0, 1.0, 0.1, 16);
         assert!(!path.is_empty() && prof.len() == 16);
         assert_eq!(prof.first().map(|p| p.0), Some(0.0));
         assert_eq!(prof.last().map(|p| p.0), Some(1.0));
@@ -900,7 +914,7 @@ mod tests {
         assert!(prof.windows(2).all(|w| w[1].1 >= w[0].1 - 1e-4), "rising");
         let b = path.bounds();
         assert!((b.width() - 200.0).abs() < 1.0 && b.height() < 1.0);
-        assert!(centre_stroke(&s[..1], &Shaping::default(), 1.0, 0.1, 16).0.is_empty(), "a dab is no line");
+        assert!(centre_stroke(&s[..1], &Shaping::default(), 10.0, 1.0, 0.1, 16).0.is_empty(), "a dab is no line");
     }
 
     /// The bounds of the curve itself (`Path::bounds` includes control points).
@@ -997,8 +1011,8 @@ mod tests {
 
     #[test]
     fn hostile_input_is_empty_or_bounded() {
-        let wild = Shaping { taper_start: f32::NAN, taper_end: 1e9, spacing: -3.0, jitter: f32::INFINITY, texture: f32::NAN, scatter: 1e9, tilt: TiltResponse::default() };
-        assert_eq!(wild.sanitized(), Shaping { taper_start: 0.0, taper_end: 0.5, spacing: 0.0, jitter: 0.0, texture: 0.0, scatter: 2.0, tilt: TiltResponse::default() });
+        let wild = Shaping { taper_start: f32::NAN, taper_end: 1e9, spacing: -3.0, jitter: f32::INFINITY, texture: f32::NAN, scatter: 1e9, tilt: TiltResponse::default(), min_size: f32::NAN };
+        assert_eq!(wild.sanitized(), Shaping { taper_start: 0.0, taper_end: 0.5, spacing: 0.0, jitter: 0.0, texture: 0.0, scatter: 2.0, tilt: TiltResponse::default(), min_size: 0.0 });
         let _ = outline_shaped(&line(Vec2::ZERO, Vec2::new(10.0, 0.0), 3, |_| 1.0), &Tip::round(5.0), &Shaping { spacing: 1e-9, jitter: 0.5, ..wild }, 1.0, 1.0);
         assert!(outline(&[], &Tip::round(10.0), 1.0, 1.0).is_empty());
         let nan = [Sample::new(Vec2::new(f32::NAN, 0.0), f32::NAN)];

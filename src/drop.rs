@@ -32,12 +32,40 @@ pub struct StageGeo {
     pub zoom: f32,
     /// Previewing through the camera: artwork edits are paused.
     pub paused: bool,
+    /// Clockwise degrees the view is turned. Zero keeps [`to_stage`](Self::to_stage) upright.
+    pub rotation: f32,
+    /// Canvas centre, the point the picture turns about.
+    pub pivot: Pos2,
+    /// Screen-space pan, outside the turn.
+    pub pan: egui::Vec2,
 }
 
 impl StageGeo {
     pub fn to_stage(self, p: Pos2) -> (f32, f32) {
         let z = self.zoom.max(1e-6);
-        ((p.x - self.origin.x) / z, (p.y - self.origin.y) / z)
+        let unrotated = crate::viewturn::unplace(p, self.pivot, self.pan, self.rotation);
+        ((unrotated.x - self.origin.x) / z, (unrotated.y - self.origin.y) / z)
+    }
+}
+
+/// Where the X-sheet's columns were drawn this frame (set by `xsheet::show`). A column is one
+/// layer; frame 0's top is `y0`, and rows are `row_h` apart down the page.
+#[derive(Clone, Debug, Default)]
+pub struct XSheetGeo {
+    pub columns: Vec<(Rect, LayerId)>,
+    pub y0: f32,
+    pub row_h: f32,
+}
+
+impl XSheetGeo {
+    /// The layer and frame under `p`, and that cell (clipped to the column that was drawn).
+    pub fn at(&self, p: Pos2) -> Option<(LayerId, u32, Rect)> {
+        let (col, layer) = *self.columns.iter().find(|(r, _)| r.contains(p))?;
+        let rh = self.row_h.max(1.0);
+        let frame = ((p.y - self.y0) / rh).floor().clamp(0.0, anicraft_engine::MAX_FRAME as f32) as u32;
+        let top = self.y0 + frame as f32 * rh;
+        let cell = Rect::from_min_max(pos2(col.left(), top.max(col.top())), pos2(col.right(), (top + rh).min(col.bottom())));
+        Some((layer, frame, cell))
     }
 }
 
@@ -151,6 +179,8 @@ pub struct DropState {
     pub stage: Option<StageGeo>,
     /// Where the timeline's rows were drawn this frame (set by `timeline::show`).
     pub timeline: Option<TimelineGeo>,
+    /// Where the X-sheet's columns were drawn this frame (set by `xsheet::show`).
+    pub xsheet: Option<XSheetGeo>,
     waiting: Option<Waiting>,
     /// The pointer moved while files were dragged over the window: its position is current.
     tracked: bool,
@@ -177,6 +207,9 @@ pub fn spot_at(app: &App, p: Option<Pos2>) -> Spot {
     if let Some(folder) = app.library.drop_zone.folder_at(p) {
         return Spot::Library(folder);
     }
+    if let Some((layer, frame, _)) = app.drop.xsheet.as_ref().and_then(|g| g.at(p)) {
+        return Spot::Timeline(layer, frame);
+    }
     if let Some((layer, frame, _)) = app.drop.timeline.as_ref().and_then(|t| t.at(p, app.s.frame)) {
         return Spot::Timeline(layer, frame);
     }
@@ -193,6 +226,7 @@ pub fn spot_at(app: &App, p: Option<Pos2>) -> Spot {
 pub fn begin_frame(app: &mut App) {
     app.drop.stage = None;
     app.drop.timeline = None;
+    app.drop.xsheet = None;
     app.library.drop_zone = Default::default();
 }
 
@@ -491,8 +525,12 @@ fn highlight(app: &App, ctx: &egui::Context, files: &[PathBuf], p: Option<Pos2>)
             label(p + vec2(14.0, 12.0), text, ok);
         }
         (Spot::Timeline(layer, frame), Some(p)) => {
-            // The row outlined and the frame's cell filled: where it lands.
-            if let Some((row, cell)) = app.drop.timeline.as_ref().and_then(|t| Some((t.rows.iter().find(|(_, l)| *l == layer)?.0, t.at(p, app.s.frame)?.2))) {
+            // The row outlined and the frame's cell filled: where it lands. A point on the
+            // X-sheet highlights that cell; the filmstrip highlights its row.
+            if let Some((_, _, cell)) = app.drop.xsheet.as_ref().and_then(|g| g.at(p)).filter(|(l, f, _)| *l == layer && *f == frame) {
+                painter.rect_filled(cell, crate::theme::SQUARE, T.accent.gamma_multiply(0.45));
+                painter.rect_stroke(cell, crate::theme::SQUARE, stroke, StrokeKind::Inside);
+            } else if let Some((row, cell)) = app.drop.timeline.as_ref().and_then(|t| Some((t.rows.iter().find(|(_, l)| *l == layer)?.0, t.at(p, app.s.frame)?.2))) {
                 painter.rect_stroke(row, crate::theme::SQUARE, Stroke::new(1.5, T.accent), StrokeKind::Inside);
                 painter.rect_filled(cell, crate::theme::SQUARE, T.accent.gamma_multiply(0.45));
                 painter.rect_stroke(cell, crate::theme::SQUARE, stroke, StrokeKind::Inside);
@@ -552,6 +590,16 @@ mod tests {
 
     fn p(s: &str) -> PathBuf {
         PathBuf::from(s)
+    }
+
+    #[test]
+    fn an_xsheet_column_names_the_frame_under_the_pointer() {
+        let col = Rect::from_min_size(pos2(100.0, 40.0), vec2(80.0, 84.0));
+        let g = XSheetGeo { columns: vec![(col, LayerId(3))], y0: 40.0, row_h: 28.0 };
+        let Some((layer, frame, cell)) = g.at(pos2(120.0, 40.0 + 56.0 + 4.0)) else { panic!("cell") };
+        assert_eq!((layer, frame), (LayerId(3), 2));
+        assert!(cell.contains(pos2(120.0, 40.0 + 56.0 + 4.0)));
+        assert!(g.at(pos2(10.0, 50.0)).is_none(), "beside the columns is not a cell");
     }
 
     #[test]

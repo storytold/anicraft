@@ -606,7 +606,7 @@ mod tests {
         use super::*;
 
         /// Stage and screen coordinates coincide.
-        const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+        const XF: Xf = Xf::plain(Pos2::ZERO, 1.0);
 
         #[test]
         fn hit_finds_handles_anchors_and_segments_per_tool() {

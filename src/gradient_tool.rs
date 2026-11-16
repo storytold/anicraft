@@ -302,7 +302,7 @@ mod tests {
     fn a_drag_on_a_handle_is_one_undo_step_on_every_kind_of_fill() {
         let ctx = egui::Context::default();
         let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
-        let xf = Xf { origin: pos2(0.0, 0.0), zoom: 1.0 };
+        let xf = Xf::plain(pos2(0.0, 0.0), 1.0);
         app.tool = Tool::GradientTransform;
         // A solid fill has no handles: picking it says how to get a gradient.
         app.run("draw.rect", json!({"x": 100, "y": 100, "w": 200, "h": 100, "fill": "#ff0000", "stroke": null}));

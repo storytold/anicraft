@@ -780,7 +780,7 @@ mod tests {
     fn choosing_a_theme_in_preferences_restyles_everything_in_the_same_frame() {
         use crate::theme::{LIGHT, Palette, T};
         let (_, mut app, ctx) = tree(|_, _| {});
-        for palette in [Palette::Light, Palette::HighContrast, Palette::Graphite] {
+        for palette in [Palette::Light, Palette::HighContrast, Palette::Graphite, Palette::Studio] {
             let mut p = app.prefs.clone();
             p.theme = palette;
             p.theme_follows_system = Some(false);

@@ -593,10 +593,18 @@ pub fn nudge(app: &mut App, d: Vec2) {
 
 /// Boxes around the selection on every keyframe (and the artwork under the pointer), and the
 /// marquee being dragged.
-pub fn draw(app: &mut App, painter: &egui::Painter, to_screen: impl Fn(Vec2) -> Pos2, hover: Option<Pos2>, zoom: f32) {
+pub fn draw(app: &mut App, painter: &egui::Painter, to_screen: impl Fn(Vec2) -> Pos2, hover: Option<Pos2>, zoom: f32, turned: bool) {
     let sel = live_selection(app);
     let shown = items(app);
     let box_of = |b: &GRect| Rect::from_min_max(to_screen(b.min), to_screen(b.max)).expand(1.0);
+    let stroke_box = |b: &GRect, stroke: Stroke| {
+        if !turned {
+            painter.rect_stroke(box_of(b), 0.0, stroke, StrokeKind::Middle);
+            return;
+        }
+        let q = [b.min, Vec2::new(b.max.x, b.min.y), b.max, Vec2::new(b.min.x, b.max.y)].map(&to_screen);
+        painter.add(egui::Shape::closed_line(q.to_vec(), stroke));
+    };
     if let Some(h) = hover
         && app.drag == Drag::None
     {
@@ -605,24 +613,30 @@ pub fn draw(app: &mut App, painter: &egui::Painter, to_screen: impl Fn(Vec2) -> 
             && !sel.contains(&it)
             && let Some((_, b)) = shown.iter().find(|(s, _)| *s == it)
         {
-            painter.rect_stroke(box_of(b), 0.0, Stroke::new(1.0, T.selection.gamma_multiply(0.55)), StrokeKind::Middle);
+            stroke_box(b, Stroke::new(1.0, T.selection.gamma_multiply(0.55)));
         }
     }
     for (it, b) in shown.iter().filter(|(it, _)| sel.contains(it)) {
         if b.is_empty() {
             continue;
         }
-        let r = box_of(b);
         // The playhead's keyframe in the selection colour; the others a step lighter, so it is
         // clear which artwork is on this frame.
         let here = app.s.timeline().layer(it.layer).and_then(|l| l.keyframe_at(app.s.frame)).is_some_and(|k| k.start == it.frame);
         let c = if here { T.selection } else { T.selection.gamma_multiply(0.7) };
-        painter.rect_stroke(r, 0.0, Stroke::new(if here { 1.5 } else { 1.0 }, c), StrokeKind::Middle);
+        stroke_box(b, Stroke::new(if here { 1.5 } else { 1.0 }, c));
     }
     if let Drag::MultiMarquee { start, cur } = app.drag {
-        let r = Rect::from_two_pos(to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)));
-        painter.rect_filled(r, 0.0, T.selection.gamma_multiply(0.12));
-        painter.rect_stroke(r, 0.0, Stroke::new(1.0, T.selection), StrokeKind::Middle);
+        if !turned {
+            let r = Rect::from_two_pos(to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)));
+            painter.rect_filled(r, 0.0, T.selection.gamma_multiply(0.12));
+            painter.rect_stroke(r, 0.0, Stroke::new(1.0, T.selection), StrokeKind::Middle);
+        } else {
+            let (x0, x1) = (start.x.min(cur.x), start.x.max(cur.x));
+            let (y0, y1) = (start.y.min(cur.y), start.y.max(cur.y));
+            let q = [Vec2::new(x0, y0), Vec2::new(x1, y0), Vec2::new(x1, y1), Vec2::new(x0, y1)].map(to_screen);
+            painter.add(egui::Shape::convex_polygon(q.to_vec(), T.selection.gamma_multiply(0.12), Stroke::new(1.0, T.selection)));
+        }
     }
 }
 

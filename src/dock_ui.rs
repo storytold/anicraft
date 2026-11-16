@@ -184,6 +184,7 @@ pub fn panel_icon(p: Panel) -> Icon {
         Panel::Actions => Icon::PanelActions,
         Panel::Output => Icon::PanelOutput,
         Panel::Tools => Icon::Select,
+        Panel::XSheet => Icon::InsertKeyframe,
     }
 }
 
@@ -732,6 +733,7 @@ fn tab_tip(p: Panel) -> &'static str {
     match p {
         Panel::Timeline => tr!("Layers and frames"),
         Panel::MotionEditor => tr!("Property curves of the motion tween at the playhead (double-click a motion span)"),
+        Panel::XSheet => tr!("Frames down the page, one column per layer. Same frames as the timeline"),
         _ => tr!("Drag the tab to dock the panel elsewhere, stack it with others or float it"),
     }
 }
@@ -932,6 +934,7 @@ pub fn panel_body(app: &mut App, ui: &mut egui::Ui, p: Panel) {
             });
         }
         Panel::Timeline => crate::timeline::show(app, ui),
+        Panel::XSheet => crate::xsheet::show(app, ui),
         Panel::MotionEditor => crate::motion_editor::show(app, ui),
         Panel::Actions => {
             scroll("actions").show(ui, |ui| {
@@ -1476,7 +1479,7 @@ mod tests {
         let (Some(library), Some(tab)) = (library, tab) else { panic!("drawn") };
         drag(&ctx, &mut app, tab, library);
         let Some(Place::Docked { side: Side::Right, group, .. }) = app.dock.place(Panel::Timeline) else { panic!("{:?}", app.dock.place(Panel::Timeline)) };
-        assert_eq!(app.dock.right.groups[group].tabs, vec![Panel::Library, Panel::MovieExplorer, Panel::Timeline]);
+        assert_eq!(app.dock.right.groups[group].tabs, vec![Panel::Library, Panel::MovieExplorer, Panel::XSheet, Panel::Timeline]);
         assert!(app.dock.top.groups.is_empty(), "the top dock is gone with its last group");
     }
 
@@ -1648,7 +1651,7 @@ mod tests {
         settle(&ctx, &mut app);
         assert!(app.dock.floating.is_empty(), "{:?}", app.dock.floating);
         let Some(Place::Docked { side: Side::Right, group, .. }) = app.dock.place(Panel::Colour) else { panic!("{:?}", app.dock.place(Panel::Colour)) };
-        assert_eq!(app.dock.right.groups[group].tabs, vec![Panel::Library, Panel::MovieExplorer, Panel::Colour, Panel::History], "in the window's order");
+        assert_eq!(app.dock.right.groups[group].tabs, vec![Panel::Library, Panel::MovieExplorer, Panel::XSheet, Panel::Colour, Panel::History], "in the window's order");
         assert!(app.dock.is_shown(Panel::Colour), "the one shown stays in front");
     }
 

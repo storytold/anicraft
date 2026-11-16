@@ -2,6 +2,53 @@
 
 ## Unreleased
 
+* **Turn the canvas** (ADR 0098). Hold Shift+Space and drag to turn the view about the middle
+  of the window. Hold Ctrl+Space (Command+Space on macOS) and drag to zoom: up zooms in,
+  down zooms out, and the point you pressed stays put. Dragging back to where you pressed
+  restores the zoom. Space alone still pans. View › Reset Rotation stands the paper back up
+  without changing the zoom. The drawing in the file stays upright. Shift+R still turns the
+  selection.
+
+* **Fill alpha** (ADR 0103). The Fill and Stroke pickers have a labeled Alpha row again:
+  0% is clear, 100% is opaque, and the hex can carry it (`#rrggbbaa`). A brush stroke
+  that is not fully opaque stays its own shape, so the colour behind it shows through.
+  Opaque strokes still join. Each gradient stop keeps its own alpha.
+
+* **2kool grid.** The start screen offers it first: a 3840 × 3840 plate. The cyan template
+  is a movie clip locked on the top layer, Multiply, at 15%. Drawing starts on Layer 1,
+  under it. File › New without a size is still a blank HD document.
+
+* **Brush smoothing starts at 0.** The plain Brush and Paint Brush follow the hand.
+  A preset brings its own smoothing. Nothing else raises it.
+
+* **Thinnest** (ADR 0102). The brush size and the width at no pressure go down to 0.001 px.
+  A light touch is that wide. Properties › Brush shows Thinnest beside Size.
+
+* **Pen pressure** (ADR 0102). On macOS the stylus reaches the brush: winit was handing it
+  over as a mouse event and dropping the pressure, so Size and Opacity stayed at full width.
+  The reading lives in one place and is kept while the tip is down, because the stroke is
+  drawn on a later frame. A Huion pen is read from its own HID report: the driver was
+  handing the brush a mouse click, so the stroke stayed at full width. Once a stroke has a
+  pen sample, a later frame keeps it, and Speed as pressure does not take over.
+
+* **Grab, rotate and scale** (ADR 0101). G moves the selection, Shift+R turns it and
+  Shift+S sizes it (R and S are still Rectangle and Ink Bottle; a letter the keymap
+  leaves free works on its own). Type a number: degrees are counterclockwise, a move
+  is stage pixels with Y down, a scale is a factor. Enter or a click confirms, Esc or
+  a right-click cancels, and X or Y locks an axis. It is the Selection tool and Free
+  Transform, one undo step.
+
+* **X-Sheet** (ADR 0100). Window › X-Sheet, and a tab of the Library group in the right
+  dock: frames run down the page and each layer is a column, on the same playhead as
+  the timeline. Right-click a cell for the timeline's frames and tweens, and to place
+  or remove a Library sound. A sound dropped on a cell lands there, as on the filmstrip.
+  With the pointer over the sheet, the arrow keys step a frame or a layer.
+
+* **Studio chrome** (ADR 0099). Preferences › Appearance › Theme › Studio, and
+  `--theme studio`: black and dark-grey chrome, square corners, monospace labels,
+  white only on the selected control. Saving a document into the signed-in 2kool.tv
+  account is the next slice and is not in this change.
+
 * **Sound output polish** (ADR 0095, M5).
   * The playhead follows the sound being **heard**: the device's latency is taken off and slow
     frames are dropped rather than drifting (within a frame over an hour of play in tests).

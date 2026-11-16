@@ -37,14 +37,36 @@ pub struct Geo {
     pub canvas: Rect,
     pub origin: Pos2,
     pub zoom: f32,
+    /// Clockwise degrees the picture is turned. Zero keeps every mapping upright (ADR 0098).
+    pub rotation: f32,
+    /// The canvas centre, which the picture turns about.
+    pub pivot: Pos2,
+    /// Screen-space pan, outside the turn.
+    pub pan: egui::Vec2,
 }
 
 impl Geo {
     /// A screen position as a stage coordinate along the axis a guide of `axis` measures.
     fn stage_at(&self, axis: GuideAxis, p: Pos2) -> f32 {
+        let p = crate::viewturn::unplace(p, self.pivot, self.pan, self.rotation);
         match axis {
             GuideAxis::Horizontal => (p.y - self.origin.y) / self.zoom,
             GuideAxis::Vertical => (p.x - self.origin.x) / self.zoom,
+        }
+    }
+
+    /// A stage point on screen, turned with the view.
+    fn placed(&self, x: f32, y: f32) -> Pos2 {
+        let straight = pos2(self.origin.x + x * self.zoom, self.origin.y + y * self.zoom);
+        crate::viewturn::place(straight, self.pivot, self.pan, self.rotation)
+    }
+
+    /// A guide as a long line in screen space. The painter clips it to the canvas.
+    fn guide_ends(&self, axis: GuideAxis, at: f32) -> [Pos2; 2] {
+        let span = 100_000.0;
+        match axis {
+            GuideAxis::Horizontal => [self.placed(-span, at), self.placed(span, at)],
+            GuideAxis::Vertical => [self.placed(at, -span), self.placed(at, span)],
         }
     }
     /// Where a guide is on screen (y for a horizontal one, x for a vertical one).
@@ -135,8 +157,14 @@ pub fn guide_at(app: &App, geo: Geo, p: Pos2) -> Option<usize> {
         .iter()
         .enumerate()
         .map(|(i, g)| {
-            let along = if g.axis == GuideAxis::Horizontal { p.y } else { p.x };
-            (i, (geo.screen_at(g) - along).abs())
+            let d = if geo.rotation == 0.0 {
+                let along = if g.axis == GuideAxis::Horizontal { p.y } else { p.x };
+                (geo.screen_at(g) - along).abs()
+            } else {
+                let [a, b] = geo.guide_ends(g.axis, g.at);
+                crate::viewturn::line_distance(p, a, b)
+            };
+            (i, d)
         })
         .filter(|(_, d)| *d <= GRAB)
         .min_by(|a, b| a.1.total_cmp(&b.1))
@@ -210,6 +238,10 @@ fn crisp(v: f32, ppp: f32) -> f32 {
 
 /// The grid, over the stage's rectangle (where it is in view).
 pub fn paint_grid(app: &App, painter: &Painter, geo: Geo, stage_rect: Rect, ppp: f32) {
+    if geo.rotation != 0.0 {
+        paint_grid_turned(app, painter, geo, ppp);
+        return;
+    }
     let area = stage_rect.intersect(geo.canvas);
     if !app.s.aids.show_grid || area.width() <= 0.0 || area.height() <= 0.0 || geo.zoom.is_nan() || geo.zoom <= 0.0 {
         return;
@@ -241,6 +273,10 @@ pub fn paint_grid(app: &App, painter: &Painter, geo: Geo, stage_rect: Rect, ppp:
 /// The scene's guides across the stage view, the one being dragged a little bolder, and a
 /// guide coming out of a ruler.
 pub fn paint_guides(app: &App, painter: &Painter, geo: Geo, ppp: f32) {
+    if geo.rotation != 0.0 {
+        paint_guides_turned(app, painter, geo, ppp);
+        return;
+    }
     let c = geo.canvas;
     let colour = to_color32(app.s.doc.aids.guide_color);
     let line = |at: f32, axis: GuideAxis, width: f32| {
@@ -273,6 +309,64 @@ pub fn paint_guides(app: &App, painter: &Painter, geo: Geo, ppp: f32) {
     }
     if let Some(NewGuide { axis, at: Some(at) }) = app.new_guide {
         line(geo.screen_at(&Guide { axis, at }), axis, 2.0 / ppp);
+    }
+}
+
+/// The grid once the picture is turned: the same spacing, along the stage axes, without the
+/// device-pixel snap (a turned line has no upright pixel to sit on).
+fn paint_grid_turned(app: &App, painter: &Painter, geo: Geo, ppp: f32) {
+    if !app.s.aids.show_grid || geo.zoom.is_nan() || geo.zoom <= 0.0 {
+        return;
+    }
+    let bounds = crate::viewturn::unrotated_bounds(geo.canvas, geo.pivot, geo.pan, geo.rotation);
+    let x0 = (bounds.min.x - geo.origin.x) / geo.zoom;
+    let y0 = (bounds.min.y - geo.origin.y) / geo.zoom;
+    let x1 = (bounds.max.x - geo.origin.x) / geo.zoom;
+    let y1 = (bounds.max.y - geo.origin.y) / geo.zoom;
+    let g = app.s.doc.aids.grid;
+    let stroke = Stroke::new(1.0 / ppp, to_color32(g.color));
+    for (spacing, vertical) in [(g.spacing_x, true), (g.spacing_y, false)] {
+        let px = spacing * geo.zoom;
+        if px.is_nan() || px <= 0.0 {
+            continue;
+        }
+        let step = spacing * (GRID_MIN_PX / px).ceil().max(1.0);
+        let (lo, hi) = if vertical { (x0, x1) } else { (y0, y1) };
+        let (first, last) = ((lo / step).ceil(), (hi / step).floor());
+        if !(first.is_finite() && last.is_finite()) || last - first > MAX_LINES as f32 {
+            continue;
+        }
+        let mut n = first;
+        while n <= last {
+            let v = n * step;
+            let seg = if vertical { [geo.placed(v, y0), geo.placed(v, y1)] } else { [geo.placed(x0, v), geo.placed(x1, v)] };
+            painter.line_segment(seg, stroke);
+            n += 1.0;
+        }
+    }
+}
+
+/// Guides once the picture is turned: each one is the stage line under the pointer.
+fn paint_guides_turned(app: &App, painter: &Painter, geo: Geo, ppp: f32) {
+    let colour = to_color32(app.s.doc.aids.guide_color);
+    let line = |axis: GuideAxis, at: f32, width: f32| {
+        painter.line_segment(geo.guide_ends(axis, at), Stroke::new(width, colour));
+    };
+    if app.s.aids.show_guides {
+        let dragged = match app.drag {
+            Drag::Guide { index, off } => Some((index, off)),
+            _ => None,
+        };
+        for (i, g) in app.s.guides().iter().enumerate() {
+            match dragged {
+                Some((d, true)) if d == i => {}
+                Some((d, false)) if d == i => line(g.axis, g.at, 2.0 / ppp),
+                _ => line(g.axis, g.at, 1.0 / ppp),
+            }
+        }
+    }
+    if let Some(NewGuide { axis, at: Some(at) }) = app.new_guide {
+        line(axis, at, 2.0 / ppp);
     }
 }
 
@@ -349,7 +443,14 @@ mod tests {
     }
 
     /// A 1280 × 720 stage at 50 %, its corner at (100, 50) on screen.
-    const GEO: Geo = Geo { canvas: Rect { min: Pos2 { x: 18.0, y: 18.0 }, max: Pos2 { x: 1000.0, y: 700.0 } }, origin: Pos2 { x: 100.0, y: 50.0 }, zoom: 0.5 };
+    const GEO: Geo = Geo {
+        canvas: Rect { min: Pos2 { x: 18.0, y: 18.0 }, max: Pos2 { x: 1000.0, y: 700.0 } },
+        origin: Pos2 { x: 100.0, y: 50.0 },
+        zoom: 0.5,
+        rotation: 0.0,
+        pivot: Pos2::ZERO,
+        pan: egui::Vec2::ZERO,
+    };
 
     #[test]
     fn rulers_take_the_top_and_left_edges_only_while_shown() {

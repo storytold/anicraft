@@ -230,7 +230,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         };
         let selected = app.me_prop == p;
-        painter.rect_filled(row, 0.0, if selected { T.accent_dim } else if r % 2 == 0 { T.panel } else { T.panel_alt });
+        painter.rect_filled(row, 0.0, if selected { T.row_selected } else if r % 2 == 0 { T.panel } else { T.panel_alt });
         let track = m.track(p);
         let label = crate::i18n::t(p.label());
         // Groups (Position, Transform, Colour effect) are set apart by a rule.
@@ -240,9 +240,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             last_group = p.group();
         }
-        painter.text(pos2(row.left() + 12.0, row.center().y), Align2::LEFT_CENTER, label, font(Type::Body), if track.is_some() { T.text } else { T.text_dim });
+        painter.text(pos2(row.left() + 12.0, row.center().y), Align2::LEFT_CENTER, label, font(Type::Body), if selected { T.on_selected } else if track.is_some() { T.text } else { T.text_dim });
         if track.is_some() {
-            painter.text(pos2(row.left() + 84.0, row.center().y), Align2::LEFT_CENTER, tr!("keyed"), font(Type::Caption), T.tween_motion);
+            painter.text(pos2(row.left() + 84.0, row.center().y), Align2::LEFT_CENTER, tr!("keyed"), font(Type::Caption), if selected { T.on_selected } else { T.tween_motion });
         }
         let rr = ui.interact(row, ui.id().with(("me_row", p.key())), Sense::click());
         let label = match p.filter() {

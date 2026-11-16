@@ -758,6 +758,8 @@ pub(crate) fn fixed_rows() -> Vec<(&'static str, &'static str, Vec<&'static str>
         (view, tr_noop!("Actual size (100%)"), vec!["Ctrl+1"]),
         (view, tr_noop!("Zoom at the cursor"), vec!["Ctrl+Wheel"]),
         (view, tr_noop!("Pan with any tool"), vec!["Space+Drag", "Middle-drag"]), // i18n-exempt: keys, see fixed_key
+        (view, tr_noop!("Turn the canvas"), vec!["Shift+Space+Drag"]), // i18n-exempt: keys, see fixed_key
+        (view, tr_noop!("Zoom with a drag"), vec!["Ctrl+Space+Drag"]), // i18n-exempt: keys, see fixed_key
         (editing, tr_noop!("Nudge selection 1 px"), vec!["Arrow keys"]), // i18n-exempt: keys, see fixed_key
         (editing, tr_noop!("Nudge selection 10 px"), vec!["Shift+Arrow keys"]),
         (editing, tr_noop!("Add to / remove from selection"), vec!["Shift+Click"]),

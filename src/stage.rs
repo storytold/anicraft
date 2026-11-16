@@ -207,6 +207,108 @@ fn to_v(p: Pos2) -> Vec2 {
     Vec2::new(p.x, p.y)
 }
 
+/// Four corners of a stage box, in screen space, in order around the edge.
+fn box_quad(min: Vec2, max: Vec2, to_screen: &impl Fn(Vec2) -> Pos2) -> [Pos2; 4] {
+    [to_screen(Vec2::new(min.x, min.y)), to_screen(Vec2::new(max.x, min.y)), to_screen(max), to_screen(Vec2::new(min.x, max.y))]
+}
+
+/// A selection or hover box. Upright, the rectangle the stage has always stroked.
+fn stroke_box(painter: &egui::Painter, min: Vec2, max: Vec2, to_screen: &impl Fn(Vec2) -> Pos2, stroke: Stroke, turned: bool, expand: f32) {
+    if !turned {
+        let r = Rect::from_min_max(to_screen(min), to_screen(max)).expand(expand);
+        painter.rect_stroke(r, 0.0, stroke, StrokeKind::Middle);
+        return;
+    }
+    painter.add(egui::Shape::closed_line(box_quad(min, max, to_screen).to_vec(), stroke));
+}
+
+/// One stage tile. Upright it is the axis-aligned image; turned, the same corners after the view turn.
+fn paint_tile(painter: &egui::Painter, tex: egui::TextureId, upright: [Pos2; 4], uv: Rect, pivot: Pos2, pan: egui::Vec2, rotation: f32) {
+    if rotation == 0.0 {
+        painter.image(tex, Rect::from_min_max(upright[0], upright[2]), uv, Color32::WHITE);
+        return;
+    }
+    let q = upright.map(|p| crate::viewturn::place(p, pivot, pan, rotation));
+    let mut mesh = egui::Mesh::with_texture(tex);
+    let uvs = [uv.left_top(), uv.right_top(), uv.right_bottom(), uv.left_bottom()];
+    for (pos, uv) in q.into_iter().zip(uvs) {
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+    }
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+fn quad_handles(q: &[Pos2; 4]) -> [(Pos2, i8, i8); 8] {
+    let mid = |a: Pos2, b: Pos2| a + (b - a) * 0.5;
+    [(q[0], -1, -1), (mid(q[0], q[1]), 0, -1), (q[1], 1, -1), (mid(q[1], q[2]), 1, 0), (q[2], 1, 1), (mid(q[2], q[3]), 0, 1), (q[3], -1, 1), (mid(q[3], q[0]), -1, 0)]
+}
+
+fn point_in_convex(p: Pos2, q: &[Pos2; 4]) -> bool {
+    let mut sign = 0.0;
+    for i in 0..4 {
+        let a = q[i];
+        let b = q[(i + 1) % 4];
+        let cross = (b.x - a.x) * (p.y - a.y) - (b.y - a.y) * (p.x - a.x);
+        if cross == 0.0 {
+            continue;
+        }
+        if sign == 0.0 {
+            sign = cross.signum();
+        } else if sign * cross < 0.0 {
+            return false;
+        }
+    }
+    true
+}
+
+fn zoom_label(zoom: f32, rotation: f32) -> String {
+    if rotation.abs() < 0.05 { format!("{:.0}%", zoom * 100.0) } else { format!("{:.0}%  {:.0}°", zoom * 100.0, rotation) }
+}
+
+/// A marquee. Upright it is the rectangle between the two screen corners.
+fn paint_marquee(painter: &egui::Painter, start: Pos2, cur: Pos2, to_screen: &impl Fn(Vec2) -> Pos2, fill: Color32, stroke: Stroke, turned: bool) {
+    if !turned {
+        let r = Rect::from_two_pos(to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)));
+        painter.rect_filled(r, 0.0, fill);
+        painter.rect_stroke(r, 0.0, stroke, StrokeKind::Middle);
+        return;
+    }
+    let (x0, x1) = (start.x.min(cur.x), start.x.max(cur.x));
+    let (y0, y1) = (start.y.min(cur.y), start.y.max(cur.y));
+    let q = box_quad(Vec2::new(x0, y0), Vec2::new(x1, y1), to_screen);
+    painter.add(egui::Shape::convex_polygon(q.to_vec(), fill, stroke));
+}
+
+fn segment_distance(p: Pos2, a: Pos2, b: Pos2) -> f32 {
+    let ab = b - a;
+    let len2 = ab.length_sq();
+    if len2 < 1e-6 {
+        return (p - a).length();
+    }
+    let t = ((p - a).dot(ab) / len2).clamp(0.0, 1.0);
+    (p - (a + ab * t)).length()
+}
+
+/// Free-transform zone on a turned selection. The upright path stays [`xf_zone`].
+fn turned_zone(b: [f32; 4], p: Pos2, to_screen: &impl Fn(Vec2) -> Pos2) -> Option<XfKind> {
+    let [x0, y0, x1, y1] = b;
+    let q = box_quad(Vec2::new(x0, y0), Vec2::new(x1, y1), to_screen);
+    for (h, hx, hy) in quad_handles(&q) {
+        if (p.x - h.x).abs() <= HANDLE && (p.y - h.y).abs() <= HANDLE {
+            return Some(XfKind::Scale { hx, hy });
+        }
+    }
+    let inside = point_in_convex(p, &q);
+    if !inside && q.iter().any(|c| c.distance(p) <= ROTATE_ZONE) {
+        return Some(XfKind::Rotate);
+    }
+    if inside {
+        return Some(XfKind::Move);
+    }
+    (0..4).any(|i| segment_distance(p, q[i], q[(i + 1) % 4]) <= 2.0).then_some(XfKind::Move)
+}
+
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // View › Rulers along the top and the left (ADR 0076); the stage view in what is left.
     let (canvas, bars) = crate::rulers::layout(app, ui.max_rect());
@@ -226,12 +328,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         && was != vec2(canvas.width(), canvas.height())
         && app.view.zoom == z
         && app.view.pan == egui::Vec2::ZERO
+        && app.view.rotation == 0.0
     {
         app.view.fit = true;
     }
     if app.view.fit && canvas.width() > 10.0 && canvas.height() > 10.0 {
         app.view.zoom = ((canvas.width() - 64.0) / size.x).min((canvas.height() - 64.0) / size.y).clamp(0.05, 64.0);
         app.view.pan = egui::Vec2::ZERO;
+        app.view.rotation = 0.0;
         app.view.fit = false;
         app.view.fitted = Some((vec2(canvas.width(), canvas.height()), app.view.zoom));
     }
@@ -277,6 +381,29 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
     }
 
+    // A turn in progress shows this frame. The angle is about the canvas centre, and the pan
+    // orbits with it so the stage point under that centre stays (ADR 0098).
+    if let Drag::ViewRotate { angle } = app.drag
+        && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let now = crate::viewturn::pointer_angle(canvas.center(), p);
+        let delta = crate::viewturn::wrap_deg(now - angle);
+        if delta != 0.0 {
+            app.view.orbit(delta);
+            app.drag = Drag::ViewRotate { angle: now };
+        }
+    }
+    // Ctrl+Space (Command on macOS) zooms about the press. Up zooms in. The zoom is measured
+    // from the press, so dragging back to that height undoes the change (ADR 0098).
+    if let Drag::ViewZoom { y, zoom, at } = app.drag
+        && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+    {
+        let next = zoom * crate::viewturn::zoom_drag_factor(p.y - y);
+        if (next - app.view.zoom).abs() > 1e-4 {
+            app.zoom_about(canvas, at, next);
+        }
+    }
+
     let st_zoom = app.view.zoom;
     // Snap the stage origin to whole device pixels: tile edges then land exactly on screen
     // pixels, so texture filtering can't show seams between tiles.
@@ -284,8 +411,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let st_origin = pos2((raw.x * ppp).round() / ppp, (raw.y * ppp).round() / ppp);
     let st_screen = |p: Vec2| pos2(st_origin.x + p.x * st_zoom, st_origin.y + p.y * st_zoom);
     let stage_rect = Rect::from_min_size(st_origin, size * st_zoom);
+    let pivot = canvas.center();
+    let pan = app.view.pan;
+    let rotation = app.view.rotation;
+    let turned = rotation != 0.0;
     // Rulers, grid and guides are the stage's, in stage pixels (ADR 0076).
-    let geo = crate::rulers::Geo { canvas, origin: st_origin, zoom: st_zoom };
+    let geo = crate::rulers::Geo { canvas, origin: st_origin, zoom: st_zoom, rotation, pivot, pan };
     // While a symbol is open (ADR 0045), tools and overlays work in its space, which the stage
     // shows moved and scaled where its instance stands.
     let edit_view = app.s.edit_view();
@@ -293,33 +424,50 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         Some(v) => (st_origin + vec2(v.origin.x, v.origin.y) * st_zoom, st_zoom * v.scale),
         None => (st_origin, st_zoom),
     };
-    let to_screen = |p: Vec2| pos2(origin.x + p.x * zoom, origin.y + p.y * zoom);
-    let to_stage = |p: Pos2| pos2((p.x - origin.x) / zoom, (p.y - origin.y) / zoom);
+    // Upright, these are the origin and the zoom. A turn moves the point about the canvas
+    // centre after the screen-space pan is taken off, then puts the pan back (ADR 0098).
+    let to_screen = |p: Vec2| {
+        let straight = pos2(origin.x + p.x * zoom, origin.y + p.y * zoom);
+        crate::viewturn::place(straight, pivot, pan, rotation)
+    };
+    let to_stage = |p: Pos2| {
+        let unrotated = crate::viewturn::unplace(p, pivot, pan, rotation);
+        pos2((unrotated.x - origin.x) / zoom, (unrotated.y - origin.y) / zoom)
+    };
     let painter = ui.painter_at(canvas);
     // View > Preview Through Camera: the stage shows the movie's picture (ADR 0027). The
     // Selection tool picks and moves artwork there, the pointer mapped back through the camera
     // and each layer's depth (ADR 0082); the other artwork tools pause (what they'd edit is in
     // stage space, not where it shows).
     let preview = crate::camera_tool::previewing(app);
-    let cam_geo = crate::camera_tool::Geo { origin: st_origin, zoom: st_zoom, stage_rect, preview };
+    let cam_geo = crate::camera_tool::Geo { origin: st_origin, zoom: st_zoom, stage_rect, preview, rotation, pivot, pan };
     // Library items dragged onto the stage land at the pointer (ADR 0053).
     crate::library::stage_drop(app, ui, &resp, to_stage, preview);
     // Files dropped from the desktop land here too (ADR 0059).
-    app.drop.stage = Some(crate::drop::StageGeo { canvas, origin, zoom, paused: preview });
+    app.drop.stage = Some(crate::drop::StageGeo { canvas, origin, zoom, paused: preview, rotation, pivot, pan });
 
 
     // ---- tools ----------------------------------------------------------------------------
     let (shift, alt, space, command) = ui.input(|i| (i.modifiers.shift, i.modifiers.alt, i.key_down(Key::Space), i.modifiers.command));
+    let typing = crate::a11y::keyboard(ui.ctx()) == crate::a11y::Keyboard::Text;
+    let middle = ui.input(|i| i.pointer.button_down(egui::PointerButton::Middle));
+    // Shift+Space turns the paper about the middle of the view. Ctrl+Space (Command on macOS)
+    // zooms about the press. Space alone and the middle button still pan, and a text field
+    // keeps the keys (ADR 0098).
+    let rotating = shift && space && !alt && !command && !typing && !middle;
+    let zooming = command && space && !shift && !alt && !typing && !middle;
+    let view_drag = rotating || zooming;
     let pointer = resp.hover_pos().or_else(|| resp.interact_pointer_pos());
     app.cursor_stage = pointer.filter(|p| canvas.contains(*p)).map(to_stage);
-    let panning = app.tool == Tool::Hand || space || resp.dragged_by(egui::PointerButton::Middle);
+    // The turn and the zoom win over the Hand tool and over Space-pan. The middle button still pans.
+    let panning = !view_drag && (app.tool == Tool::Hand || space || resp.dragged_by(egui::PointerButton::Middle));
     let paused = preview && !panning && !matches!(app.tool, Tool::Camera | Tool::Hand | Tool::Zoom | Tool::Select);
     // The Selection tool on the movie's picture: points there are the picture's (ADR 0082).
     let through = preview && !panning && app.tool == Tool::Select;
     // A drag from a ruler makes a guide (ADR 0076).
     crate::rulers::input(app, ui, &bars, geo, preview);
     let guide_hot = if app.drag == Drag::None && !panning && !preview { pointer.and_then(|p| crate::rulers::guide_at(app, geo, p)) } else { None };
-    if paused && (resp.drag_started() || resp.clicked()) {
+    if paused && !view_drag && (resp.drag_started() || resp.clicked()) {
         app.status_ok(tr!("Previewing through the camera: the Selection tool picks and moves artwork here; other tools wait. Turn off View › Preview Through Camera to draw."));
     }
     // Selection box in screen space (free transform handles live on it).
@@ -333,8 +481,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let hint_marks = if hint_tools { crate::shape_hints::markers(app) } else { Vec::new() };
     let hint_at = |p: Pos2| crate::shape_hints::hit(&hint_marks, p, to_screen);
     let hint_hot = pointer.and_then(hint_at);
+    let zone_at = |p: Pos2| -> Option<XfKind> {
+        if !turned {
+            return sel_rect.and_then(|r| xf_zone(r, p));
+        }
+        sel_bounds.and_then(|b| turned_zone(b, p, &to_screen))
+    };
 
-    let xf = crate::pathtools::Xf { origin, zoom };
+    let xf = crate::pathtools::Xf { origin, zoom, rotation, pivot, pan };
     // Pen pressure, when a tablet reports it (the Brush tool's width follows it).
     let pressure = crate::brushtool::frame_pressure(ui.ctx());
     // Tilt, where the toolkit reports it: the brushes' Tilt options show once it has (ADR 0093).
@@ -357,6 +511,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let slice_hot = if app.drag == Drag::None && !panning && !preview { pointer.and_then(|p| crate::scale_grid::hit(app, p, xf)) } else { None };
     if resp.hovered() {
         let icon = match app.tool {
+            _ if rotating && matches!(app.drag, Drag::None | Drag::ViewRotate { .. }) => CursorIcon::Alias,
+            _ if let Drag::ViewZoom { y, .. } = app.drag => {
+                if pointer.is_some_and(|p| p.y < y) { CursorIcon::ZoomIn } else { CursorIcon::ZoomOut }
+            }
+            _ if zooming && app.drag == Drag::None => CursorIcon::ZoomIn,
             _ if panning => CursorIcon::Grab,
             _ if let Drag::Guide { index, .. } = app.drag => crate::rulers::cursor(app, index),
             _ if let Some(i) = guide_hot => crate::rulers::cursor(app, i),
@@ -380,7 +539,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             Tool::Transform => {
                 let zone = match app.drag {
                     Drag::Transform { kind, .. } | Drag::MultiTransform { kind, .. } => Some(kind),
-                    _ => sel_rect.zip(pointer).and_then(|(r, p)| xf_zone(r, p)),
+                    _ => pointer.and_then(zone_at),
                 };
                 match zone {
                     Some(XfKind::Scale { hx, hy }) if hx * hy > 0 => CursorIcon::ResizeNwSe,
@@ -405,16 +564,41 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         };
         ui.ctx().set_cursor_icon(icon);
     }
+    if let Some(icon) = crate::blender_xf::cursor(app) {
+        ui.ctx().set_cursor_icon(icon);
+    }
+    if rotating {
+        ui.ctx().set_cursor_icon(CursorIcon::Alias);
+    } else if zooming {
+        let icon = match app.drag {
+            Drag::ViewZoom { y, .. } if pointer.is_some_and(|p| p.y > y) => CursorIcon::ZoomOut,
+            _ => CursorIcon::ZoomIn,
+        };
+        ui.ctx().set_cursor_icon(icon);
+    }
 
     if resp.clicked() || resp.drag_started() || resp.secondary_clicked() {
         // Ctrl+X/C/V go back to artwork.
         app.timeline_focus = false;
     }
-    if app.tool == Tool::Pen && !panning && !paused {
+    // Grab, rotate and scale own the pointer until Enter or Esc (ADR 0101).
+    let xf_modal = app.blender.is_some();
+    if xf_modal {
+        let p = ui.ctx().input(|i| i.pointer.hover_pos()).map(to_stage).unwrap_or_else(|| to_stage(canvas.center()));
+        crate::blender_xf::track(app, p, resp.clicked() && !view_drag, resp.secondary_clicked() && !view_drag);
+    }
+    if app.tool == Tool::Pen && !panning && !paused && !xf_modal && !view_drag {
         crate::pathtools::pen_input(app, ui, &resp, xf);
     }
 
-    if resp.drag_started() {
+    if resp.drag_started() && view_drag {
+        let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(canvas.center());
+        app.drag = if rotating {
+            Drag::ViewRotate { angle: crate::viewturn::pointer_angle(canvas.center(), press) }
+        } else {
+            Drag::ViewZoom { y: press.y, zoom: app.view.zoom, at: press }
+        };
+    } else if !xf_modal && resp.drag_started() {
         let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(canvas.center());
         let sp = to_stage(press);
         app.drag = if panning {
@@ -443,7 +627,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // Free Transform's handles transform it all about one pivot (ADR 0051).
                 // An open envelope's handles (ADR 0080).
                 Tool::Transform if !multi && let Some(d) = crate::shape_envelope::drag_start(app, xf, press) => d,
-                Tool::Transform if multi && let (Some(kind), Some(bounds)) = (sel_rect.and_then(|r| xf_zone(r, press)), sel_bounds) => {
+                Tool::Transform if multi && let (Some(kind), Some(bounds)) = (zone_at(press), sel_bounds) => {
                     app.s.begin_gesture(tr_noop!("Free Transform"));
                     Drag::MultiTransform { kind, start: sp, bounds, applied: Affine::IDENTITY }
                 }
@@ -452,7 +636,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 Tool::Select if let Some(d) = crate::bone_tool::select_drag_start(app, xf, press) => d,
                 Tool::Select => select_press(app, sp, shift, command, alt, zoom),
                 Tool::Transform => {
-                    let zone = sel_rect.and_then(|r| xf_zone(r, press));
+                    let zone = zone_at(press);
                     match (zone, sel_bounds) {
                         (Some(kind), Some(bounds)) => {
                             app.s.begin_gesture(tr_noop!("Free Transform"));
@@ -691,7 +875,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.run("raw.select_rect", json!({"x0": start.x, "y0": start.y, "x1": cur.x, "y1": cur.y, "add": shift}));
             }
             Drag::Shape { start, cur } => create_shape(app, start, cur),
-            Drag::Pan | Drag::None | Drag::CameraWheel { .. } => {}
+            Drag::Pan | Drag::None | Drag::ViewRotate { .. } | Drag::ViewZoom { .. } | Drag::CameraWheel { .. } => {}
         }
         app.drag = Drag::None;
         app.snap_ring = None;
@@ -702,7 +886,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         app.path_pick = None;
         app.status_ok(tr!("Attach to Path cancelled."));
     }
-    if resp.clicked()
+    if !xf_modal
+        && !view_drag
+        && resp.clicked()
         && !paused
         && let Some(p) = resp.interact_pointer_pos() {
             let sp = to_stage(p);
@@ -777,10 +963,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     // Right-click: select what is under the cursor (keeping an existing multi-selection), then
     // offer the actions that apply to it.
-    if resp.secondary_clicked() {
+    if !xf_modal && !view_drag && resp.secondary_clicked() {
         app.hint_menu = resp.interact_pointer_pos().and_then(hint_at).map(|m| m.index);
     }
-    if resp.secondary_clicked()
+    if !xf_modal && !view_drag && resp.secondary_clicked()
         && app.hint_menu.is_none()
         && !preview
         && let Some(p) = resp.interact_pointer_pos()
@@ -796,6 +982,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Double-clicking text with the Selection tool edits it.
     if app.tool == Tool::Select
         && !preview
+        && !view_drag
         && resp.double_clicked()
         && let Some(p) = resp.interact_pointer_pos()
     {
@@ -824,6 +1011,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     if app.tool == Tool::Subselect
         && !preview
+        && !view_drag
         && resp.double_clicked()
         && let Some(p) = resp.interact_pointer_pos()
         // On the motion path first, else on a selected shape's outline.
@@ -887,16 +1075,25 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     // ---- render the frame -----------------------------------------------------------------
-    painter.rect_filled(stage_rect.translate(vec2(3.0, 4.0)), 0.0, T.stage_shadow);
-    // Stage colour first, so a picture still rendering never shows as a hole.
-    painter.rect_filled(stage_rect, 0.0, crate::theme::to_color32(app.s.doc.stage.background));
+    // The shadow sits in screen space, after the turn, so it stays down and to the right.
+    if rotation == 0.0 {
+        painter.rect_filled(stage_rect.translate(vec2(3.0, 4.0)), 0.0, T.stage_shadow);
+        painter.rect_filled(stage_rect, 0.0, crate::theme::to_color32(app.s.doc.stage.background));
+    } else {
+        let q = [stage_rect.left_top(), stage_rect.right_top(), stage_rect.right_bottom(), stage_rect.left_bottom()].map(|p| crate::viewturn::place(p, pivot, pan, rotation));
+        painter.add(egui::Shape::convex_polygon(q.map(|p| p + vec2(3.0, 4.0)).to_vec(), T.stage_shadow, Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(q.to_vec(), crate::theme::to_color32(app.s.doc.stage.background), Stroke::NONE));
+    }
     if !preview && crate::rulers::grid_under(app) {
         crate::rulers::paint_grid(app, &painter, geo, stage_rect, ppp);
     }
     // What gets rendered: the stage, and the pasteboard around it unless View › Clip Content
     // Outside the Stage is on (#251). Previewing through the camera shows what the movie shows.
     let pasteboard = !app.view.clip_to_stage && !preview;
-    let vis = if pasteboard { canvas } else { stage_rect.intersect(canvas) };
+    // Turned, the tiles that cover the window are the window's corners mapped back onto the
+    // upright picture. Upright, that region is the window itself.
+    let ask = if rotation == 0.0 { canvas } else { crate::viewturn::unrotated_bounds(canvas, pivot, pan, rotation) };
+    let vis = if pasteboard { ask } else { stage_rect.intersect(ask) };
     if vis.width() >= 1.0 && vis.height() >= 1.0 {
         if app.stage_cache.service.is_none() {
             let ctx = ui.ctx().clone();
@@ -1017,19 +1214,19 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if ready < keys.len() {
             stale.sort_by_key(|t| t.used);
             for t in stale.iter().rev().take(96).rev() {
-                let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
-                painter.image(t.tex.id(), r, uv, Color32::WHITE);
+                let upright = [st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])), st_screen(Vec2::new(t.rect[0], t.rect[3]))];
+                paint_tile(&painter, t.tex.id(), upright, uv, pivot, pan, rotation);
             }
         }
         for t in app.stage_cache.tiles.iter().filter(|t| keys.contains(&t.key)) {
-            let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
-            painter.image(t.tex.id(), r, uv, Color32::WHITE);
+            let upright = [st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])), st_screen(Vec2::new(t.rect[0], t.rect[3]))];
+            paint_tile(&painter, t.tex.id(), upright, uv, pivot, pan, rotation);
         }
 
         // While a background render catches up with a drag, outline where the selection is now,
         // so the artwork never seems to lag the pointer.
         if ready < keys.len() && !preview && matches!(app.drag, Drag::Move { .. } | Drag::SnapMove { .. } | Drag::Transform { .. } | Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. }) {
-            let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
+            let to_px = crate::viewturn::screen_affine(origin, zoom, rotation, pivot, pan);
             let dl = app.s.display_list();
             let stroke = Stroke::new(1.5, T.selection);
             for item in dl.items.iter().filter(|i| app.s.selection.contains(i.layer, i.element)).take(2_000) {
@@ -1040,7 +1237,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     }
-    painter.rect_stroke(stage_rect, 0.0, Stroke::new(1.0, T.stage_edge), StrokeKind::Outside);
+    if rotation == 0.0 {
+        painter.rect_stroke(stage_rect, 0.0, Stroke::new(1.0, T.stage_edge), StrokeKind::Outside);
+    } else {
+        let q = [stage_rect.left_top(), stage_rect.right_top(), stage_rect.right_bottom(), stage_rect.left_bottom()].map(|p| crate::viewturn::place(p, pivot, pan, rotation));
+        painter.add(egui::Shape::closed_line(q.to_vec(), Stroke::new(1.0, T.stage_edge)));
+    }
     // The grid over the artwork, and the guides (ADR 0076): the stage's, not the camera's.
     if !preview {
         if !crate::rulers::grid_under(app) {
@@ -1056,7 +1258,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if preview {
         // The movie's picture: stage-space overlays don't belong on it.
         painter.text(stage_rect.left_top() + vec2(0.0, -6.0), egui::Align2::LEFT_BOTTOM, tr!("Camera view"), crate::theme::font(crate::theme::Type::Caption), T.text_dim);
-        let badge = format!("{:.0}%", st_zoom * 100.0);
+        let badge = zoom_label(st_zoom, rotation);
         painter.text(canvas.right_bottom() + vec2(-10.0, -8.0), egui::Align2::RIGHT_BOTTOM, badge, crate::theme::font(crate::theme::Type::Data), T.text_dim);
         crate::a11y::surface(ui, &resp, &tr!("Stage · previewing through the camera · {tool} tool · frame {frame}", tool = crate::i18n::t(app.tool.label()), frame = app.s.frame + 1));
         return;
@@ -1066,7 +1268,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Guide artwork never renders either: it always shows here, as a line in the guide's layer
     // colour, so the path a tween follows is visible while animating.
     {
-        let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
+        let to_px = crate::viewturn::screen_affine(origin, zoom, rotation, pivot, pan);
         let dl = app.s.display_list();
         for item in dl.items.iter().filter(|i| i.masks.is_some() || i.guide).take(2_000) {
             let Some(layer) = app.s.timeline().layer(item.layer).filter(|l| item.guide || !l.locked) else { continue };
@@ -1093,8 +1295,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 && !app.s.selection.contains(layer, el) && !raw.contains(&(layer, el)) {
                     let b = app.s.element_bounds_on(layer, el);
                     if !b.is_empty() {
-                        let r = Rect::from_min_max(to_screen(b.min), to_screen(b.max));
-                        painter.rect_stroke(r, 0.0, Stroke::new(1.0, T.selection.gamma_multiply(0.55)), StrokeKind::Middle);
+                        stroke_box(&painter, b.min, b.max, &to_screen, Stroke::new(1.0, T.selection.gamma_multiply(0.55)), turned, 0.0);
                     }
                 }
     let transforming = app.tool == Tool::Transform;
@@ -1102,7 +1303,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let enveloped = crate::shape_envelope::shown(app).is_some();
     // Selected raw shapes (ADR 0031) show Animate's dot pattern over themselves, with no box.
     if app.tool == Tool::Select && !preview {
-        let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
+        let to_px = crate::viewturn::screen_affine(origin, zoom, rotation, pivot, pan);
         let (mut spans, mut dots) = (Vec::new(), egui::Mesh::default());
         let mut budget = MAX_DOTS;
         for item in app.s.display_list().items.iter().filter(|i| app.s.selection.contains(i.layer, i.element) && raw.contains(&(i.layer, i.element))) {
@@ -1117,7 +1318,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
     if multi {
         let hover = pointer.filter(|p| canvas.contains(*p) && !panning && !app.modal_open() && app.palette.is_none() && matches!(app.tool, Tool::Select | Tool::Transform)).map(to_stage);
-        crate::onion::draw(app, &painter, to_screen, hover, zoom);
+        crate::onion::draw(app, &painter, to_screen, hover, zoom, turned);
         crate::onion::stage_badge(app, &painter, canvas);
     }
     // Every selected element, on whichever layer it is (ADR 0044).
@@ -1135,7 +1336,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             painter.add(egui::Shape::closed_line(q.to_vec(), sel_stroke));
             continue;
         }
-        let r = Rect::from_min_max(to_screen(b.min), to_screen(b.max)).expand(1.0);
         if matches!(app.tool, Tool::Subselect | Tool::Width | Tool::GradientTransform) {
             // Subselection and Width show outlines and points instead (below); Gradient
             // Transform shows the fill's handles (ADR 0074).
@@ -1149,18 +1349,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         if transforming {
             // Free transform shows one box for the whole selection (below); members get a hint.
-            painter.rect_stroke(r, 0.0, Stroke::new(1.0, T.selection.gamma_multiply(0.45)), StrokeKind::Middle);
+            stroke_box(&painter, b.min, b.max, &to_screen, Stroke::new(1.0, T.selection.gamma_multiply(0.45)), turned, 1.0);
             continue;
         }
         // A plain box, as Animate's Selection tool shows: handles are Free Transform's (Q),
         // where they work. Handles drawn here could not be dragged (#205).
-        painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
+        stroke_box(&painter, b.min, b.max, &to_screen, sel_stroke, turned, 1.0);
         // Text on a path shows the path it follows (ADR 0070).
         if let anicraft_engine::doc::ElementKind::Text(t) = &e.kind
             && let Some(on) = &t.on_path
             && let Some(item) = app.s.display_list().items.iter().find(|i| i.element == id)
         {
-            let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom)).mul(&item.transform);
+            let to_px = crate::viewturn::screen_affine(origin, zoom, rotation, pivot, pan).mul(&item.transform);
             for pl in on.path.flatten(&to_px, 0.5) {
                 let pts: Vec<Pos2> = pl.points.iter().map(|p| pos2(p.x, p.y)).collect();
                 painter.add(if pl.closed { egui::Shape::closed_line(pts, sel_stroke) } else { egui::Shape::line(pts, sel_stroke) });
@@ -1173,18 +1373,31 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Free transform box: recomputed every frame so it follows the artwork while you drag.
     let xf_box = if multi { crate::onion::selection_bounds(app) } else { bounds_arr(app.s.selection_bounds()) };
     if transforming && !enveloped && let Some(b) = xf_box {
-        let r = Rect::from_min_max(to_screen(Vec2::new(b[0], b[1])), to_screen(Vec2::new(b[2], b[3]))).expand(1.0);
-        painter.rect_stroke(r, 0.0, Stroke::new(1.5, T.selection), StrokeKind::Middle);
-        for (h, _, _) in handles(r) {
-            let hr = Rect::from_center_size(h, vec2(HANDLE, HANDLE));
-            painter.rect_filled(hr, 0.0, Color32::WHITE);
-            painter.rect_stroke(hr, 0.0, Stroke::new(1.0, T.selection), StrokeKind::Middle);
+        if !turned {
+            let r = Rect::from_min_max(to_screen(Vec2::new(b[0], b[1])), to_screen(Vec2::new(b[2], b[3]))).expand(1.0);
+            painter.rect_stroke(r, 0.0, Stroke::new(1.5, T.selection), StrokeKind::Middle);
+            for (h, _, _) in handles(r) {
+                let hr = Rect::from_center_size(h, vec2(HANDLE, HANDLE));
+                painter.rect_filled(hr, 0.0, Color32::WHITE);
+                painter.rect_stroke(hr, 0.0, Stroke::new(1.0, T.selection), StrokeKind::Middle);
+            }
+            let c = r.center();
+            painter.circle(c, 4.0, Color32::WHITE, Stroke::new(1.0, T.selection));
+            painter.line_segment([c - vec2(6.0, 0.0), c + vec2(6.0, 0.0)], Stroke::new(1.0, T.selection));
+            painter.line_segment([c - vec2(0.0, 6.0), c + vec2(0.0, 6.0)], Stroke::new(1.0, T.selection));
+        } else {
+            let q = box_quad(Vec2::new(b[0], b[1]), Vec2::new(b[2], b[3]), &to_screen);
+            painter.add(egui::Shape::closed_line(q.to_vec(), Stroke::new(1.5, T.selection)));
+            for (h, _, _) in quad_handles(&q) {
+                let hr = Rect::from_center_size(h, vec2(HANDLE, HANDLE));
+                painter.rect_filled(hr, 0.0, Color32::WHITE);
+                painter.rect_stroke(hr, 0.0, Stroke::new(1.0, T.selection), StrokeKind::Middle);
+            }
+            let c = q[0] + (q[2] - q[0]) * 0.5;
+            painter.circle(c, 4.0, Color32::WHITE, Stroke::new(1.0, T.selection));
+            painter.line_segment([c - vec2(6.0, 0.0), c + vec2(6.0, 0.0)], Stroke::new(1.0, T.selection));
+            painter.line_segment([c - vec2(0.0, 6.0), c + vec2(0.0, 6.0)], Stroke::new(1.0, T.selection));
         }
-        // transformation point (centre)
-        let c = r.center();
-        painter.circle(c, 4.0, Color32::WHITE, Stroke::new(1.0, T.selection));
-        painter.line_segment([c - vec2(6.0, 0.0), c + vec2(6.0, 0.0)], Stroke::new(1.0, T.selection));
-        painter.line_segment([c - vec2(0.0, 6.0), c + vec2(0.0, 6.0)], Stroke::new(1.0, T.selection));
     }
     crate::pathtools::draw_overlay(app, &painter, xf, pointer.filter(|p| canvas.contains(*p)));
     crate::widthtool::draw_overlay(app, &painter, xf, pointer.filter(|p| canvas.contains(*p)));
@@ -1203,21 +1416,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         crate::motion_path::draw(app, &painter, &shown, xf, hot);
     }
     match app.drag {
-        Drag::Marquee { start, cur } => {
-            let r = Rect::from_two_pos(to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)));
-            painter.rect_filled(r, 0.0, T.selection.gamma_multiply(0.12));
-            painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
+        Drag::Marquee { start, cur } | Drag::PointMarquee { start, cur } => {
+            paint_marquee(&painter, start, cur, &to_screen, T.selection.gamma_multiply(0.12), sel_stroke, turned);
         }
-        Drag::PointMarquee { start, cur } => {
-            let r = Rect::from_two_pos(to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)));
-            painter.rect_filled(r, 0.0, T.selection.gamma_multiply(0.12));
-            painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
+        Drag::Shape { start, cur } => {
+            if turned {
+                draw_preview_turned(app, &painter, start, cur, &to_screen, zoom);
+            } else {
+                draw_preview(app, &painter, to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)), zoom);
+            }
         }
-        Drag::Shape { start, cur } => draw_preview(app, &painter, to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)), zoom),
         _ => {}
     }
     // The drawing tools show where a press would start, snapped (ADR 0045).
-    let draws = matches!(app.tool, Tool::Line | Tool::Rect | Tool::Oval | Tool::Star | Tool::Pen) && !panning && !paused && app.pen.as_ref().is_none_or(|p| !p.dragging);
+    let draws = matches!(app.tool, Tool::Line | Tool::Rect | Tool::Oval | Tool::Star | Tool::Pen) && !panning && !paused && !view_drag && app.pen.as_ref().is_none_or(|p| !p.dragging);
     if draws && app.drag == Drag::None {
         match pointer.filter(|p| canvas.contains(*p) && resp.hovered()) {
             Some(p) => {
@@ -1236,6 +1448,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if app.tool == Tool::Select
         && app.drag == Drag::None
         && !panning
+        && !view_drag
         && !multi
         && !app.modal_open()
         && let Some(p) = pointer.filter(|p| canvas.contains(*p))
@@ -1259,7 +1472,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         crate::shape_hints::draw(&painter, &marks, to_screen, hot);
     }
 
-    text_editor(app, ui, to_screen(Vec2::new(0.0, 0.0)), zoom);
+    text_editor(app, ui, &to_screen, zoom);
 
     // Inside a symbol with 9-slice guides: the guides, across the stage (ADR 0055).
     let slice_drag = match app.drag {
@@ -1277,7 +1490,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     // zoom badge
-    let badge = format!("{:.0}%", st_zoom * 100.0);
+    let badge = zoom_label(st_zoom, rotation);
     painter.text(canvas.right_bottom() + vec2(-10.0, -8.0), egui::Align2::RIGHT_BOTTOM, badge, crate::theme::font(crate::theme::Type::Data), T.text_dim);
     // Last, so the focus ring is drawn over the artwork.
     let selected = app.s.selection.len();
@@ -1865,9 +2078,9 @@ pub fn commit_text(app: &mut App) {
 
 /// The field text is typed in, over the stage at the text's top-left corner. Esc or a click
 /// elsewhere finishes; Enter starts a new line.
-fn text_editor(app: &mut App, ui: &mut egui::Ui, stage_origin: Pos2, zoom: f32) {
+fn text_editor(app: &mut App, ui: &mut egui::Ui, to_screen: &impl Fn(Vec2) -> Pos2, zoom: f32) {
     let Some(te) = app.text_edit.as_mut() else { return };
-    let at = stage_origin + vec2(te.at.x * zoom, te.at.y * zoom);
+    let at = to_screen(Vec2::new(te.at.x, te.at.y));
     let size = (app.s.text_style.size * zoom).clamp(12.0, 64.0);
     let mut done = false;
     egui::Area::new(egui::Id::new("stage_text_edit")).fixed_pos(at).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
@@ -2048,6 +2261,40 @@ fn draw_preview(app: &App, painter: &egui::Painter, a: Pos2, b: Pos2, zoom: f32)
     }
 }
 
+/// A shape preview once the picture is turned. The rectangle's corner radius waits until the
+/// view is upright; the committed shape still has it.
+fn draw_preview_turned(app: &App, painter: &egui::Painter, start: Pos2, cur: Pos2, to_screen: &impl Fn(Vec2) -> Pos2, zoom: f32) {
+    let st = &app.s.style;
+    let fill = if st.use_fill { crate::theme::to_color32(st.fill).gamma_multiply(0.6) } else { Color32::TRANSPARENT };
+    let stroke = Stroke::new((st.stroke_width * zoom).max(1.0), if st.use_stroke { crate::theme::to_color32(st.stroke) } else { T.selection });
+    match app.tool {
+        Tool::Rect => {
+            let q = box_quad(Vec2::new(start.x.min(cur.x), start.y.min(cur.y)), Vec2::new(start.x.max(cur.x), start.y.max(cur.y)), to_screen);
+            painter.add(egui::Shape::convex_polygon(q.to_vec(), fill, stroke));
+        }
+        Tool::Oval => {
+            let (cx, cy) = ((start.x + cur.x) * 0.5, (start.y + cur.y) * 0.5);
+            let (rx, ry) = ((cur.x - start.x).abs() * 0.5, (cur.y - start.y).abs() * 0.5);
+            let pts: Vec<Pos2> = (0..64)
+                .map(|i| {
+                    let t = i as f32 / 64.0 * std::f32::consts::TAU;
+                    to_screen(Vec2::new(cx + rx * t.cos(), cy + ry * t.sin()))
+                })
+                .collect();
+            painter.add(egui::Shape::convex_polygon(pts, fill, stroke));
+        }
+        Tool::Star => {
+            let o = app.polystar;
+            let pts: Vec<Pos2> = anicraft_engine::geom::polystar_corners(start.x, start.y, (cur - start).length(), o.sides.clamp(3, 32), o.star, o.point_size).into_iter().map(to_screen).collect();
+            painter.add(egui::Shape::closed_line(pts, stroke));
+        }
+        Tool::Line => {
+            painter.line_segment([to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y))], stroke);
+        }
+        _ => {}
+    }
+}
+
 #[cfg(test)]
 mod draw_tests {
     use super::*;
@@ -2073,7 +2320,7 @@ mod draw_tests {
                 assert!(app.s.selection.is_empty(), "{tool:?}, object {object}: nothing selected");
             }
             app.pencil = (0..20).map(|i| Vec2::new(100.0 + i as f32 * 4.0, 100.0 + (i % 3) as f32)).collect();
-            crate::pathtools::commit_pencil(&mut app, crate::pathtools::Xf { origin: Pos2::ZERO, zoom: 1.0 });
+            crate::pathtools::commit_pencil(&mut app, crate::pathtools::Xf::plain(Pos2::ZERO, 1.0));
             assert!(app.s.selection.is_empty(), "Pencil, object {object}");
             let n = app.s.visible_elements().len();
             app.s.undo().expect("undo");

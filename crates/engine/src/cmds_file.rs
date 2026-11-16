@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 pub fn specs() -> Vec<CommandSpec> {
     let mut v = vec![
-        CommandSpec { id: "file.new", label: "New", menu: "File", shortcut: Some("Ctrl+N"), params: "{width?, height?, fps?}", mutates: false, run: new_doc },
+        CommandSpec { id: "file.new", label: "New", menu: "File", shortcut: Some("Ctrl+N"), params: "{width?, height?, fps?, grid? (true on a 3840×3840 plate: the 2kool grid, locked on top, Multiply, at 15%)}", mutates: false, run: new_doc },
         CommandSpec { id: "file.new_sample", label: "New from Sample", menu: "File", shortcut: None, params: "{which?: demo (default) | interactive (a menu with a Play button, for Test Movie)}", mutates: false, run: new_sample },
         CommandSpec { id: "file.open", label: "Open…", menu: "File", shortcut: Some("Ctrl+O"), params: "{path, unsaved? (opens it as unsaved work: a restored copy), untitled? (with no file name, so Save asks for one)}", mutates: false, run: open },
         CommandSpec { id: "file.save", label: "Save", menu: "File", shortcut: Some("Ctrl+S"), params: "{path?, confirm?}", mutates: false, run: save },
@@ -159,8 +159,21 @@ fn new_doc(s: &mut Session, p: &Value) -> Result<Value> {
     doc.stage.width = stage_edge(p, "width", d.width)?;
     doc.stage.height = stage_edge(p, "height", d.height)?;
     doc.stage.fps = fps(p, d.fps)?;
+    let draw = if opt_bool(p, "grid")?.unwrap_or(false) {
+        Some(anicraft_doc::koolgrid::place(&mut doc).map_err(|e| EngineError::Param(e.into()))?)
+    } else {
+        None
+    };
     s.replace_document(doc, None);
-    Ok(s.info())
+    if let Some(id) = draw {
+        // The grid is the top layer and it is locked. Drawing starts on the layer under it.
+        s.layer = id;
+    }
+    let mut info = s.info();
+    if draw.is_some() {
+        info["grid"] = json!(true);
+    }
+    Ok(info)
 }
 
 fn new_sample(s: &mut Session, p: &Value) -> Result<Value> {

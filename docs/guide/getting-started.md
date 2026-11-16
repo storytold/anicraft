@@ -69,9 +69,11 @@ When you open AniCraft without a document, the start screen appears.
 
 From here you can:
 
-* **Create new**: pick a size. HD video is 1280 × 720, Full HD video is 1920 × 1080, Square
-  post is 1080 × 1080 and Vertical story is 1080 × 1920. Under **Custom size**, type a width
-  and height, choose a frame rate and press **Create**.
+* **Create new**: pick a size. **2kool grid** is the one to try first: 3840 × 3840, with the
+  cyan template locked on the top layer, Multiply, at 15%. You draw on Layer 1, under it.
+  HD video is 1280 × 720, Full HD video is 1920 × 1080, Square post is 1080 × 1080 and
+  Vertical story is 1080 × 1920. Under **Custom size**, type a width and height, choose a
+  frame rate and press **Create**.
 * **Templates**: start from a ready-made document: Leaderboard banner (728 × 90), Rectangle
   banner (300 × 250), Social square (1080 × 1080 at 30 fps), Storyboard 16:9 (six labelled
   panels), Character turnaround and a Lip-sync mouth chart. Templates come with named layers,
@@ -109,7 +111,8 @@ The [Workspace](workspace.md) chapter explains each part.
 
 ## Draw your first shape
 
-1. Make a new document: on the start screen, click **HD video**.
+1. Make a new document: on the start screen, click **2kool grid**. The cyan template is already
+   locked on top, Multiply, at 15%. Your drawing lands on Layer 1, under it.
 2. Pick the **Rectangle** tool in the Tools panel, or press **R**.
 3. In **Properties**, under **Rectangle tool**, click the **Fill** swatch and choose a colour.
    The **Stroke** row sets the outline's colour and width. Its checkbox turns the outline off.

@@ -104,6 +104,8 @@ This page is generated from the editor's shortcut map, so it always matches the 
 | Actual size (100%) | Ctrl+1 | ⌘1 |
 | Zoom at the cursor | Ctrl+Wheel | ⌘Wheel |
 | Pan with any tool | Space+Drag, Middle-drag | Space+Drag, Middle-drag |
+| Turn the canvas | Shift+Space+Drag | Space+⇧Drag |
+| Zoom with a drag | Ctrl+Space+Drag | Space+⌘Drag |
 
 ## Insert
 

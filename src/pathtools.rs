@@ -21,18 +21,32 @@ use serde_json::json;
 use std::sync::Arc;
 
 /// Screen ↔ stage mapping of the current frame.
+///
+/// `rotation` is clockwise degrees about `pivot` (the canvas centre). Pan is in screen
+/// pixels and sits outside the turn. Zero rotation ignores `pivot` and `pan`, so
+/// `to_screen` / `to_stage` are the upright origin and zoom.
 #[derive(Clone, Copy)]
 pub struct Xf {
     pub origin: Pos2,
     pub zoom: f32,
+    pub rotation: f32,
+    pub pivot: Pos2,
+    pub pan: egui::Vec2,
 }
 
 impl Xf {
+    /// An upright mapping. Tool commits that are already in stage space use this.
+    pub const fn plain(origin: Pos2, zoom: f32) -> Self {
+        Self { origin, zoom, rotation: 0.0, pivot: Pos2::ZERO, pan: egui::Vec2::ZERO }
+    }
+
     pub fn to_screen(self, p: Vec2) -> Pos2 {
-        pos2(self.origin.x + p.x * self.zoom, self.origin.y + p.y * self.zoom)
+        let straight = pos2(self.origin.x + p.x * self.zoom, self.origin.y + p.y * self.zoom);
+        crate::viewturn::place(straight, self.pivot, self.pan, self.rotation)
     }
     pub fn to_stage(self, p: Pos2) -> Vec2 {
-        Vec2::new((p.x - self.origin.x) / self.zoom, (p.y - self.origin.y) / self.zoom)
+        let unrotated = crate::viewturn::unplace(p, self.pivot, self.pan, self.rotation);
+        Vec2::new((unrotated.x - self.origin.x) / self.zoom, (unrotated.y - self.origin.y) / self.zoom)
     }
     /// Stage units per screen point.
     pub fn unit(self) -> f32 {
@@ -861,7 +875,7 @@ mod tests {
     mod raw {
         use super::*;
 
-        const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+        const XF: Xf = Xf::plain(Pos2::ZERO, 1.0);
 
         fn app_and_ctx() -> (App, egui::Context) {
             let ctx = egui::Context::default();

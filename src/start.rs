@@ -13,18 +13,21 @@ use egui::{Align2, Rect, Sense, Stroke, StrokeKind, Vec2, WidgetType, pos2, vec2
 use serde_json::json;
 
 /// A New preset: its name (English, translated where drawn), stage width and height.
+/// `grid` adds the 2kool template on a locked top layer.
 pub struct Preset {
     pub name: &'static str,
     pub width: u32,
     pub height: u32,
+    pub grid: bool,
 }
 
-/// The sizes artists start from most: video in HD and Full HD, square and vertical social posts.
-pub const PRESETS: [Preset; 4] = [
-    Preset { name: tr_noop!("HD video"), width: 1280, height: 720 },
-    Preset { name: tr_noop!("Full HD video"), width: 1920, height: 1080 },
-    Preset { name: tr_noop!("Square post"), width: 1080, height: 1080 },
-    Preset { name: tr_noop!("Vertical story"), width: 1080, height: 1920 },
+/// The size to try first is the 2kool grid. The rest are video and social posts.
+pub const PRESETS: [Preset; 5] = [
+    Preset { name: tr_noop!("2kool grid"), width: 3840, height: 3840, grid: true },
+    Preset { name: tr_noop!("HD video"), width: 1280, height: 720, grid: false },
+    Preset { name: tr_noop!("Full HD video"), width: 1920, height: 1080, grid: false },
+    Preset { name: tr_noop!("Square post"), width: 1080, height: 1080, grid: false },
+    Preset { name: tr_noop!("Vertical story"), width: 1080, height: 1920, grid: false },
 ];
 
 /// The frame rates offered for a new document.
@@ -51,12 +54,21 @@ pub fn new_params(width: u32, height: u32, fps: f32) -> serde_json::Value {
     json!({"width": width, "height": height, "fps": fps})
 }
 
+/// `file.new` for a start-screen preset. The 2kool grid also asks for its template layer.
+pub fn preset_params(p: &Preset, fps: f32) -> serde_json::Value {
+    let mut v = new_params(p.width, p.height, fps);
+    if p.grid {
+        v["grid"] = json!(true);
+    }
+    v
+}
+
 /// Shows the start screen (File › Start Screen, and at launch).
 pub fn open(app: &mut App) {
     app.playing = false;
     app.start = Some(StartScreen { fps: app.s.doc.stage.fps, ..StartScreen::default() });
     crate::templates::rescan(app);
-    app.status_ok(tr!("Pick a size to start a new animation, or open one you made. Esc goes back to the document."));
+    app.status_ok(tr!("Try 2kool grid first, or pick another size, or open one you made. Esc goes back to the document."));
 }
 
 /// The start screen in the space the workspace normally takes.
@@ -137,12 +149,14 @@ fn tile(ui: &mut egui::Ui, name: &str, w: u32, h: u32) -> egui::Response {
 fn new_column(app: &mut App, ui: &mut egui::Ui) {
     ui.label(text(Type::Heading, tr!("Create new")));
     ui.add_space(6.0);
+    ui.label(text(Type::Caption, tr!("2kool grid is the one to try first. It is a 3840 square, with the cyan template locked on top, Multiply, at 15%.")));
+    ui.add_space(6.0);
     let fps = app.start.as_ref().map_or(24.0, |s| s.fps);
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(10.0, 10.0);
         for p in &PRESETS {
             if tile(ui, crate::i18n::t(p.name), p.width, p.height).clicked() {
-                app.request("file.new", new_params(p.width, p.height, fps));
+                app.request("file.new", preset_params(p, fps));
             }
         }
     });
@@ -284,17 +298,28 @@ mod tests {
     #[test]
     fn every_preset_makes_a_document_of_its_size() {
         let (mut app, _) = app();
+        assert_eq!(PRESETS[0].name, "2kool grid");
+        assert!(PRESETS[0].grid);
         for p in &PRESETS {
             for fps in [24.0, 30.0] {
                 crate::start::open(&mut app);
-                app.request("file.new", new_params(p.width, p.height, fps));
+                app.request("file.new", preset_params(p, fps));
                 let st = app.s.doc.stage;
                 assert_eq!((st.width, st.height, st.fps), (p.width, p.height, fps), "{}", p.name);
                 assert!(app.start.is_none(), "New dismisses the start screen");
+                let top = app.s.doc.timeline(0).layers.first().map(|l| l.name.as_str());
+                if p.grid {
+                    assert_eq!(top, Some(anicraft_doc::koolgrid::LAYER_NAME));
+                    assert_eq!(app.s.layer, app.s.doc.timeline(0).layers[1].id, "drawing starts under the grid");
+                    assert_eq!(app.s.doc.timeline(0).layers[1].name, "Layer 1");
+                } else {
+                    assert_eq!(top, Some("Layer 1"));
+                    assert!(app.s.doc.library.is_empty(), "{}", p.name);
+                }
             }
         }
         let names: Vec<(u32, u32)> = PRESETS.iter().map(|p| (p.width, p.height)).collect();
-        for want in [(1280, 720), (1920, 1080), (1080, 1080)] {
+        for want in [(3840, 3840), (1280, 720), (1920, 1080), (1080, 1080)] {
             assert!(names.contains(&want), "{want:?} is a preset");
         }
         // A custom size, and one past the limit that the engine refuses (the screen stays).

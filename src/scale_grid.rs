@@ -69,8 +69,18 @@ pub fn hit(app: &App, p: Pos2, xf: Xf) -> Option<Guide> {
     }
     let (_, g) = shown(app)?;
     let near = |guide: Guide| {
-        let s = xf.to_screen(anicraft_engine::geom::Vec2::new(guide.at(&g), guide.at(&g)));
-        if guide.vertical() { (p.x - s.x).abs() } else { (p.y - s.y).abs() }
+        let at = guide.at(&g);
+        if xf.rotation == 0.0 {
+            let s = xf.to_screen(anicraft_engine::geom::Vec2::new(at, at));
+            if guide.vertical() { (p.x - s.x).abs() } else { (p.y - s.y).abs() }
+        } else {
+            let (a, b) = if guide.vertical() {
+                (xf.to_screen(anicraft_engine::geom::Vec2::new(at, -100_000.0)), xf.to_screen(anicraft_engine::geom::Vec2::new(at, 100_000.0)))
+            } else {
+                (xf.to_screen(anicraft_engine::geom::Vec2::new(-100_000.0, at)), xf.to_screen(anicraft_engine::geom::Vec2::new(100_000.0, at)))
+            };
+            crate::viewturn::line_distance(p, a, b)
+        }
     };
     Guide::ALL.into_iter().map(|guide| (guide, near(guide))).filter(|(_, d)| *d <= GRAB).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(guide, _)| guide)
 }
@@ -103,8 +113,15 @@ pub fn drag_to(app: &mut App, guide: Guide, c: Pos2) {
 pub fn draw(app: &App, painter: &Painter, xf: Xf, canvas: Rect, hot: Option<Guide>) {
     let Some((_, g)) = shown(app) else { return };
     for guide in Guide::ALL {
-        let s = xf.to_screen(anicraft_engine::geom::Vec2::new(guide.at(&g), guide.at(&g)));
-        let ends = if guide.vertical() { [pos2(s.x, canvas.top()), pos2(s.x, canvas.bottom())] } else { [pos2(canvas.left(), s.y), pos2(canvas.right(), s.y)] };
+        let at = guide.at(&g);
+        let ends = if xf.rotation == 0.0 {
+            let s = xf.to_screen(anicraft_engine::geom::Vec2::new(at, at));
+            if guide.vertical() { [pos2(s.x, canvas.top()), pos2(s.x, canvas.bottom())] } else { [pos2(canvas.left(), s.y), pos2(canvas.right(), s.y)] }
+        } else if guide.vertical() {
+            [xf.to_screen(anicraft_engine::geom::Vec2::new(at, -100_000.0)), xf.to_screen(anicraft_engine::geom::Vec2::new(at, 100_000.0))]
+        } else {
+            [xf.to_screen(anicraft_engine::geom::Vec2::new(-100_000.0, at)), xf.to_screen(anicraft_engine::geom::Vec2::new(100_000.0, at))]
+        };
         let width = if hot == Some(guide) { 2.0 } else { 1.0 };
         painter.line_segment(ends, Stroke::new(width + 2.0, Color32::WHITE.gamma_multiply(0.7)));
         painter.extend(egui::Shape::dashed_line(&ends, Stroke::new(width, T.slice_guide), 6.0, 4.0));
@@ -116,7 +133,7 @@ mod tests {
     use super::*;
 
     /// Stage and screen coordinates coincide.
-    const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+    const XF: Xf = Xf::plain(Pos2::ZERO, 1.0);
 
     /// The `nineslicedit` screenshot state: the Panel symbol open in place, its guides at
     /// x = ±70 and y = ±14 in its space.

@@ -237,7 +237,7 @@ fn list(app: &mut App, ui: &mut egui::Ui, t: &Tree) {
             let on = app.explorer.selected.as_deref() == Some(r.key.as_str());
             let p = ui.painter();
             if on || resp.hovered() {
-                p.rect_filled(rect, T.rc(), if on { T.accent_dim } else { T.hover });
+                p.rect_filled(rect, T.rc(), if on { T.row_selected } else { T.hover });
             }
             if on {
                 p.rect_filled(Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())), 0.0, T.accent);
@@ -246,13 +246,14 @@ fn list(app: &mut App, ui: &mut egui::Ui, t: &Tree) {
             let chevron = Rect::from_center_size(pos2(rect.left() + indent + 6.0, rect.center().y), vec2(12.0, 12.0));
             let icon = Rect::from_center_size(pos2(rect.left() + indent + 22.0, rect.center().y), vec2(14.0, 14.0));
             if r.children && !filtering {
-                icons::paint(p, chevron, if r.open { Icon::ChevronDown } else { Icon::ChevronRight }, T.icon);
+                icons::paint(p, chevron, if r.open { Icon::ChevronDown } else { Icon::ChevronRight }, if on { T.on_selected } else { T.icon });
             }
-            marker(p, icon, r.kind, color(Type::Body));
+            marker(p, icon, r.kind, if on { T.on_selected } else { color(Type::Body) });
             let label = row_text(r);
             let name_rect = Rect::from_min_max(pos2(icon.right() + 8.0, rect.top()), rect.max);
-            let g = p.layout_no_wrap(label.clone(), font(Type::Body), color(Type::Body));
-            p.with_clip_rect(name_rect.intersect(ui.clip_rect())).galley(pos2(name_rect.left(), rect.center().y - g.rect.height() / 2.0), g, color(Type::Body));
+            let ink = if on { T.on_selected } else { color(Type::Body) };
+            let g = p.layout_no_wrap(label.clone(), font(Type::Body), ink);
+            p.with_clip_rect(name_rect.intersect(ui.clip_rect())).galley(pos2(name_rect.left(), rect.center().y - g.rect.height() / 2.0), g, ink);
             let kind = crate::i18n::t(kind_name(r.kind));
             let name = match (r.children && !filtering, r.open) {
                 (true, true) => tr!("{kind}: {row}, open", kind = kind, row = label),

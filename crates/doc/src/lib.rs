@@ -29,6 +29,7 @@ pub mod width;
 pub mod stroke_style;
 pub mod player;
 pub mod publish;
+pub mod koolgrid;
 pub mod sample;
 pub mod templates;
 pub mod sound;

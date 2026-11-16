@@ -315,7 +315,7 @@ pub fn props(app: &mut App, ui: &mut egui::Ui, row: impl Fn(&mut egui::Ui, &str,
     let tilt_seen = app.pen_tilt_seen;
     let o = crate::brushtool::options_mut(app);
     row_prose(ui, tr!("Pressure"), &mut |ui| {
-        crate::theme::checkbox(ui, &mut o.pressure_size, tr!("Size")).on_hover_text(tr!("Pen pressure varies the size, from 10 % to the full size"));
+        crate::theme::checkbox(ui, &mut o.pressure_size, tr!("Size")).on_hover_text(tr!("Pen pressure varies the size, from Thinnest to the full size"));
         crate::theme::checkbox(ui, &mut o.pressure_opacity, tr!("Opacity")).on_hover_text(tr!("Pen pressure sets the stroke's opacity (its average over the stroke)"));
     });
     row_prose(ui, tr!("Curve"), &mut |ui| {

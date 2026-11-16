@@ -1,6 +1,7 @@
 //! Colour swatches and the colour picker (#201, #246, #248), as Animate's swatch popup: a click
 //! on a swatch opens the web-safe palette with the colours used lately below it, a hex field,
-//! and the full mixer (hue, saturation and value, alpha) one click away.
+//! and, when the colour has opacity, an Alpha row (0 % clear, 100 % opaque). The mixer
+//! (hue, saturation and value) is one click away.
 //!
 //! The 216 web-safe colours are the open standard cube (each channel 00, 33, 66, 99, CC or FF),
 //! laid out as the usual six-by-six blocks: red steps across the blocks, green down a block and
@@ -230,15 +231,34 @@ pub(crate) fn picker(ui: &mut egui::Ui, popup: Id, c: &mut [u8; 4], alpha: bool,
             remember(ui.ctx(), popup, [h[0], h[1], h[2]]);
             changed = true;
         }
-        if alpha {
+    });
+    // Its own row, with the word on it. A bare percent beside the hex does not read as opacity.
+    if alpha {
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            let tip = tr!("Alpha: 0 % is clear, 100 % opaque");
+            ui.label(tr!("Alpha")).on_hover_text(tip);
             let mut pct = f32::from(c[3]) / 255.0 * 100.0;
-            let r = with_type(ui, Type::Data, |ui| ui.add(egui::DragValue::new(&mut pct).range(0.0..=100.0).suffix(" %").max_decimals(0))).named(tr!("Alpha"));
-            if r.on_hover_text(tr!("Alpha: 0 % is clear, 100 % opaque")).changed() {
+            ui.spacing_mut().slider_width = 148.0;
+            // The theme's slider rail is the popup's own colour, so the bar would vanish into it.
+            let name = tr!("Alpha");
+            let bar = ui
+                .scope(|ui| {
+                    let v = ui.visuals_mut();
+                    v.widgets.inactive.bg_fill = T.hover;
+                    v.selection.bg_fill = T.accent;
+                    ui.add(egui::Slider::new(&mut pct, 0.0..=100.0).show_value(false))
+                })
+                .inner
+                .named(name);
+            let num = with_type(ui, Type::Data, |ui| ui.add(egui::DragValue::new(&mut pct).range(0.0..=100.0).suffix(" %").max_decimals(0).speed(0.5))).named(name);
+            let r = bar.union(num);
+            if r.on_hover_text(tip).changed() {
                 c[3] = (pct.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8;
                 changed = true;
             }
-        }
-    });
+        });
+    }
     changed
 }
 

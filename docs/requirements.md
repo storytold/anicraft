@@ -87,7 +87,9 @@ Priority: **P0** = M0–M2 skeleton must have, **P1** = parity core, **P2** = lo
 
 ## 3. Constraints and rules (inherited from the Craft family)
 
-1. Rust only; no unsafe (`unsafe_code = "forbid"` workspace-wide).
+1. Rust only; no unsafe (`unsafe_code = "forbid"` workspace-wide). The one exception is
+   `crates/pen-macos` (ADR 0096, 0102): macOS pen pressure. The AppKit monitor and the Huion
+   HID reader are the `unsafe` sites, called only from `src/platform.rs`.
 2. Everything a user can do is a **command** with an id, label, menu path, shortcut, params schema
    and tests. UI, CLI, JSON-lines and MCP all dispatch by id.
 3. The UI is thin: no document logic in `ui`.

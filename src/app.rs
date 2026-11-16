@@ -133,7 +133,7 @@ impl Tool {
     /// English (a key): translate where it is drawn with `crate::i18n::t`.
     pub fn hint(self) -> &'static str {
         match self {
-            Tool::Select => tr_noop!("Click to select, drag to move, drag on empty space to marquee-select. Shift adds to the selection."),
+            Tool::Select => tr_noop!("Click to select, drag to move, drag on empty space to marquee-select. Shift adds to the selection. G grabs the selection, Shift+R rotates it (type the degrees), Shift+S scales it. Enter or a click confirms, Esc or a right-click cancels, and X or Y locks an axis."),
             Tool::Subselect => tr_noop!("Click a shape to show its points; on a merged drawing, the points of everything connected to it. Drag points or handles to reshape (a shared point moves every shape that has it; a smooth point's handles stay in line, Alt moves one alone); drag a line or fill to move everything connected. Shift adds to the point selection, drag on empty space to marquee points, arrow keys nudge them. Double-click an edge to add a point, Delete removes points, and right-click makes a point smooth or a corner. A motion path's points edit the same way (its ends stay)."),
             Tool::Pen => tr_noop!("Click to place corner points, drag to pull smooth handles (Alt moves one handle). Click the first point to close; Enter, Esc or a click on the last point finishes. Backspace removes the last point. Alt-click a selected shape, a merged drawing's line or a motion path to add a point to it. Points snap to points and lines while Snap to Objects is on."),
             Tool::Text => tr_noop!("Click to type new text, or click text to edit it. Esc or a click elsewhere finishes. The options set the font, size and colour; double-click text with the Selection tool to edit it too."),
@@ -146,7 +146,7 @@ impl Tool {
             Tool::Bind => tr_noop!("Shows the points of shapes with bones: a square follows one bone, a triangle several. Click a bone to see the points it moves (filled). Click a point, or drag a box around points, to make them follow only that bone; Shift shares the bone with the ones they follow, Ctrl takes them from it. Turn on Paint Weights in Properties to brush the bone's influence on, off or smooth, shown as a heat map."),
             Tool::Warp => tr_noop!("Click a shape or a bitmap to pin it (the first pin covers it with a warp mesh). Drag a pin to bend the artwork around the other pins; with one pin it moves. Click a pin and press Delete to remove it. A pin moved at another frame keys it, and pins tween."),
             Tool::GradientTransform => tr_noop!("Click a shape with a gradient or bitmap fill to show its handles. Drag the centre to move the fill, the square to change its width, the circle to change its size, the knob to rotate it (Shift: 15° steps) and, on a radial gradient, the triangle to move its focal point. A bitmap fill also has a square for its height and diamonds to skew it. Each drag is one undo step."),
-            Tool::Transform => tr_noop!("Drag a corner or edge to scale (Shift keeps proportions, Alt scales from the centre), just outside a corner to rotate (Shift snaps 15°), inside to move."),
+            Tool::Transform => tr_noop!("Drag a corner or edge to scale (Shift keeps proportions, Alt scales from the centre), just outside a corner to rotate (Shift snaps 15°), inside to move. G grabs the selection, Shift+R rotates it (type the degrees), Shift+S scales it. Enter or a click confirms, Esc or a right-click cancels, and X or Y locks an axis."),
             Tool::Rect => tr_noop!("Drag to draw a rectangle. Shift draws a square."),
             Tool::Oval => tr_noop!("Drag to draw an oval. Shift draws a circle."),
             Tool::Star => tr_noop!("Drag from the centre to draw a star or a polygon (Shape in the options)."),
@@ -155,8 +155,8 @@ impl Tool {
             Tool::InkBottle => tr_noop!("Click a shape to give it the current stroke colour and width."),
             Tool::Eyedropper => tr_noop!("Click a fill to pick its colour, gradient or bitmap (then pour it with the Paint Bucket), or a line to pick its colour, width and profile (then apply it with the Ink Bottle). With shapes selected, the picked style goes onto them. Shift-click picks into the other swatch only."),
             Tool::Camera => tr_noop!("Drag on the stage to pan the camera, drag the round handle to turn it, and use the wheel to zoom (each drag is one undo step). Picking the tool adds a camera if the scene has none."),
-            Tool::Hand => tr_noop!("Drag to pan the stage. Space works with any tool."),
-            Tool::Zoom => tr_noop!("Click to zoom in, Alt-click to zoom out. Ctrl+wheel zooms anywhere."),
+            Tool::Hand => tr_noop!("Drag to pan the stage. Space works with any tool. Shift+Space and drag turns the canvas about the middle of the view. Ctrl+Space and drag zooms: up in, down out, and the point you pressed stays put. View › Reset Rotation stands the turn back up."),
+            Tool::Zoom => tr_noop!("Click to zoom in, Alt-click to zoom out. Ctrl+wheel zooms anywhere. Ctrl+Space and drag zooms: up in, down out."),
         }
     }
 }
@@ -185,6 +185,30 @@ pub struct StageView {
     /// View › Clip Content Outside the Stage (#251): hide artwork on the pasteboard (it is still
     /// there, and still exported only where it is on the stage). Off: it shows, as in Animate.
     pub clip_to_stage: bool,
+    /// Clockwise degrees the picture is turned, about the centre of the canvas (ADR 0098).
+    /// The document stays upright. Pan stays in screen pixels, outside this turn.
+    pub rotation: f32,
+}
+
+impl StageView {
+    /// Turn the view by `delta` degrees. The stage point under the canvas centre stays.
+    pub fn orbit(&mut self, delta: f32) {
+        let delta = crate::viewturn::wrap_deg(delta);
+        if delta == 0.0 {
+            return;
+        }
+        self.pan = crate::viewturn::orbit_pan(self.pan, delta);
+        self.rotation = crate::viewturn::wrap_deg(self.rotation + delta);
+    }
+
+    /// Stand the view upright. Zoom stays, and the stage point under the canvas centre stays.
+    pub fn reset_rotation(&mut self) {
+        if self.rotation == 0.0 {
+            return;
+        }
+        self.pan = crate::viewturn::reset_pan(self.pan, self.rotation);
+        self.rotation = 0.0;
+    }
 }
 
 /// In-progress pointer gesture on the stage.
@@ -271,6 +295,13 @@ pub enum Drag {
     /// ruler or off the stage, where letting go deletes it.
     Guide { index: usize, off: bool },
     Pan,
+    /// Shift+Space drag: turning the view about the canvas centre (ADR 0098). `angle` is the
+    /// pointer's last angle about that centre, in degrees.
+    ViewRotate { angle: f32 },
+    /// Ctrl+Space drag (Command on macOS): zooming the view (ADR 0098). `y` and `zoom` are the
+    /// press, so dragging back to that height restores the zoom. `at` is the screen point that
+    /// stays over the same stage point.
+    ViewZoom { y: f32, zoom: f32, at: egui::Pos2 },
 }
 
 /// What a free-transform drag does.
@@ -342,6 +373,8 @@ pub struct App {
     pub view: StageView,
     pub stage_cache: stage::Cache,
     pub drag: Drag,
+    /// Grab, rotate or scale, Blender-style (ADR 0101). `None` when not transforming.
+    pub blender: Option<crate::blender_xf::Live>,
     /// The shape hint a right-click landed on (its menu is showing).
     pub hint_menu: Option<usize>,
     pub playing: bool,
@@ -433,6 +466,8 @@ pub struct App {
     pub filter_naming: crate::panels::FilterNaming,
     pub brush_samples: Vec<(anicraft_engine::geom::Vec2, Option<f32>)>,
     pub pen_pressure: Option<f32>,
+    /// This stroke has had a real pen reading, so later frames keep it (ADR 0102).
+    pub brush_from_pen: bool,
     /// Whether a pointer event has carried a pen's tilt this session (ADR 0093). Until one has,
     /// the brushes' Tilt options stay hidden: they would do nothing.
     pub pen_tilt_seen: bool,
@@ -487,6 +522,12 @@ pub struct App {
     pub me_styles: Vec<anicraft_engine::doc::ColorStyle>,
     /// The frame grid was clicked more recently than the stage: Ctrl+X/C/V act on frames.
     pub timeline_focus: bool,
+    /// The X-sheet's body from the pass that drew it. Arrow keys run before the panels, and
+    /// egui clears temp data at the start of a pass, so the rect has to live here.
+    pub xsheet_hit: Option<(egui::Rect, u64)>,
+    /// Playhead and layer the X-sheet last scrolled to. A scroll the user made stays until
+    /// one of those moves.
+    pub xsheet_follow: Option<(u32, u64)>,
     /// A destructive command waiting for the user's decision (ADR 0004).
     pub confirm: Option<dialogs::PendingConfirm>,
     /// Undoable-tier confirmations the user chose not to see again this session.
@@ -662,9 +703,10 @@ impl App {
             updates: Default::default(),
             s: session,
             tool: Tool::Select,
-            view: StageView { zoom: 1.0, pan: egui::Vec2::ZERO, fit: true, fitted: None, clip_to_stage: false },
+            view: StageView { zoom: 1.0, pan: egui::Vec2::ZERO, fit: true, fitted: None, clip_to_stage: false, rotation: 0.0 },
             stage_cache: stage::Cache::default(),
             drag: Drag::None,
+            blender: None,
             hint_menu: None,
             playing: false,
             looping: true,
@@ -718,6 +760,7 @@ impl App {
             filter_naming: Default::default(),
             brush_samples: Vec::new(),
             pen_pressure: None,
+            brush_from_pen: false,
             pen_tilt_seen: false,
             eraser: crate::erasertool::EraserOptions::default(),
             bucket_gap: GapSize::default(),
@@ -746,6 +789,8 @@ impl App {
             me_vscroll: 0.0,
             me_styles: Vec::new(),
             timeline_focus: false,
+            xsheet_hit: None,
+            xsheet_follow: None,
             confirm: None,
             skip_confirm: HashSet::new(),
             palette: None,
@@ -1258,6 +1303,16 @@ impl App {
                 // and the instances on them, opening into their symbols.
                 crate::movie_explorer::open(self);
                 crate::movie_explorer::expand_to(self, 3);
+            }
+            Some("xsheet") => {
+                // The vertical sheet in the Library's group, wide enough for several columns,
+                // on a frame that holds a key, with a sound on its own layer (ADR 0100).
+                self.dock.right.collapsed = false;
+                self.dock.right.size = Some(640.0);
+                self.dock_view.epoch += 1;
+                self.show_panel(crate::dock::Panel::XSheet);
+                self.run("timeline.goto", json!({"frame": 12}));
+                self.import_demo_beat();
             }
             Some("about") => self.show_about = true,
             Some("selectzoom") => {
@@ -2143,7 +2198,7 @@ impl App {
                 self.tool = Tool::Eraser;
                 self.eraser = crate::erasertool::EraserOptions { size: 30.0, ..Default::default() };
                 self.brush_samples = (0..=30).map(|i| (anicraft_engine::geom::Vec2::new(720.0 + i as f32 * 12.0, 310.0), None)).collect();
-                crate::erasertool::commit(self, crate::pathtools::Xf { origin: egui::Pos2::ZERO, zoom: 1.0 });
+                crate::erasertool::commit(self, crate::pathtools::Xf::plain(egui::Pos2::ZERO, 1.0));
             }
             Some("eyedropper") => {
                 // The sample's sky gradient picked with the Eyedropper: the fill swatch holds it.
@@ -2695,6 +2750,7 @@ impl App {
                     Some(r) => self.status_ok(tr!("{report} Save to keep it as an AniCraft document.", report = r)),
                     None => match v["template"].as_str() {
                         Some(t) => self.status_ok(tr!("New document from the template “{name}”", name = crate::i18n::t_dyn(t))),
+                        None if v["grid"].as_bool() == Some(true) => self.status_ok(tr!("New 2kool grid. Draw on Layer 1. The template is locked on top, Multiply, at 15%.")),
                         None => self.status_ok(if id == "file.open" || id == "file.open_recent" { tr!("Opened") } else { tr!("New document") }),
                     },
                 }
@@ -3043,16 +3099,22 @@ impl App {
     /// The stage point at the centre of the visible canvas.
     pub fn view_center_stage(&self) -> egui::Vec2 {
         let size = egui::vec2(self.s.doc.stage.width as f32, self.s.doc.stage.height as f32);
-        size * 0.5 - self.view.pan / self.view.zoom.max(1e-3)
+        // At 0° this is the upright formula: size/2 − pan/zoom.
+        crate::viewturn::center_stage(size, self.view.pan, self.view.rotation, self.view.zoom)
     }
 
     pub fn zoom_about(&mut self, canvas: egui::Rect, screen: egui::Pos2, new_zoom: f32) {
         let new_zoom = new_zoom.clamp(0.05, 64.0);
         let size = egui::vec2(self.s.doc.stage.width as f32, self.s.doc.stage.height as f32);
-        let origin = canvas.center() + self.view.pan - size * self.view.zoom * 0.5;
-        let stage_pt = (screen - origin) / self.view.zoom;
-        let new_origin = screen - stage_pt * new_zoom;
-        self.view.pan = new_origin - canvas.center() + size * new_zoom * 0.5;
+        if self.view.rotation == 0.0 {
+            let origin = canvas.center() + self.view.pan - size * self.view.zoom * 0.5;
+            let stage_pt = (screen - origin) / self.view.zoom;
+            let new_origin = screen - stage_pt * new_zoom;
+            self.view.pan = new_origin - canvas.center() + size * new_zoom * 0.5;
+            self.view.zoom = new_zoom;
+            return;
+        }
+        self.view.pan = crate::viewturn::zoom_pan(canvas.center(), self.view.pan, self.view.rotation, size, self.view.zoom, screen, new_zoom);
         self.view.zoom = new_zoom;
     }
 
@@ -3256,6 +3318,10 @@ impl App {
             return;
         }
         let control = keys == crate::a11y::Keyboard::Control;
+        // Grab, rotate and scale take the keyboard while they run, including Esc and Enter.
+        if crate::blender_xf::keys(self, ctx, control) {
+            return;
+        }
         if !control {
             crate::motion_path::consume_keys(self, ctx);
             pathtools::consume_keys(self, ctx);
@@ -3265,6 +3331,11 @@ impl App {
         }
         crate::library::consume_keys(self, ctx);
         crate::ease_editor::consume_keys(self, ctx);
+        // The X-sheet is the timeline stood up: while the pointer is over it, the arrows step a
+        // frame (up and down) or a layer (left and right) before the filmstrip's own arrows.
+        if !control {
+            crate::xsheet::keys(self, ctx);
+        }
         let mut fire: Vec<&'static str> = Vec::new();
         let mut tool = None;
         let mut play = false;
@@ -3816,6 +3887,11 @@ impl App {
         if self.s.revision != self.last_revision {
             self.last_revision = self.s.revision;
             ctx.request_repaint();
+        }
+        // The sheet writes its hit rect while it draws. A pass that did not draw it drops the
+        // rect, so the next pass's arrow keys do not act on a panel that is gone.
+        if self.xsheet_hit.is_some_and(|(_, pass)| pass != ctx.cumulative_pass_nr()) {
+            self.xsheet_hit = None;
         }
     }
 }

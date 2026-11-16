@@ -152,6 +152,8 @@ lets you change them (see [Preferences, shortcuts and accessibility](preferences
 ### Panning
 
 * Hold **Space** and drag, with any tool.
+* Hold **Shift+Space** and drag to turn the paper about the middle of the view. **View › Reset Rotation** stands it back up. The drawing in the file stays upright.
+* Hold **Ctrl+Space** and drag to zoom. Drag up to zoom in, down to zoom out. The point you pressed stays put, and dragging back to that height restores the zoom.
 * Or pick the **Hand** tool (**H**) and drag.
 * Or scroll with the mouse wheel or trackpad: up and down, and sideways with a trackpad.
 
@@ -160,6 +162,7 @@ lets you change them (see [Preferences, shortcuts and accessibility](preferences
 | To | Do this |
 |---|---|
 | Zoom in or out around the pointer | **Ctrl** + mouse wheel, or pinch on a trackpad |
+| Zoom in or out with a drag | Hold **Ctrl+Space** and drag up to zoom in, down to zoom out |
 | Zoom in | **View › Zoom In** (**Ctrl+=**), or click with the **Zoom** tool (**Z**) |
 | Zoom out | **View › Zoom Out** (**Ctrl+-**), or **Alt**-click with the Zoom tool |
 | Fit the whole stage in the window | **View › Fit in Window** (**Ctrl+0**, or **Ctrl+2**) |

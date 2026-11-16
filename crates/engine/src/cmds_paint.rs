@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fill",
             "",
             None,
-            "{type?: solid|linear|radial|bitmap (default: the swatch's), color? (solid), stops?: [{offset: 0..1, color: \"#rrggbb\" | \"#rrggbbaa\"}, ..] (2 to 15), spread?: extend|reflect|repeat, linear_rgb?: bool, focal?: -0.98..0.98 (radial), bitmap?: id, selection?: bool (default true)} sets the fill swatch (what new shapes, the Paint Bucket and the Brush pour) and, unless `selection` is false, the fills of the selected shapes. A shape keeping its kind of fill keeps where its gradient or bitmap lies; one changing kind gets it fitted to its bounds. A new gradient starts white to black → {fill: {type, ..}, changed}",
+            "{type?: solid|linear|radial|bitmap (default: the swatch's), color? (solid, \"#rrggbb\" or \"#rrggbbaa\"), stops?: [{offset: 0..1, color: \"#rrggbb\" | \"#rrggbbaa\"}, ..] (2 to 15; each stop has its own alpha), spread?: extend|reflect|repeat, linear_rgb?: bool, focal?: -0.98..0.98 (radial), bitmap?: id, selection?: bool (default true)} sets the fill swatch (what new shapes, the Paint Bucket and the Brush pour) and, unless `selection` is false, the fills of the selected shapes. A shape keeping its kind of fill keeps where its gradient or bitmap lies; one changing kind gets it fitted to its bounds. A new gradient starts white to black → {fill: {type, ..}, changed}",
             true,
             set_fill,
         ),

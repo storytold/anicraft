@@ -339,7 +339,7 @@ mod tests {
     use super::*;
     use egui::pos2;
 
-    const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+    const XF: Xf = Xf::plain(Pos2::ZERO, 1.0);
 
     fn widths(app: &App) -> Vec<f32> {
         app.s.visible_elements().iter().filter_map(|e| match &e.kind {

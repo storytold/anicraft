@@ -26,8 +26,8 @@ const BAR_WIDTH: f32 = 270.0;
 /// What the fill picker asks for.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FillEdit {
-    /// A solid colour (opaque).
-    Solid([u8; 3]),
+    /// A solid colour, unmultiplied, alpha in the last byte. 0 is a clear fill, not "no fill".
+    Solid([u8; 4]),
     /// No fill (true), or a fill again (false).
     None(bool),
     /// `paint.set_fill` params, with its undo label; `live` while a drag or typing goes on (one
@@ -162,7 +162,7 @@ pub fn popup_for(ui: &egui::Ui, anchor: &Response, popup: Id, paint: Option<&Pai
 fn kinds() -> [(&'static str, &'static str, &'static str); 5] {
     [
         ("none", tr!("None"), tr!("No fill")),
-        ("solid", tr!("Solid"), tr!("Solid colour")),
+        ("solid", tr!("Solid"), tr!("A solid colour, from clear to opaque")),
         ("linear", tr!("Linear"), tr!("Linear gradient: colours along a line")),
         ("radial", tr!("Radial"), tr!("Radial gradient: colours out from a centre")),
         ("bitmap", tr!("Bitmap"), tr!("Bitmap fill: a Library image, tiled")),
@@ -200,7 +200,7 @@ pub fn fill_picker(ui: &mut egui::Ui, popup: Id, paint: Option<&Paint>, bitmaps:
             "solid" => match paint {
                 // A fill again: the colour it shows.
                 None => FillEdit::None(false),
-                Some(p) => FillEdit::Set { label: tr_noop!("Fill"), live: false, params: json!({"type": "solid", "color": hex(p.primary_color().with_alpha(1.0))}) },
+                Some(p) => FillEdit::Set { label: tr_noop!("Fill"), live: false, params: json!({"type": "solid", "color": hex(p.primary_color())}) },
             },
             "bitmap" => FillEdit::Set { label: tr_noop!("Fill"), live: false, params: json!({"type": "bitmap", "bitmap": bitmaps.first().map_or(0, |b| b.0)}) },
             other => FillEdit::Set { label: tr_noop!("Fill"), live: false, params: json!({"type": other}) },
@@ -213,7 +213,7 @@ pub fn fill_picker(ui: &mut egui::Ui, popup: Id, paint: Option<&Paint>, bitmaps:
         }
         Some(Paint::Solid(c)) => {
             let mut px = bytes(*c);
-            crate::colour::picker(ui, popup, &mut px, false, None).then_some(FillEdit::Solid([px[0], px[1], px[2]]))
+            crate::colour::picker(ui, popup, &mut px, true, None).then_some(FillEdit::Solid(px))
         }
         Some(Paint::Linear { stops, spread, linear_rgb, .. }) => gradient(ui, popup, stops, *spread, *linear_rgb, None),
         Some(Paint::Radial { stops, spread, linear_rgb, focal, .. }) => gradient(ui, popup, stops, *spread, *linear_rgb, Some(*focal)),
@@ -405,7 +405,8 @@ fn stop_bar(ui: &mut egui::Ui, popup: Id, stops: &mut Vec<GradientStop>) -> Opti
         let hit = Rect::from_center_size(pos2(x, track.center().y), vec2(12.0, 14.0));
         let r = ui.interact(hit, popup.with(("fill_stop_marker", i)), Sense::click_and_drag());
         let at = format!("{:.0}", off * 100.0);
-        a11y::control(ui, &r, WidgetType::Button, &tr!("Colour stop {stop} of {count} at {at}%", stop = i + 1, count = count, at = at), Some(i == sel));
+        let alpha = stops.get(i).map(|s| format!("{:.0}", s.color.sanitized().a * 100.0)).unwrap_or_else(|| "100".into());
+        a11y::control(ui, &r, WidgetType::Button, &tr!("Colour stop {stop} of {count} at {at}%, alpha {alpha}%", stop = i + 1, count = count, at = at, alpha = alpha), Some(i == sel));
         if r.clicked() || r.drag_started() || r.gained_focus() {
             sel = i;
         }
@@ -445,7 +446,9 @@ fn stop_bar(ui: &mut egui::Ui, popup: Id, stops: &mut Vec<GradientStop>) -> Opti
         let tip = pos2(x, track.top());
         let body = [tip, pos2(x + 6.0, track.top() + 6.0), pos2(x + 6.0, track.bottom()), pos2(x - 6.0, track.bottom()), pos2(x - 6.0, track.top() + 6.0)];
         let edge = if i == sel { T.accent } else if r.hovered() { T.text } else { T.control_edge };
-        let fill = to_color32(st.color.with_alpha(if torn { 0.3 } else { 1.0 }));
+        // The marker shows that stop's own alpha, so a fade along the ramp is visible on the handles.
+        let shown = st.color.sanitized();
+        let fill = to_color32(shown.with_alpha(shown.a * if torn { 0.35 } else { 1.0 }));
         ui.painter().add(egui::Shape::convex_polygon(body.to_vec(), fill, Stroke::new(if i == sel { 2.0 } else { 1.0 }, edge)));
     }
     ui.data_mut(|d| match tearing {
@@ -599,7 +602,7 @@ mod tests {
         assert!(matches!(app.s.style.fill_paint, Some(Paint::Linear { .. })));
         // Solid and None are the caller's: apply_set leaves them alone.
         let before = app.s.doc.clone();
-        apply_set(&mut app, &FillEdit::Solid([1, 2, 3]), true);
+        apply_set(&mut app, &FillEdit::Solid([1, 2, 3, 255]), true);
         apply_set(&mut app, &FillEdit::None(true), true);
         assert!(app.s.doc == before);
         // The whole window draws with the Tools square's picker open on the selection's gradient,
@@ -612,5 +615,35 @@ mod tests {
         assert!(!current(&app).1);
         assert_eq!(stops_json(&[stop(0.0, 0xff0000)])[0]["color"], "#ff0000");
         assert_eq!(from_bytes(bytes(Rgba::new(1.0, 0.0, 0.0, 0.5))).a, 128.0 / 255.0);
+    }
+
+    /// A solid fill keeps the alpha it was given, a gradient keeps a different alpha on each
+    /// stop, and the open fill picker names an Alpha control for either.
+    #[test]
+    fn a_fill_keeps_its_alpha_and_the_picker_names_it() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(PathBuf::from("unused.png")));
+        app.run("draw.rect", json!({"x": 10, "y": 10, "w": 40, "h": 30, "fill": "#ff000080", "stroke": null}));
+        let kept = match current(&app).0 {
+            Paint::Solid(c) => (c.a - 128.0 / 255.0).abs() < 1e-3,
+            _ => false,
+        };
+        assert!(kept, "a solid fill keeps its alpha: {:?}", current(&app).0);
+        app.run("paint.set_fill", json!({"type": "linear", "stops": [{"offset": 0, "color": "#ff0000"}, {"offset": 1, "color": "#0000ff00"}]}));
+        let paint = current(&app).0;
+        let stops = paint.stops().unwrap_or(&[]);
+        assert!(stops.len() == 2 && (stops[0].color.a - 1.0).abs() < 1e-3 && stops[1].color.a < 1e-3, "{stops:?}");
+        app.run("paint.set_fill", json!({"type": "solid", "color": "#3d8bfd80"}));
+        app.tool = Tool::Select;
+        app.open_fill_swatch = true;
+        let mut labels = String::new();
+        for _ in 0..4 {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1600.0, 940.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            labels = out.platform_output.accesskit_update.map(|u| u.nodes.into_iter().filter_map(|(_, n)| n.label().map(str::to_string)).collect::<Vec<_>>().join("\n")).unwrap_or_default();
+        }
+        assert!(labels.contains("Alpha"), "the fill picker has no Alpha control:\n{labels}");
     }
 }

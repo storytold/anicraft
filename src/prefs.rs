@@ -100,7 +100,7 @@ pub struct Prefs {
     pub language: String,
     pub ui_font: FontChoice,
     pub data_font: FontChoice,
-    /// Dark (Graphite), Light (ADR 0077) or high contrast (ADR 0022), when chosen by hand. A
+    /// Dark (Graphite), Studio (ADR 0099), Light (ADR 0077) or high contrast (ADR 0022), when chosen by hand. A
     /// palette this build doesn't know (a newer build's) reads as Graphite, keeping the rest.
     #[serde(deserialize_with = "lenient_palette")]
     pub theme: crate::theme::Palette,

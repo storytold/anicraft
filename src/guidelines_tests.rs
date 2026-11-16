@@ -103,6 +103,7 @@ fn palette_failures(name: &str, t: &crate::theme::Tokens) -> Vec<String> {
     }
     need("text on hover", t.text, t.hover, 4.5);
     need("text on a selected row (accent_dim)", t.text, t.accent_dim, 4.5);
+    need("on_selected on row_selected", t.on_selected, t.row_selected, 7.0);
     need("text on row_active", t.text, t.row_active, 4.5);
     // Icons at rest and under the pointer, and on the active tool's block.
     need("icon on panel", t.icon, t.panel, 4.5);
@@ -154,10 +155,11 @@ fn palette_failures(name: &str, t: &crate::theme::Tokens) -> Vec<String> {
 
 #[test]
 fn palette_meets_contrast_and_target_minimums() {
-    use crate::theme::{GRAPHITE, HIGH_CONTRAST, LIGHT, Palette, TARGET, TOOL_BUTTON};
+    use crate::theme::{GRAPHITE, HIGH_CONTRAST, LIGHT, Palette, STUDIO, TARGET, TOOL_BUTTON};
     let mut found = palette_failures("Graphite", &GRAPHITE);
     found.extend(palette_failures("Light", &LIGHT));
     found.extend(palette_failures("High contrast", &HIGH_CONTRAST));
+    found.extend(palette_failures("Studio", &STUDIO));
     assert!(found.is_empty(), "contrast below WCAG AA:\n{}", found.join("\n"));
     // High contrast is stricter than AA: every text step reads at 7:1 (AAA) on its surfaces.
     let hc = HIGH_CONTRAST;
@@ -169,7 +171,7 @@ fn palette_meets_contrast_and_target_minimums() {
     // Light is designed for light, not the dark look inverted (ADR 0077): dark text on light
     // surfaces, fields the lightest of them, the frame (chrome) darker than the panels, and egui
     // told it is a light look. Graphite and high contrast are the other way round.
-    for (name, t) in [("Graphite", GRAPHITE), ("High contrast", HIGH_CONTRAST), ("Light", LIGHT)] {
+    for (name, t) in [("Graphite", GRAPHITE), ("High contrast", HIGH_CONTRAST), ("Light", LIGHT), ("Studio", STUDIO)] {
         let lum = |c: egui::Color32| contrast(c, egui::Color32::BLACK);
         assert_eq!(t.dark, lum(t.text) > lum(t.panel), "{name}: `dark` says which way text goes");
     }
@@ -177,8 +179,8 @@ fn palette_meets_contrast_and_target_minimums() {
     assert!(lum(LIGHT.field) >= lum(LIGHT.panel_alt) && lum(LIGHT.panel_alt) > lum(LIGHT.panel) && lum(LIGHT.panel) > lum(LIGHT.chrome), "light surfaces step down from fields to the frame");
     const { assert!(LIGHT.control_hairline && !GRAPHITE.control_hairline, "light controls carry a hairline") };
     // Every palette the preferences offer is checked, once each.
-    assert!(Palette::ALL.iter().all(|(p, _, _)| matches!(p, Palette::Graphite | Palette::HighContrast | Palette::Light)));
-    for p in [Palette::Graphite, Palette::Light, Palette::HighContrast] {
+    assert!(Palette::ALL.iter().all(|(p, _, _)| matches!(p, Palette::Graphite | Palette::HighContrast | Palette::Light | Palette::Studio)));
+    for p in [Palette::Graphite, Palette::Light, Palette::HighContrast, Palette::Studio] {
         assert_eq!(Palette::ALL.iter().filter(|(q, _, _)| *q == p).count(), 1, "{p:?} offered once");
     }
     // Click targets (WCAG 2.5.8 asks for at least 24 × 24).

@@ -4,3 +4,4 @@ People who have contributed to AniCraft. The repository starts from one initial 
 (`docs/release.md`), so the work before it is credited here.
 
 * Tanish Manku: project lead, product direction and design.
+* Juan Larrazabal: Studio theme, canvas turn and drag zoom.

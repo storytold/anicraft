@@ -73,7 +73,7 @@ pub struct BrushPreset {
     pub smoothing: f32,
     /// How pen pressure maps before it drives size or opacity.
     pub curve: PressureCurve,
-    /// Pressure varies the size (from 10 % to 100 %).
+    /// Pressure varies the size, from `min_size` at no pressure to `size` at full.
     pub pressure_size: bool,
     /// Pressure varies the paint's opacity (the stroke's average, ADR 0068).
     pub pressure_opacity: bool,
@@ -93,6 +93,8 @@ pub struct BrushPreset {
     pub tilt_angle: bool,
     /// The pen's tilt widens the tip (up to twice as wide lying flat).
     pub tilt_width: bool,
+    /// Diameter at no pressure, stage units. A light touch is this wide.
+    pub min_size: f32,
 }
 
 impl Default for BrushPreset {
@@ -104,7 +106,7 @@ impl Default for BrushPreset {
             shape: Shape::Round,
             angle: 0.0,
             roundness: 100.0,
-            smoothing: 50.0,
+            smoothing: 0.0,
             curve: PressureCurve::LINEAR,
             pressure_size: true,
             pressure_opacity: false,
@@ -116,6 +118,7 @@ impl Default for BrushPreset {
             scatter: 0.0,
             tilt_angle: false,
             tilt_width: false,
+            min_size: 0.001,
         }
     }
 }
@@ -174,6 +177,7 @@ impl BrushPreset {
         let c = |v: f32, lo: f32, hi: f32, def: f32| if v.is_finite() { v.clamp(lo, hi) } else { def };
         self.name = clean_name(&self.name).unwrap_or_default();
         self.size = c(self.size, *crate::cmds_brush::SIZE_RANGE.start(), *crate::cmds_brush::SIZE_RANGE.end(), d.size);
+        self.min_size = c(self.min_size, *crate::cmds_brush::SIZE_RANGE.start(), self.size, d.min_size).min(self.size);
         self.angle = c(self.angle, -1e6, 1e6, 0.0).rem_euclid(180.0);
         self.roundness = c(self.roundness, 5.0, 100.0, 100.0);
         self.smoothing = c(self.smoothing, 0.0, 100.0, d.smoothing);
@@ -203,6 +207,7 @@ impl BrushPreset {
             texture: self.texture / 100.0,
             scatter: self.scatter / 100.0,
             tilt: TiltResponse { angle: self.tilt_angle, width: self.tilt_width },
+            min_size: self.min_size,
         }
         .sanitized()
     }
@@ -228,6 +233,7 @@ impl BrushPreset {
         let mut b = self.clone();
         let r = crate::cmds_brush::ranged;
         b.size = r(p, "size", crate::cmds_brush::SIZE_RANGE, b.size)?;
+        b.min_size = r(p, "min_size", crate::cmds_brush::SIZE_RANGE, b.min_size)?.min(b.size);
         b.shape = match opt_str(p, "shape")? {
             None => b.shape,
             Some("round") => Shape::Round,
@@ -454,7 +460,7 @@ mod tests {
             assert_eq!(p.clone().sanitized(), p, "{key} is already in range");
             assert!(!builtin_hint(key).is_empty());
         }
-        assert_eq!(BrushPreset::default().shaping(), Shaping::default(), "the plain brush shapes nothing");
+        assert_eq!(BrushPreset::default().shaping(), Shaping { min_size: 0.001, ..Shaping::default() }, "the plain brush's only shaping is Thinnest");
     }
 
     #[test]
@@ -490,7 +496,7 @@ mod tests {
         // fields read with defaults.
         let got = BrushLibrary::parse_file(r#"{"format": "anicraft-brushes", "version": 1, "brushes": [7, {"name": ""}, {"name": "Old", "size": -4, "spacing": 2, "curve": [[0.5, 9]]}]}"#).unwrap();
         assert_eq!(got.len(), 1);
-        assert_eq!((got[0].size, got[0].spacing, got[0].smoothing), (0.1, 5.0, 50.0));
+        assert_eq!((got[0].size, got[0].spacing, got[0].smoothing), (0.001, 5.0, 0.0));
         assert_eq!(got[0].curve.points(), &[[0.0, 1.0], [0.5, 1.0], [1.0, 1.0]]);
         // Preferences: the library as a list.
         let lib = BrushLibrary::from_values(serde_json::from_str::<Vec<Value>>(&serde_json::to_string(&mine).unwrap()).unwrap());

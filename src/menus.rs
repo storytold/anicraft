@@ -620,6 +620,9 @@ pub(crate) fn menu_contents(app: &mut App, ui: &mut egui::Ui, top: &str, cmds: &
             if ui_item(ui, "100%", "Ctrl+1", None) {
                 app.zoom_about(canvas, center, 1.0);
             }
+            if ui_item(ui, tr!("Reset Rotation"), "", None) {
+                app.view.reset_rotation();
+            }
             ui.separator();
             if ui_item(ui, tr!("Onion Skin"), app.keymap.primary("view.onion").unwrap_or(""), Some(app.onion.ghosts)) {
                 crate::onion::toggle_ghosts(app);

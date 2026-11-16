@@ -25,6 +25,8 @@ pub const RESERVED: &[(&str, &str)] = &[
     ("Enter", tr_noop!("play / stop")),
     ("Escape", tr_noop!("cancelling")),
     ("Space", tr_noop!("panning with any tool")),
+    ("Shift+Space", tr_noop!("turning the view")),
+    ("Ctrl+Space", tr_noop!("zooming the view")),
     ("Tab", tr_noop!("moving between fields")),
 ];
 

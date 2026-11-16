@@ -137,7 +137,7 @@ impl FrameSel {
     pub fn layers(&self, layers: &[Arc<Layer>]) -> Vec<LayerId> {
         self.rows(layers).map(|(a, b)| layers.iter().skip(a).take(b - a + 1).map(|l| l.id).collect()).unwrap_or_default()
     }
-    fn contains(&self, layers: &[Arc<Layer>], row: usize, frame: u32) -> bool {
+    pub(crate) fn contains(&self, layers: &[Arc<Layer>], row: usize, frame: u32) -> bool {
         let (f0, f1) = self.frames();
         self.rows(layers).is_some_and(|(a, b)| row >= a && row <= b) && frame >= f0 && frame <= f1
     }
@@ -184,7 +184,7 @@ pub enum TlDrag {
 }
 
 /// The motion tween span holding `frame` on `layer`, as a frame selection.
-fn whole_motion_span(layer: &Layer, frame: u32) -> Option<FrameSel> {
+pub(crate) fn whole_motion_span(layer: &Layer, frame: u32) -> Option<FrameSel> {
     let k = layer.keyframe_at(frame).filter(|k| k.motion.is_some())?;
     Some(FrameSel { anchor: (layer.id, k.start), head: (layer.id, k.end() - 1) })
 }
@@ -572,7 +572,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         drop_rows.push((row, layer.id));
         let left = Rect::from_min_max(row.left_top(), pos2(grid.left(), row.bottom()));
         let is_active = layer.id == active;
-        painter.rect_filled(left, 0.0, if is_active { T.accent_dim } else if r % 2 == 0 { T.panel } else { T.panel_alt });
+        painter.rect_filled(left, 0.0, if is_active { T.row_selected } else if r % 2 == 0 { T.panel } else { T.panel_alt });
         // The layer's colour as a full-height edge bar.
         painter.rect_filled(Rect::from_min_size(left.left_top(), vec2(4.0, rh)), 0.0, to_color32(layer.color));
         // Layers are indented under the folders and masks that hold them. Folders carry a
@@ -581,7 +581,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         let masked = layer.parent.is_some_and(|p| tl_now.layer(p).is_some_and(|m| m.kind == LayerKind::Mask));
         let guided = layer.parent.is_some_and(|p| tl_now.layer(p).is_some_and(|m| m.kind == LayerKind::Guide));
         let hidden = !layer.visible || tl_now.hidden_by_folder(i);
-        let name_color = if hidden { T.text_faint } else { T.text };
+        let name_color = if is_active { T.on_selected } else if hidden { T.text_faint } else { T.text };
         let type_icon = |x: f32, icon: Icon| icons::paint(&painter, Rect::from_center_size(pos2(x, left.center().y), vec2(14.0, 14.0)), icon, name_color);
         let x0 = left.left() + 12.0 + tl_now.depth(i) as f32 * INDENT;
         let open = !app.tl_collapsed.contains(&layer.id);
@@ -599,7 +599,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             LayerKind::Normal => (x0 + 7.0, x0 + 20.0, Icon::Layer),
         };
         if is_folder {
-            icons::paint(&painter, Rect::from_center_size(chevron.center(), vec2(12.0, 12.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, T.text_dim);
+            icons::paint(&painter, Rect::from_center_size(chevron.center(), vec2(12.0, 12.0)), if open { Icon::ChevronDown } else { Icon::ChevronRight }, if is_active { T.on_selected } else { T.text_dim });
         }
         type_icon(icon_x, icon);
         let icon_rect = Rect::from_center_size(pos2(icon_x, left.center().y), vec2(16.0, tg));
@@ -1178,60 +1178,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.playing = false;
             }
         }
-        cr.context_menu(|ui| {
-            ui.set_min_width(220.0);
-            for id in ["timeline.insert_frame", "timeline.remove_frame", "timeline.insert_keyframe", "timeline.insert_blank_keyframe", "timeline.clear_keyframe"] {
-                menus::cmd_item(app, ui, id);
-            }
-            ui.separator();
-            for id in ["timeline.cut_frames", "timeline.copy_frames", "timeline.paste_frames"] {
-                menus::cmd_item(app, ui, id);
-            }
-            ui.separator();
-            let here = app.s.active_layer().and_then(|l| l.keyframe_at(app.s.frame));
-            if here.is_some_and(|k| k.motion.is_some()) {
-                if ui.button(tr!("Motion Editor")).clicked() {
-                    app.show_panel(crate::dock::Panel::MotionEditor);
-                    ui.close();
-                }
-                menus::cmd_item(app, ui, "timeline.create_tween");
-                menus::cmd_item(app, ui, "timeline.remove_tween");
-                ui.separator();
-                let (split, join) = motion_cuts(app);
-                if ui.add_enabled(split, egui::Button::new(tr!("Split Motion"))).clicked() {
-                    split_motion(app);
-                    ui.close();
-                }
-                if ui.add_enabled(join.is_some(), egui::Button::new(tr!("Join Motion"))).clicked() {
-                    join_motion(app, join);
-                    ui.close();
-                }
-                return;
-            }
-            let tween = here.and_then(|k| k.tween.clone());
-            match tween {
-                Some(t) => {
-                    menus::cmd_item(app, ui, "timeline.create_motion_tween");
-                    menus::cmd_item(app, ui, if t.kind == TweenKind::Shape { "timeline.create_tween" } else { "timeline.create_shape_tween" });
-                    menus::cmd_item(app, ui, "timeline.remove_tween");
-                    ui.separator();
-                    // Eases (ADR 0081): the window, and an ease carried from one tween to another.
-                    if ui.button(tr!("Edit Ease…")).clicked() {
-                        crate::ease_editor::open_here(app);
-                        ui.close();
-                    }
-                    menus::cmd_item(app, ui, "ease.copy");
-                    if app.s.ease_clipboard.is_some() {
-                        menus::cmd_item(app, ui, "ease.paste");
-                    }
-                }
-                None => {
-                    menus::cmd_item(app, ui, "timeline.create_motion_tween");
-                    menus::cmd_item(app, ui, "timeline.create_tween");
-                    menus::cmd_item(app, ui, "timeline.create_shape_tween");
-                }
-            }
-        });
+        cr.context_menu(|ui| frame_menu(app, ui));
         painter.line_segment([row.left_bottom(), row.right_bottom()], Stroke::new(1.0, T.separator));
     }
     // Layout lines: layer list | frame grid, and the header above.
@@ -1609,6 +1556,63 @@ fn waveform(p: &egui::Painter, doc: &anicraft_engine::doc::Document, fs: &anicra
 pub fn button_states(app: &App) -> Option<[&'static str; 4]> {
     let open = app.s.editing_symbol().and_then(|id| app.s.doc.symbol(id))?;
     (open.kind == anicraft_engine::doc::SymbolKind::Button).then(|| [trc!("button state", "Up"), trc!("button state", "Over"), trc!("button state", "Down"), trc!("button state", "Hit")])
+}
+
+/// The frame menu the horizontal timeline and the vertical X-sheet share: insert, cut and
+/// paste, tweens, and the motion editor. The cell under the pointer is already selected.
+pub(crate) fn frame_menu(app: &mut App, ui: &mut egui::Ui) {
+    ui.set_min_width(220.0);
+    for id in ["timeline.insert_frame", "timeline.remove_frame", "timeline.insert_keyframe", "timeline.insert_blank_keyframe", "timeline.clear_keyframe"] {
+        menus::cmd_item(app, ui, id);
+    }
+    ui.separator();
+    for id in ["timeline.cut_frames", "timeline.copy_frames", "timeline.paste_frames"] {
+        menus::cmd_item(app, ui, id);
+    }
+    ui.separator();
+    let here = app.s.active_layer().and_then(|l| l.keyframe_at(app.s.frame));
+    if here.is_some_and(|k| k.motion.is_some()) {
+        if ui.button(tr!("Motion Editor")).clicked() {
+            app.show_panel(crate::dock::Panel::MotionEditor);
+            ui.close();
+        }
+        menus::cmd_item(app, ui, "timeline.create_tween");
+        menus::cmd_item(app, ui, "timeline.remove_tween");
+        ui.separator();
+        let (split, join) = motion_cuts(app);
+        if ui.add_enabled(split, egui::Button::new(tr!("Split Motion"))).clicked() {
+            split_motion(app);
+            ui.close();
+        }
+        if ui.add_enabled(join.is_some(), egui::Button::new(tr!("Join Motion"))).clicked() {
+            join_motion(app, join);
+            ui.close();
+        }
+        return;
+    }
+    let tween = here.and_then(|k| k.tween.clone());
+    match tween {
+        Some(t) => {
+            menus::cmd_item(app, ui, "timeline.create_motion_tween");
+            menus::cmd_item(app, ui, if t.kind == TweenKind::Shape { "timeline.create_tween" } else { "timeline.create_shape_tween" });
+            menus::cmd_item(app, ui, "timeline.remove_tween");
+            ui.separator();
+            // Eases (ADR 0081): the window, and an ease carried from one tween to another.
+            if ui.button(tr!("Edit Ease…")).clicked() {
+                crate::ease_editor::open_here(app);
+                ui.close();
+            }
+            menus::cmd_item(app, ui, "ease.copy");
+            if app.s.ease_clipboard.is_some() {
+                menus::cmd_item(app, ui, "ease.paste");
+            }
+        }
+        None => {
+            menus::cmd_item(app, ui, "timeline.create_motion_tween");
+            menus::cmd_item(app, ui, "timeline.create_tween");
+            menus::cmd_item(app, ui, "timeline.create_shape_tween");
+        }
+    }
 }
 
 /// The timeline header, left to right: transport, readouts, frame and tween buttons.

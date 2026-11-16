@@ -1,8 +1,8 @@
 //! Design tokens. Every colour, radius and target size in the shell comes from here
 //! (docs/ui-guidelines.md).
 //!
-//! Three palettes share these roles: Graphite (dark, the default), Light (ADR 0077) and high
-//! contrast (ADR 0022). The look (ADR 0008): graphite neutrals, geometric controls, borders only where they separate
+//! Four palettes share these roles: Graphite (dark, the default), Light (ADR 0077), high
+//! contrast (ADR 0022) and Studio (ADR 0099, the fork's black chrome). The look (ADR 0008): graphite neutrals, geometric controls, borders only where they separate
 //! layout regions, flat buttons, and vibrant colour spent where it carries meaning (timeline
 //! blocks, playhead, selection). Corners follow the role of a shape, not one global value:
 //! structure is square, controls are softened slightly, floating surfaces are rounder.
@@ -42,6 +42,11 @@ pub struct Tokens {
     /// Selection, focus, active tool.
     pub accent: Color32,
     pub accent_dim: Color32,
+    /// Fill of a selected list row, layer or library entry. The other palettes use `accent_dim`.
+    /// Studio uses white, so the selected control is the one light thing in the chrome (ADR 0099).
+    pub row_selected: Color32,
+    /// Ink drawn on `row_selected`. The other palettes use `text`. Studio uses black.
+    pub on_selected: Color32,
     /// Accent-coloured text (the current frame, links, prompts): the accent lightened until it
     /// reads at 4.5:1 on the panels.
     pub accent_text: Color32,
@@ -146,6 +151,8 @@ pub const GRAPHITE: Tokens = Tokens {
     text_faint: Color32::from_rgb(0x98, 0x98, 0xa2),
     accent: Color32::from_rgb(0x2e, 0x66, 0xf0),
     accent_dim: Color32::from_rgb(0x1f, 0x35, 0x70),
+    row_selected: Color32::from_rgb(0x1f, 0x35, 0x70),
+    on_selected: Color32::from_rgb(0xee, 0xee, 0xf0),
     accent_text: Color32::from_rgb(0x6f, 0x97, 0xff),
     on_fill: Color32::WHITE,
     ink: Color32::from_rgb(0x0e, 0x0e, 0x10),
@@ -209,6 +216,8 @@ pub const HIGH_CONTRAST: Tokens = Tokens {
     text_faint: Color32::from_rgb(0xc8, 0xc8, 0xc8),
     accent: Color32::from_rgb(0xff, 0xd8, 0x1a),
     accent_dim: Color32::from_rgb(0x4d, 0x3d, 0x00),
+    row_selected: Color32::from_rgb(0x4d, 0x3d, 0x00),
+    on_selected: Color32::from_rgb(0xff, 0xff, 0xff),
     accent_text: Color32::from_rgb(0xff, 0xd8, 0x1a),
     on_fill: Color32::from_rgb(0x00, 0x00, 0x00),
     ink: Color32::from_rgb(0x00, 0x00, 0x00),
@@ -279,6 +288,8 @@ pub const LIGHT: Tokens = Tokens {
     text_faint: rgb(0x5c5c66),
     accent: rgb(0x2457e0),
     accent_dim: rgb(0xd3dffb),
+    row_selected: rgb(0xd3dffb),
+    on_selected: rgb(0x17171b),
     accent_text: rgb(0x1d4ccc),
     on_fill: rgb(0xffffff),
     ink: rgb(0x101014),
@@ -319,6 +330,72 @@ pub const LIGHT: Tokens = Tokens {
     radius_window: 10,
 };
 
+/// Studio (ADR 0099): black and dark-grey chrome, square corners, white only on the selected
+/// control. The picture stays on the stage. Timeline blocks keep their meaning colours so a
+/// span, a tween and the playhead still read apart. Body text is `#a0a0a0` (7:1 on the gutter);
+/// a selected row is white with black type.
+pub const STUDIO: Tokens = Tokens {
+    chrome: rgb(0x000000),
+    panel: rgb(0x000000),
+    panel_alt: rgb(0x141414),
+    header: rgb(0x141414),
+    hover: rgb(0x2a2a2a),
+    active: rgb(0xffffff),
+    on_active: rgb(0x000000),
+    icon: rgb(0xa0a0a0),
+    icon_hot: rgb(0xffffff),
+    field: rgb(0x000000),
+    border: rgb(0x2a2a2a),
+    control_edge: rgb(0x767676),
+    separator: rgb(0x2a2a2a),
+    text: rgb(0xa0a0a0),
+    text_dim: rgb(0x9a9a9a),
+    text_faint: rgb(0x8a8a8a),
+    accent: rgb(0xffffff),
+    accent_dim: rgb(0x2a2a2a),
+    row_selected: rgb(0xffffff),
+    on_selected: rgb(0x000000),
+    accent_text: rgb(0xffffff),
+    on_fill: rgb(0x000000),
+    ink: rgb(0x0e0e10),
+    pasteboard: rgb(0x141414),
+    stage_shadow: Color32::from_black_alpha(180),
+    span: Color32::from_rgb(0x22, 0xc7, 0xa9),
+    span_empty: rgb(0x2a2a2a),
+    row_active: rgb(0x141414),
+    tween: Color32::from_rgb(0x8a, 0x5c, 0xff),
+    tween_shape: Color32::from_rgb(0xf2, 0xa1, 0x3b),
+    tween_motion: Color32::from_rgb(0x4c, 0xb8, 0xf5),
+    waveform: Color32::from_rgb(0x7c, 0xc4, 0xff),
+    tween_line: rgb(0x0e0e10),
+    playhead: Color32::from_rgb(0xff, 0x4d, 0x3d),
+    // The marquee is drawn on the artwork. White would disappear on a white stage.
+    selection: rgb(0x111111),
+    danger: rgb(0xe04538),
+    error: Color32::from_rgb(0xff, 0x6e, 0x60),
+    ok: Color32::from_rgb(0x5f, 0xe0, 0x9a),
+    hint_unplaced: Color32::from_rgb(0xff, 0x5c, 0x8a),
+    hint_start: Color32::from_rgb(0xff, 0xc2, 0x3d),
+    hint_end: Color32::from_rgb(0x4f, 0xe3, 0xa8),
+    onion_past: Color32::from_rgb(0x4f, 0x8d, 0xff),
+    onion_future: Color32::from_rgb(0x4c, 0xd0, 0x7d),
+    slice_guide: Color32::from_rgb(0xd9, 0x3c, 0xc4),
+    hit_area: Color32::from_rgb(0x1f, 0xc8, 0x8c),
+    kind_graphic: Color32::from_rgb(0x22, 0xc7, 0xa9),
+    kind_movie_clip: Color32::from_rgb(0x5a, 0x8f, 0xff),
+    kind_button: Color32::from_rgb(0xff, 0xb5, 0x3d),
+    control_outline: false,
+    dark: true,
+    control_hairline: false,
+    cell_tint: Color32::from_rgba_premultiplied(6, 6, 6, 6),
+    stage_edge: Color32::from_black_alpha(200),
+    window_shadow: 80,
+    popup_shadow: 80,
+    radius_control: 0,
+    radius_menu: 0,
+    radius_window: 0,
+};
+
 /// Which palette the interface uses (Preferences › Appearance › Theme).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Palette {
@@ -328,12 +405,15 @@ pub enum Palette {
     HighContrast,
     /// Light (ADR 0077).
     Light,
+    /// Black chrome, white selected controls (ADR 0099).
+    Studio,
 }
 
 impl Palette {
     /// The palettes Preferences offers, in the order it lists them: name and a one-line note.
-    pub const ALL: [(Palette, &'static str, &'static str); 3] = [
+    pub const ALL: [(Palette, &'static str, &'static str); 4] = [
         (Palette::Graphite, tr_noop!("Dark (Graphite)"), tr_noop!("The standard dark look: graphite panels, colour where it means something.")),
+        (Palette::Studio, tr_noop!("Studio"), tr_noop!("Black and dark grey chrome. White is only the selected control, so the picture stays the bright thing.")),
         (Palette::Light, tr_noop!("Light"), tr_noop!("Light grey panels and dark text, for bright rooms and eyes that find dark interfaces hard.")),
         (Palette::HighContrast, tr_noop!("High contrast"), tr_noop!("White text on black, a yellow focus and selection colour, outlined controls.")),
     ];
@@ -343,6 +423,7 @@ impl Palette {
             Palette::Graphite => &GRAPHITE,
             Palette::HighContrast => &HIGH_CONTRAST,
             Palette::Light => &LIGHT,
+            Palette::Studio => &STUDIO,
         }
     }
 
@@ -351,6 +432,7 @@ impl Palette {
             Palette::Graphite => 0,
             Palette::HighContrast => 1,
             Palette::Light => 2,
+            Palette::Studio => 3,
         }
     }
 }
@@ -384,6 +466,7 @@ pub fn palette() -> Palette {
     match active() {
         1 => Palette::HighContrast,
         2 => Palette::Light,
+        3 => Palette::Studio,
         _ => Palette::Graphite,
     }
 }
@@ -542,6 +625,12 @@ pub fn install_fonts(ctx: &egui::Context, ui_font: Option<&UserFont>, data_font:
             defs.font_data.insert(name.to_owned(), Arc::new(FontData::from_static(b)));
             defs.families.entry(family).or_default().insert(0, name.to_owned());
         }
+    }
+    // Studio's chrome is a terminal: labels, menus and names use the monospace face too
+    // (ADR 0099). A system font chosen in Preferences is inserted after this and still wins.
+    if palette() == Palette::Studio {
+        let mono = if craft_fonts::MONO_FONT.is_some() { "craft-jetbrains-mono" } else { "Hack" };
+        defs.families.entry(FontFamily::Proportional).or_default().insert(0, mono.to_owned());
     }
     for (user, family) in [(ui_font, FontFamily::Proportional), (data_font, FontFamily::Monospace)] {
         if let Some((name, bytes, index)) = user {

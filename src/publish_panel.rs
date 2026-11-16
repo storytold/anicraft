@@ -313,10 +313,10 @@ fn settings(app: &mut App, ui: &mut egui::Ui) {
                     let sel = app.publish.selected == f;
                     let (r, resp) = ui.allocate_exact_size(egui::vec2(140.0, TARGET - 4.0), egui::Sense::click());
                     if sel || resp.hovered() {
-                        ui.painter().rect_filled(r, T.rc(), if sel { T.accent_dim } else { T.hover });
+                        ui.painter().rect_filled(r, T.rc(), if sel { T.row_selected } else { T.hover });
                     }
                     let font = crate::theme::font(Type::Body);
-                    ui.painter().text(egui::pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, label(f), font, crate::theme::color(Type::Body));
+                    ui.painter().text(egui::pos2(r.left() + 8.0, r.center().y), egui::Align2::LEFT_CENTER, label(f), font, if sel { T.on_selected } else { crate::theme::color(Type::Body) });
                     crate::a11y::control(ui, &resp, egui::WidgetType::SelectableLabel, label(f), Some(sel));
                     if resp.on_hover_text(about(f)).clicked() {
                         app.publish.selected = f;

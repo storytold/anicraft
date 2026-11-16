@@ -31,11 +31,13 @@ pub enum Panel {
     Swatches,
     /// The tools (ADR 0087): a slim bar on a side of the editor, or a panel like the others.
     Tools,
+    /// Frames down the page, one column per layer (ADR 0100). The same timeline as `Timeline`.
+    XSheet,
 }
 
 impl Panel {
     /// In the Window menu's order.
-    pub const ALL: [Panel; 13] = [Panel::Actions, Panel::Align, Panel::Colour, Panel::History, Panel::LayerDepth, Panel::Library, Panel::MotionEditor, Panel::MovieExplorer, Panel::Output, Panel::Properties, Panel::Swatches, Panel::Timeline, Panel::Tools];
+    pub const ALL: [Panel; 14] = [Panel::Actions, Panel::Align, Panel::Colour, Panel::History, Panel::LayerDepth, Panel::Library, Panel::MotionEditor, Panel::MovieExplorer, Panel::Output, Panel::Properties, Panel::Swatches, Panel::Timeline, Panel::Tools, Panel::XSheet];
 
     /// Its machine name, in the preferences (English, never translated).
     pub fn id(self) -> &'static str {
@@ -53,6 +55,7 @@ impl Panel {
             Panel::Output => "output",
             Panel::Swatches => "swatches",
             Panel::Tools => "tools",
+            Panel::XSheet => "xsheet",
         }
     }
 
@@ -76,6 +79,7 @@ impl Panel {
             Panel::Output => tr_noop!("Output"),
             Panel::Swatches => tr_noop!("Swatches"),
             Panel::Tools => tr_noop!("Tools"),
+            Panel::XSheet => tr_noop!("X-Sheet"),
         }
     }
 
@@ -90,6 +94,8 @@ impl Panel {
             Panel::LayerDepth => [440.0, 260.0],
             // Two columns of tools.
             Panel::Tools => [MIN_FLOAT, 520.0],
+            // A vertical sheet: narrow, and tall enough for a run of frames.
+            Panel::XSheet => [420.0, 640.0],
             _ => [320.0, 460.0],
         }
     }
@@ -634,6 +640,16 @@ impl Layout {
         }
     }
 
+    /// A panel this build added, and that this layout has never shown or closed, opens once
+    /// where a new one belongs. Closing it records a home, so it stays closed.
+    pub fn adopt_missing(&mut self) {
+        for p in Panel::ALL {
+            if self.place(p).is_none() && !self.homes.contains_key(&p) {
+                self.show(p);
+            }
+        }
+    }
+
     /// Holds a layout read from a file to what the editor can draw: each panel once, no empty
     /// groups or windows, finite sizes in range, the shown tab in range, a name for each window.
     pub fn tidy(&mut self) {
@@ -696,6 +712,8 @@ fn default_home(p: Panel) -> Home {
         // width for its tracks.
         Panel::LayerDepth => (Side::Right, Some(Panel::Library)),
         Panel::Tools => (Side::Left, None),
+        // Beside the Library, so a saved workspace that predates the sheet gains it there.
+        Panel::XSheet => (Side::Right, Some(Panel::Library)),
     };
     Home { side, near, floating: p == Panel::Actions, beside: None, bar: p == Panel::Tools }
 }
@@ -716,20 +734,20 @@ pub fn built_in(key: &str) -> Option<Layout> {
         // Today's layout: Properties, Align, Library with the Movie Explorer, History on the
         // right; the timeline and the Motion Editor below the stage.
         "essentials" => Layout {
-            right: zone(vec![Group::of(&[Panel::Properties], 6.4), Group::of(&[Panel::Align], 1.3), Group::of(&[Panel::Library, Panel::MovieExplorer], 3.2), Group::of(&[Panel::History], 1.4)], None),
+            right: zone(vec![Group::of(&[Panel::Properties], 6.4), Group::of(&[Panel::Align], 1.3), Group::of(&[Panel::Library, Panel::MovieExplorer, Panel::XSheet], 3.2), Group::of(&[Panel::History], 1.4)], None),
             bottom: zone(vec![Group::of(&[Panel::Timeline, Panel::MotionEditor], 1.0)], None),
             ..Layout::default()
         },
         // Animation first: a tall timeline with the Output and History beside it, a slim right
         // dock.
         "animator" => Layout {
-            right: zone(vec![Group::of(&[Panel::Properties, Panel::Align], 5.0), Group::of(&[Panel::Library, Panel::MovieExplorer], 4.0)], Some(280.0)),
+            right: zone(vec![Group::of(&[Panel::Properties, Panel::Align], 5.0), Group::of(&[Panel::Library, Panel::MovieExplorer, Panel::XSheet], 4.0)], Some(280.0)),
             bottom: zone(vec![Group::of(&[Panel::Timeline, Panel::MotionEditor], 3.0), Group::of(&[Panel::Output, Panel::History], 1.0)], Some(440.0)),
             ..Layout::default()
         },
         // Drawing first: a wide Properties with Colour, Swatches and Align, a short timeline.
         "designer" => Layout {
-            right: zone(vec![Group::of(&[Panel::Properties], 6.0), Group::of(&[Panel::Colour, Panel::Swatches, Panel::Align], 2.6), Group::of(&[Panel::Library, Panel::MovieExplorer, Panel::History], 3.6)], Some(400.0)),
+            right: zone(vec![Group::of(&[Panel::Properties], 6.0), Group::of(&[Panel::Colour, Panel::Swatches, Panel::Align], 2.6), Group::of(&[Panel::Library, Panel::MovieExplorer, Panel::XSheet, Panel::History], 3.6)], Some(400.0)),
             bottom: zone(vec![Group::of(&[Panel::Timeline, Panel::MotionEditor], 1.0)], Some(200.0)),
             ..Layout::default()
         },
@@ -778,6 +796,7 @@ impl Workspaces {
     pub fn layout(&self) -> Layout {
         let mut l = self.live.get(&self.current).cloned().or_else(|| self.base(&self.current)).or_else(|| built_in("essentials")).unwrap_or_default();
         l.tidy();
+        l.adopt_missing();
         l
     }
 
@@ -952,7 +971,7 @@ mod tests {
     fn essentials_is_todays_layout() {
         let l = essentials();
         let tabs = |z: &Zone| z.groups.iter().map(|g| g.tabs.clone()).collect::<Vec<_>>();
-        assert_eq!(tabs(&l.right), vec![vec![Panel::Properties], vec![Panel::Align], vec![Panel::Library, Panel::MovieExplorer], vec![Panel::History]]);
+        assert_eq!(tabs(&l.right), vec![vec![Panel::Properties], vec![Panel::Align], vec![Panel::Library, Panel::MovieExplorer, Panel::XSheet], vec![Panel::History]]);
         assert_eq!(tabs(&l.bottom), vec![vec![Panel::Timeline, Panel::MotionEditor]]);
         assert!(l.left.groups.is_empty() && l.top.groups.is_empty() && l.floating.is_empty());
         assert_eq!((l.right.size, l.bottom.size), (None, None), "sized from the window, as before");
@@ -960,6 +979,7 @@ mod tests {
             assert!(l.is_shown(p), "{p:?}");
         }
         assert!(!l.is_shown(Panel::MovieExplorer) && l.is_open(Panel::MovieExplorer));
+        assert!(!l.is_shown(Panel::XSheet) && l.is_open(Panel::XSheet));
     }
 
     #[test]
@@ -985,9 +1005,9 @@ mod tests {
     fn a_closed_panel_reopens_where_it_was() {
         let mut l = essentials();
         l.close(Panel::Library);
-        assert_eq!(l.right.groups[2].tabs, vec![Panel::MovieExplorer]);
+        assert_eq!(l.right.groups[2].tabs, vec![Panel::MovieExplorer, Panel::XSheet]);
         l.show(Panel::Library);
-        assert_eq!(l.right.groups[2].tabs, vec![Panel::MovieExplorer, Panel::Library], "back in its group");
+        assert_eq!(l.right.groups[2].tabs, vec![Panel::MovieExplorer, Panel::XSheet, Panel::Library], "back in its group");
         // The last panel of a group: the group goes, and comes back before its neighbour.
         l.close(Panel::Align);
         assert_eq!(l.right.groups.len(), 3);
@@ -999,6 +1019,21 @@ mod tests {
         assert!(matches!(l.place(Panel::Output), Some(Place::Docked { side: Side::Bottom, group: 0, .. })));
         l.show(Panel::Actions);
         assert!(l.is_floating(Panel::Actions), "Actions floats, as it always has");
+    }
+
+    #[test]
+    fn a_saved_layout_opens_the_xsheet_once() {
+        let mut l = essentials();
+        assert!(l.is_open(Panel::XSheet));
+        l.close(Panel::XSheet);
+        l.adopt_missing();
+        assert!(!l.is_open(Panel::XSheet), "a panel the user closed stays closed");
+        l.homes.remove(&Panel::XSheet);
+        l.adopt_missing();
+        assert!(l.is_shown(Panel::XSheet), "a layout saved before the panel existed opens it");
+        assert!(matches!(l.place(Panel::XSheet), Some(Place::Docked { side: Side::Right, .. })));
+        l.adopt_missing();
+        assert_eq!(l.order().iter().filter(|p| **p == Panel::XSheet).count(), 1);
     }
 
     #[test]

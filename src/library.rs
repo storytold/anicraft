@@ -359,10 +359,10 @@ fn drag_ghost(app: &App, ctx: &egui::Context) {
     let name = app.s.doc.item_name(*first).unwrap_or("").to_string();
     let label = if items.len() > 1 { trn!("{name} and {n} more", "{name} and {n} more", items.len() - 1, name = name) } else { name };
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("library_ghost")));
-    let galley = painter.layout_no_wrap(label, font(Type::Body), color(Type::Body));
+    let galley = painter.layout_no_wrap(label, font(Type::Body), T.on_selected);
     let at = p + vec2(14.0, -galley.size().y - 8.0);
-    painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(4.0), T.rc(), T.accent_dim);
-    painter.galley(at, galley, color(Type::Body));
+    painter.rect_filled(Rect::from_min_size(at, galley.size()).expand(4.0), T.rc(), T.row_selected);
+    painter.galley(at, galley, T.on_selected);
 }
 
 /// A new folder in the selected row's folder (or the selected folder), opened, selected and
@@ -507,7 +507,7 @@ fn list_ui(app: &mut App, ui: &mut egui::Ui, list: &[Row], unused: &HashSet<Libr
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), TARGET), Sense::click_and_drag());
             let p = ui.painter();
             if selected || resp.hovered() {
-                p.rect_filled(r, T.rc(), if selected { T.accent_dim } else { T.hover });
+                p.rect_filled(r, T.rc(), if selected { T.row_selected } else { T.hover });
             }
             if selected {
                 p.rect_filled(Rect::from_min_size(r.left_top(), vec2(3.0, r.height())), 0.0, T.accent);
@@ -517,8 +517,8 @@ fn list_ui(app: &mut App, ui: &mut egui::Ui, list: &[Row], unused: &HashSet<Libr
             let icon = Rect::from_center_size(pos2(r.left() + indent + 22.0, r.center().y), vec2(14.0, 14.0));
             match row.entry {
                 LibraryEntry::Folder(_) => {
-                    icons::paint(p, chevron, if row.open { Icon::ChevronDown } else { Icon::ChevronRight }, T.icon);
-                    icons::paint(p, icon.expand(1.0), if row.open { Icon::FolderOpen } else { Icon::Folder }, color(Type::Body));
+                    icons::paint(p, chevron, if row.open { Icon::ChevronDown } else { Icon::ChevronRight }, if selected { T.on_selected } else { T.icon });
+                    icons::paint(p, icon.expand(1.0), if row.open { Icon::FolderOpen } else { Icon::Folder }, if selected { T.on_selected } else { color(Type::Body) });
                 }
                 LibraryEntry::Item(LibraryItem::Symbol(id)) => {
                     let kind_color = match app.s.doc.symbol(id).map(|s| s.kind) {
@@ -529,14 +529,14 @@ fn list_ui(app: &mut App, ui: &mut egui::Ui, list: &[Row], unused: &HashSet<Libr
                     p.rect_stroke(icon, 2.0, Stroke::new(1.5, kind_color), StrokeKind::Inside);
                     p.circle_filled(icon.center(), 2.5, kind_color);
                 }
-                LibraryEntry::Item(LibraryItem::Sound(_)) => icons::paint(p, icon.expand(1.0), Icon::Sound, color(Type::Body)),
-                LibraryEntry::Item(LibraryItem::Bitmap(_)) => icons::paint(p, icon.expand(1.0), Icon::Image, color(Type::Body)),
+                LibraryEntry::Item(LibraryItem::Sound(_)) => icons::paint(p, icon.expand(1.0), Icon::Sound, if selected { T.on_selected } else { color(Type::Body) }),
+                LibraryEntry::Item(LibraryItem::Bitmap(_)) => icons::paint(p, icon.expand(1.0), Icon::Image, if selected { T.on_selected } else { color(Type::Body) }),
             }
             let name_rect = Rect::from_min_max(pos2(icon.right() + 8.0, r.top()), pos2(r.right() - 40.0, r.bottom()));
             let uses_text = row.uses.map(|n| n.to_string()).unwrap_or_default();
             let is_unused = matches!(row.entry, LibraryEntry::Item(i) if unused.contains(&i));
             if let Some(n) = row.uses {
-                p.text(r.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, &uses_text, font(Type::Data), if n == 0 { T.text_faint } else { color(Type::Caption) });
+                p.text(r.right_center() - vec2(8.0, 0.0), Align2::RIGHT_CENTER, &uses_text, font(Type::Data), if selected { T.on_selected } else if n == 0 { T.text_faint } else { color(Type::Caption) });
             }
             // Renaming: a field over the name; Enter or clicking away keeps it, Esc doesn't.
             let editing = app.library.renaming.as_ref().is_some_and(|(e, _, _)| *e == row.entry);
@@ -563,7 +563,7 @@ fn list_ui(app: &mut App, ui: &mut egui::Ui, list: &[Row], unused: &HashSet<Libr
                     }
                 }
             } else {
-                let c = if is_unused { T.text_dim } else { color(Type::Body) };
+                let c = if selected { T.on_selected } else if is_unused { T.text_dim } else { color(Type::Body) };
                 let galley = ui.painter().layout_no_wrap(row.name.clone(), font(Type::Body), c);
                 let clip = ui.painter().with_clip_rect(name_rect.intersect(ui.clip_rect()));
                 clip.galley(pos2(name_rect.left(), r.center().y - galley.size().y / 2.0), galley, c);

@@ -24,18 +24,23 @@ const KNOB_GRAB: f32 = 12.0;
 /// How long after the last wheel turn a zoom burst ends (seconds).
 const WHEEL_BURST: f64 = 0.45;
 
-/// The stage on screen: `screen = origin + stage · zoom`; `preview` when it shows the movie.
+/// The stage on screen: `screen = origin + stage · zoom`, then the view's turn (ADR 0098).
+/// `preview` when it shows the movie. A rotation of 0 leaves the upright mapping.
 #[derive(Clone, Copy)]
 pub struct Geo {
     pub origin: Pos2,
     pub zoom: f32,
     pub stage_rect: Rect,
     pub preview: bool,
+    pub rotation: f32,
+    pub pivot: Pos2,
+    pub pan: egui::Vec2,
 }
 
 impl Geo {
     fn to_screen(self, p: Vec2) -> Pos2 {
-        pos2(self.origin.x + p.x * self.zoom, self.origin.y + p.y * self.zoom)
+        let straight = pos2(self.origin.x + p.x * self.zoom, self.origin.y + p.y * self.zoom);
+        crate::viewturn::place(straight, self.pivot, self.pan, self.rotation)
     }
 }
 
@@ -61,8 +66,17 @@ pub fn on_tool_change(app: &mut App) {
 /// The camera's centre, rotate handle and the middle of the frame's top edge, on screen.
 fn handles(cam: &Camera, app: &App, g: &Geo) -> (Pos2, Pos2, Pos2) {
     if g.preview {
-        let top = g.stage_rect.center_top();
-        return (g.stage_rect.center(), top - vec2(0.0, KNOB_OFFSET), top);
+        if g.rotation == 0.0 {
+            let top = g.stage_rect.center_top();
+            return (g.stage_rect.center(), top - vec2(0.0, KNOB_OFFSET), top);
+        }
+        let r = g.stage_rect;
+        let q = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|p| crate::viewturn::place(p, g.pivot, g.pan, g.rotation));
+        let centre = q[0] + (q[2] - q[0]) * 0.5;
+        let top = q[0] + (q[1] - q[0]) * 0.5;
+        let up = top - centre;
+        let dir = if up.length() > 1e-3 { up / up.length() } else { vec2(0.0, -1.0) };
+        return (centre, top + dir * KNOB_OFFSET, top);
     }
     let f = cam.frame(&app.s.doc.stage);
     let centre = g.to_screen(cam.center);
@@ -97,7 +111,12 @@ pub fn drag_to(app: &mut App, g: &Geo, drag: &mut Drag, cur: Pos2) {
     let Some(cam) = camera(app) else { return };
     match drag {
         Drag::CameraPan { last } => {
-            let d = (cur - *last) / g.zoom.max(1e-3);
+            let mut d = (cur - *last) / g.zoom.max(1e-3);
+            // A turned view: the hand still moves the frame in screen pixels, which is a
+            // stage step along the turned axes.
+            if g.rotation != 0.0 {
+                d = crate::viewturn::spin_vec(d, -g.rotation);
+            }
             if d.length_sq() <= 0.0 {
                 return;
             }

@@ -132,6 +132,8 @@ lists them as **fixed** and won't assign them to anything else:
 | **Enter** | play and stop |
 | **Esc** | cancelling |
 | **Space** | panning with any tool (hold it and drag) |
+| **Shift+Space** | turning the view about its middle (hold it and drag) |
+| **Ctrl+Space** | zooming the view (hold it and drag; up in, down out) |
 | **Tab** | moving between fields |
 
 ## The command palette

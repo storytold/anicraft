@@ -28,7 +28,7 @@ Animator and Designer, plus your own saved workspaces and Reset.
 | Output | The Output panel inside Test Movie, and **Window › Output**, which keeps the last run's lines. |
 | Align | The Align panel on the right, and **Modify › Align**. |
 | History | The History panel on the right. |
-| Color and Swatches | **Window › Colour** (stroke and fill, Swap, Black and White). Click the Fill or Stroke squares in the Tools panel, the Colour panel, or any colour swatch in Properties: web-safe swatches, a mixer and a hex field. The fill's picker also sets its type (None, Solid, Linear, Radial, Bitmap) and a gradient's stops, overflow and Linear RGB, like the Color panel. **Window › Swatches** keeps the document's colours and gradients (click applies to the active stroke or fill, drag to reorder, import and export swatch files and GIMP `.gpl` palettes; not Adobe `.aco`/`.ase`/`.clr`). |
+| Color and Swatches | **Window › Colour** (stroke and fill, Swap, Black and White). Click the Fill or Stroke squares in the Tools panel, the Colour panel, or any colour swatch in Properties: web-safe swatches, a mixer, a hex field and an alpha. A solid fill's alpha is its own (0% is a clear fill, which is not the same as no fill). The fill's picker also sets its type (None, Solid, Linear, Radial, Bitmap) and a gradient's stops, each with its own alpha, overflow and Linear RGB, like the Color panel. **Window › Swatches** keeps the document's colours and gradients (click applies to the active stroke or fill, drag to reorder, import and export swatch files and GIMP `.gpl` palettes; not Adobe `.aco`/`.ase`/`.clr`). |
 | Transform and Info | Position, scale and rotation rows in Properties, and the Free Transform tool. |
 | Scene | The scene menu at the top left of the stage, **Insert › Scene** and **Modify › Scene**. |
 | Find and Replace | **Edit › Find and Replace** (**Ctrl+F**). |
@@ -63,7 +63,7 @@ Each tool has the key you already know.
 | Ink Bottle | **S** | |
 | Eyedropper | **I** | Picks fills, gradients, bitmaps and line styles. |
 | Camera | **C** | Adds a camera layer. |
-| Hand | **H** | Hold **Space** with any tool, too. |
+| Hand | **H** | Hold **Space** with any tool, too. **Shift+Space** and drag turns the view. **Ctrl+Space** and drag zooms. |
 | Zoom | **Z** | |
 | Object Drawing | **J** | Toggles between merge drawing and drawing objects. |
 

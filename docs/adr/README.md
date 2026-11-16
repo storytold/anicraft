@@ -23,3 +23,11 @@ has to renumber because another PR merged first.
 | Number | Pull request | Topic |
 |---|---|---|
 | 0037 | #38 (outside contribution) | Interface languages |
+| 0096 | #336 | Raw brush, pen pressure |
+| 0097 | #354 | Fill and stroke alpha |
+| 0098 | feat/studio-chrome (local) | Canvas turn with Shift+Space, zoom drag with Ctrl+Space |
+| 0099 | feat/studio-chrome (local) | Studio chrome and 2kool account files |
+| 0100 | feat/studio-chrome (local) | Vertical X-sheet on the same timeline |
+| 0101 | feat/studio-chrome (local) | Blender-style grab, rotate and scale |
+| 0102 | feat/studio-chrome (local) | Pen pressure read in one place |
+| 0103 | feat/studio-chrome (local) | Stroke fill alpha on the colour picker |

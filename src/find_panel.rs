@@ -474,7 +474,7 @@ fn results_list(app: &mut App, ui: &mut egui::Ui, list: &[Hit]) {
             let p = ui.painter();
             let on = current == Some(i);
             if on || resp.hovered() {
-                p.rect_filled(r, T.rc(), if on { T.accent_dim } else { T.hover });
+                p.rect_filled(r, T.rc(), if on { T.row_selected } else { T.hover });
             }
             if on {
                 p.rect_filled(Rect::from_min_size(r.left_top(), vec2(3.0, r.height())), 0.0, T.accent);
@@ -489,10 +489,11 @@ fn results_list(app: &mut App, ui: &mut egui::Ui, list: &[Hit]) {
             let half = r.width() * 0.5;
             let left = Rect::from_min_max(pos2(r.left() + 8.0, r.top()), pos2(r.left() + half, r.bottom()));
             let right = Rect::from_min_max(pos2(r.left() + half + 6.0, r.top()), pos2(r.right() - 6.0, r.bottom()));
-            let g = p.layout_no_wrap(what.clone(), font(Type::Body), color(Type::Body));
-            p.with_clip_rect(left.intersect(ui.clip_rect())).galley(pos2(left.left(), r.center().y - g.rect.height() / 2.0), g, color(Type::Body));
+            let ink = if on { T.on_selected } else { color(Type::Body) };
+            let g = p.layout_no_wrap(what.clone(), font(Type::Body), ink);
+            p.with_clip_rect(left.intersect(ui.clip_rect())).galley(pos2(left.left(), r.center().y - g.rect.height() / 2.0), g, ink);
             let label = format!("{field} · {place}");
-            p.with_clip_rect(right.intersect(ui.clip_rect())).text(pos2(right.left(), r.center().y), Align2::LEFT_CENTER, &label, font(Type::Caption), color(Type::Caption));
+            p.with_clip_rect(right.intersect(ui.clip_rect())).text(pos2(right.left(), r.center().y), Align2::LEFT_CENTER, &label, font(Type::Caption), if on { T.on_selected } else { color(Type::Caption) });
             let name = tr!("{what}, {field}, {place}", what = what, field = field, place = place);
             a11y::control(ui, &resp, WidgetType::SelectableLabel, &name, Some(on));
             if resp.on_hover_text(&name).clicked() {

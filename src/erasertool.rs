@@ -40,6 +40,7 @@ impl EraserOptions {
 /// Starts an eraser stroke at stage point `p` (the eraser ignores pen pressure).
 pub fn start(app: &mut App, p: Vec2) -> Drag {
     app.pen_pressure = None;
+    app.brush_from_pen = false;
     app.brush_samples = vec![(p, None)];
     Drag::Eraser
 }
@@ -109,7 +110,7 @@ pub fn draw_overlay(app: &App, painter: &egui::Painter, xf: Xf, hover: Option<Po
     if let Some(h) = hover
         && !app.eraser.faucet
     {
-        draw_tip(painter, xf, &tip, xf.to_stage(h));
+        draw_tip(painter, xf, &tip, xf.to_stage(h), 1.0);
     }
 }
 
