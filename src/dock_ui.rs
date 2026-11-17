@@ -74,6 +74,8 @@ pub enum Drag {
 /// targets), the panel open over the stage from an icon, and floating windows as they are now.
 #[derive(Default)]
 pub struct DockView {
+    /// Preserve the stage's screen position while a dock edge is being resized.
+    pub(crate) resizing: bool,
     pub drag: Option<Drag>,
     /// Bumped when a workspace is switched or reset, so the docks take its sizes.
     pub epoch: u64,
@@ -336,6 +338,7 @@ pub fn remember(app: &mut App) {
 /// The tools, the docks and the stage, and a dragged tab's drop target over them.
 pub fn workspace(app: &mut App, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
+    let mut resizing = false;
     // Docks start at their usual size, but never take most of a small window or a large
     // interface scale (200 % on a laptop leaves under 1000 × 600 points), and the stage always
     // keeps room when the scale goes up later.
@@ -371,6 +374,7 @@ pub fn workspace(app: &mut App, ui: &mut egui::Ui) {
         let shown = panel.resizable(true).default_size(size).size_range(min..=max).frame(egui::Frame::NONE.fill(T.panel)).show(ui, |ui| zone_ui(app, ui, side, &zone.groups, &layout, &mut acts));
         let resize = id.with("__resize");
         if ctx.is_being_dragged(resize) {
+            resizing = true;
             let r = shown.response.rect;
             app.dock.zone_mut(side).size = Some((if side.stacks() { r.width() } else { r.height() }).round());
             app.dock_changed();
@@ -383,7 +387,10 @@ pub fn workspace(app: &mut App, ui: &mut egui::Ui) {
         };
         a11y::name_resize(&ctx, resize, name);
     }
+    // Include the release frame: the panel may apply its final size on that frame.
+    app.dock_view.resizing |= resizing;
     let stage = egui::CentralPanel::default().frame(egui::Frame::NONE.fill(T.pasteboard)).show(ui, |ui| crate::stage::show(app, ui));
+    app.dock_view.resizing = resizing;
     app.dock_view.stage = Some(stage.response.rect);
     app.dock_view.origin_from(&ctx);
     flyout(app, &ctx, (dock_w, dock_h), &layout, &mut acts);
@@ -1408,6 +1415,49 @@ mod tests {
 
     fn drawn(app: &App, over: Over) -> Option<Drawn> {
         app.dock_view.drawn.iter().find(|d| d.over == over).copied()
+    }
+
+    #[test]
+    fn resizing_the_timeline_preserves_the_stage_view_and_fit_still_works() {
+        for fitted in [true, false] {
+            let (mut app, ctx) = app();
+            settle(&ctx, &mut app);
+            if !fitted {
+                app.view.zoom = 0.75;
+                app.view.pan = vec2(73.0, -29.0);
+                app.view.fitted = None;
+                settle(&ctx, &mut app);
+            }
+            let origin = |app: &App| {
+                let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
+                app.stage_cache.canvas.center() + app.view.pan - size * app.view.zoom * 0.5
+            };
+            let before = origin(&app);
+            let zoom = app.view.zoom;
+            let canvas_height = app.stage_cache.canvas.height();
+            let header = drawn(&app, Over::Group(Side::Bottom)).expect("Timeline dock drawn").header;
+            let edge = header.center_top();
+            frame(&ctx, &mut app, pointer(edge, None));
+            frame(&ctx, &mut app, pointer(edge, Some(true)));
+            for i in 1..=8 {
+                frame(&ctx, &mut app, pointer(edge - vec2(0.0, i as f32 * 12.0), None));
+                assert!((origin(&app) - before).length() < 1.0, "stage moved during resize (fitted={fitted})");
+                assert_eq!(app.view.zoom, zoom, "resize changed the zoom");
+            }
+            frame(&ctx, &mut app, pointer(edge - vec2(0.0, 96.0), Some(false)));
+            settle(&ctx, &mut app);
+            assert!(app.stage_cache.canvas.height() < canvas_height - 40.0, "the test must actually resize the Timeline");
+            assert!((origin(&app) - before).length() < 1.0, "stage moved after release");
+            assert_eq!(app.view.zoom, zoom);
+
+            app.view.fit = true;
+            settle(&ctx, &mut app);
+            let canvas = app.stage_cache.canvas;
+            let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
+            assert_eq!(app.view.pan, egui::Vec2::ZERO);
+            assert!((origin(&app) + size * app.view.zoom * 0.5 - canvas.center()).length() < 1.0);
+            assert!(size.x * app.view.zoom <= canvas.width() && size.y * app.view.zoom <= canvas.height());
+        }
     }
 
     #[test]
