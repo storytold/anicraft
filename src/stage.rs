@@ -214,6 +214,14 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::camera_tool::on_tool_change(app);
     crate::shape_envelope::settle(app);
     crate::camera_tool::tick(app, ui.ctx(), now);
+    let previous_canvas = app.stage_cache.canvas;
+    if app.dock_view.resizing && previous_canvas != canvas {
+        // The dock changes the viewport, not the artist's view of the drawing.
+        // Cancel the new centre's movement and leave automatic fitting until the
+        // artist explicitly asks for Fit in Window again.
+        app.view.pan += previous_canvas.center() - canvas.center();
+        app.view.fitted = None;
+    }
     app.stage_cache.canvas = canvas;
     let resp = ui.allocate_rect(canvas, Sense::click_and_drag());
     // The drawing surface: Ctrl+F6 lands here, and screen readers hear the tool in hand.
