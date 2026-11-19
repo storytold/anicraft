@@ -106,7 +106,9 @@ pub fn to_svg(dl: &DisplayList, stage: &Stage) -> String {
         let clip = item.clip.filter(|&c| (c as usize) < dl.clip_parents.len()).map(|c| clip_attrs(dl, c)).unwrap_or_default();
         // Characters with a link (ADR 0085) are a link in the SVG.
         if let Some(url) = &link {
-            let _ = write!(body, "<a href=\"{}\">", attr_escape(url));
+            let mut a = craft_svg::write::SvgWriter::fragment();
+            a.tag("a").attr("href", url).open();
+            body.push_str(a.as_str());
         }
         draw(item, &d, &clip, &mut body, &mut defs, &mut grad, &mut images);
         if link.is_some() {
@@ -117,19 +119,27 @@ pub fn to_svg(dl: &DisplayList, stage: &Stage) -> String {
         body.push_str("</g>");
     }
 
-    let mut out = String::with_capacity(defs.len() + body.len() + 256);
-    let _ = write!(out, "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{w}\" height=\"{h}\" viewBox=\"0 0 {w} {h}\">");
-    let _ = write!(out, "<!-- AniCraft {} -->", env!("CARGO_PKG_VERSION"));
+    let mut out = craft_svg::write::SvgWriter::fragment();
+    out.root().attr("width", w).attr("height", h).attr("viewBox", format_args!("0 0 {w} {h}")).open();
+    out.raw(&format!("<!-- AniCraft {} -->", env!("CARGO_PKG_VERSION")));
     if !defs.is_empty() {
-        let _ = write!(out, "<defs>{defs}</defs>");
+        out.tag("defs").open();
+        out.raw(&defs);
+        out.close();
     }
     let bg = stage.background.sanitized();
     if bg.a > 0.0 {
-        let _ = write!(out, "<rect width=\"{w}\" height=\"{h}\"{}/>", color_attrs("fill", bg));
+        let mut rect = out.tag("rect").attr("width", w).attr("height", h).attr("fill", hex(bg));
+        if bg.a < 1.0 {
+            rect = rect.attr("fill-opacity", num(bg.a));
+        }
+        rect.empty();
     }
-    out.push_str(&body);
-    out.push_str("</svg>\n");
-    out
+    out.raw(&body);
+    out.close();
+    let mut s = out.finish();
+    s.push('\n');
+    s
 }
 
 /// What clips something drawn in clip `c`: `clip-path` for a coverage clip (its coverage
@@ -767,21 +777,4 @@ mod group_tests {
         let order: Vec<&str> = svg.split('<').filter_map(|t| t.split([' ', '>']).next()).filter(|t| ["path", "g", "/g"].contains(t)).collect();
         assert_eq!(order, ["path", "g", "path", "g", "path", "/g", "path", "/g", "path"], "{svg}");
     }
-}
-
-/// `s` safe inside a double-quoted XML attribute.
-fn attr_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            c if c.is_control() => {}
-            c => out.push(c),
-        }
-    }
-    out
 }

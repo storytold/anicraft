@@ -5,7 +5,7 @@ use anicraft_doc::{Document, path_table};
 use anicraft_geom::Path;
 use craft_anicraft_format::PayloadDecoder;
 pub use craft_anicraft_format::{FORMAT_NAME, MAX_FILE_BYTES};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Arc;
 
 /// The newest envelope version this build reads (v1 inline paths; v2 shared path table; v3
@@ -22,26 +22,6 @@ pub const MIXED_ARMATURES_VERSION: u32 = 4;
 /// with a message naming the version instead of opening with parts missing.
 pub fn version_for(doc: &Document) -> u32 {
     if doc.has_mixed_armatures() { MIXED_ARMATURES_VERSION } else { BASE_VERSION }
-}
-
-/// The envelope for versions past the shared crate's own: the same fields in the same order,
-/// and the same compact-or-pretty rule, with the version the document needs.
-#[derive(Serialize)]
-struct EnvelopeOut<'a> {
-    format: &'a str,
-    version: u32,
-    generator: &'a str,
-    paths: &'a [Arc<Path>],
-    document: &'a Document,
-}
-
-fn write_as(version: u32, generator: &str, paths: &[Arc<Path>], doc: &Document) -> Result<String, serde_json::Error> {
-    if version <= BASE_VERSION {
-        return craft_anicraft_format::write(generator, paths, doc);
-    }
-    let envelope = EnvelopeOut { format: FORMAT_NAME, version, generator, paths, document: doc };
-    let compact = serde_json::to_string(&envelope)?;
-    if compact.len() < craft_anicraft_format::PRETTY_LIMIT { serde_json::to_string_pretty(&envelope) } else { Ok(compact) }
 }
 
 /// AniCraft document deserialization uses its own path-table scope while the shared format crate
@@ -64,7 +44,7 @@ pub fn to_json(doc: &Document) -> Result<String, EngineError> {
     let paths = path_table::build_table(doc);
     let generator = format!("AniCraft {}", env!("CARGO_PKG_VERSION"));
     let version = version_for(doc);
-    path_table::write_with_paths(&paths, || write_as(version, &generator, &paths, doc)).map_err(|e| EngineError::Format(e.to_string()))
+    path_table::write_with_paths(&paths, || craft_anicraft_format::write_version(version, &generator, &paths, doc)).map_err(|e| EngineError::Format(e.to_string()))
 }
 
 pub fn from_json(text: &str) -> Result<Document, EngineError> {

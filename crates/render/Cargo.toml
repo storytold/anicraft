@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 craft-lottie.workspace = true
+craft-svg.workspace = true
 craft-html.workspace = true
 anicraft-geom.workspace = true
 anicraft-doc.workspace = true

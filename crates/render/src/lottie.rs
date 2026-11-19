@@ -776,20 +776,22 @@ impl Writer<'_> {
 
 fn write_keys(keys: &[Kf], enc: Enc) -> Value {
     match keys {
-        [] => json!({"a": 0, "k": 0}),
-        [k] => json!({"a": 0, "k": enc.value(&k.s)}),
-        _ => json!({"a": 1, "k": keys.iter().map(|k| {
-            let mut o = json!({"t": num(k.t), "s": enc.key(&k.s)});
-            match k.out {
-                Out::Hold => o["h"] = json!(1),
-                Out::Ease(out, inn) => {
-                    o["o"] = json!({"x": out.0, "y": out.1});
-                    o["i"] = json!({"x": inn.0, "y": inn.1});
-                }
-                Out::End => {}
-            }
-            o
-        }).collect::<Vec<_>>()}),
+        [] => craft_lottie::write_prop(json!(0), &[], None),
+        [k] => craft_lottie::write_prop(enc.value(&k.s), &[], None),
+        _ => {
+            let out: Vec<craft_lottie::KeyOut> = keys
+                .iter()
+                .map(|k| {
+                    let (hold, ease) = match k.out {
+                        Out::Hold => (true, Vec::new()),
+                        Out::Ease(out, inn) => (false, vec![craft_lottie::Tangents { ox: out.0, oy: out.1, ix: inn.0, iy: inn.1 }]),
+                        Out::End => (false, Vec::new()),
+                    };
+                    craft_lottie::KeyOut { t: k.t, s: enc.key(&k.s), hold, ease, spatial: None }
+                })
+                .collect();
+            craft_lottie::write_prop_scalar(Value::Null, &out, None, num)
+        }
     }
 }
 
