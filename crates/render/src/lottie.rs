@@ -1295,10 +1295,8 @@ mod tests {
                 let out = if k["h"] == 1 {
                     Out::Hold
                 } else if k.get("o").is_some() {
-                    Out::Ease(
-                        (k["o"]["x"].as_f64().unwrap(), k["o"]["y"].as_f64().unwrap()),
-                        (k["i"]["x"].as_f64().unwrap(), k["i"]["y"].as_f64().unwrap()),
-                    )
+                    let first = |v: &Value| v.as_f64().or_else(|| v.as_array()?.first()?.as_f64()).unwrap();
+                    Out::Ease((first(&k["o"]["x"]), first(&k["o"]["y"])), (first(&k["i"]["x"]), first(&k["i"]["y"])))
                 } else {
                     Out::End
                 };
