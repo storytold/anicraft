@@ -149,7 +149,14 @@ fn use_references_and_reported_leftovers() {
     assert_eq!(first.transform.apply(Vec2::new(0.0, 0.0)), Vec2::new(10.0, 20.0));
     assert_eq!(solid(first), Rgba::hex(0x123456));
     assert_eq!(i.shapes.len(), 4, "the dot, the symbol's two rects and the plain rect");
-    for k in ["text (no fonts on this computer)", "images", "references to missing elements", "filters", "references to missing clip paths (drawn unclipped)", "style sheets (inline styles are read)"] {
+    for k in [
+        "text (no fonts on this computer)",
+        "images",
+        "references to missing elements",
+        "filters",
+        "references to missing clip paths (drawn unclipped)",
+        "style sheets (inline styles are read)",
+    ] {
         assert_eq!(i.report.skipped.get(k), Some(&1), "{k}: {:?}", i.report);
     }
     assert!(i.report.summary().starts_with("Imported. Not yet supported: "));
@@ -169,7 +176,15 @@ fn stroke_caps_joins_and_dashes() {
       <line id="plain" x1="0" y1="0" x2="100" y2="0" stroke="#000"/>
     </svg>"##);
     let st = |name: &str| i.shapes.iter().find(|s| s.name == name).and_then(|s| s.shape.stroke.clone()).map(|s| s.style).unwrap();
-    assert_eq!(st("inherits"), StrokeStyle { cap: Cap::Round, join: Join::Bevel, miter_limit: 4.0, dash: Some(Dash::Dashed { lengths: vec![6.0, 3.0].into(), offset: 2.0 }) });
+    assert_eq!(
+        st("inherits"),
+        StrokeStyle {
+            cap: Cap::Round,
+            join: Join::Bevel,
+            miter_limit: 4.0,
+            dash: Some(Dash::Dashed { lengths: vec![6.0, 3.0].into(), offset: 2.0 })
+        }
+    );
     // style= wins; an odd list repeats; units convert; the offset is inherited.
     let own = st("own");
     assert_eq!((own.cap, own.join, own.miter_limit), (Cap::Square, Join::Miter, 8.0));
@@ -264,7 +279,10 @@ fn hostile_markup_is_refused_before_parsing() {
     assert!(matches!(import_with_fonts(deep.as_bytes(), &fonts), Err(SvgError::Preflight(craft_svg::preflight::Error::TooDeep(_)))));
     // An unpacked SVGZ past the size limit.
     let huge = craft_svg::svgz::compress(&vec![b' '; (64 << 20) + 1]);
-    assert!(matches!(import_with_fonts(&huge, &fonts), Err(SvgError::Preflight(craft_svg::preflight::Error::Text(craft_svg::svgz::Error::TooLarge(_))))));
+    assert!(matches!(
+        import_with_fonts(&huge, &fonts),
+        Err(SvgError::Preflight(craft_svg::preflight::Error::Text(craft_svg::svgz::Error::TooLarge(_))))
+    ));
 }
 
 #[test]
@@ -272,4 +290,68 @@ fn colour_rejects_multiple_leading_hashes() {
     assert!(color("#abc").is_some());
     assert!(color("##abc").is_none());
     assert!(color("##aabbcc").is_none());
+}
+
+#[test]
+fn quadratic_qt_gradient_parity_and_cubic_userspace_unchanged() {
+    let i = imp(r##"<svg width="100" height="100">
+      <defs>
+        <linearGradient id="obb" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#000000"/>
+          <stop offset="1" stop-color="#ffffff"/>
+        </linearGradient>
+        <linearGradient id="user" gradientUnits="userSpaceOnUse" x1="0" y1="2" x2="0" y2="18">
+          <stop offset="0" stop-color="#000000"/>
+          <stop offset="1" stop-color="#ffffff"/>
+        </linearGradient>
+      </defs>
+      <path d="M0 10 Q5 20 10 10 T20 10 Z" fill="url(#obb)"/>
+      <path d="M0 10 C0 20 10 20 10 10 S20 0 20 10 Z" fill="url(#obb)"/>
+      <path d="M0 10 Q5 20 10 10 T20 10 Z" fill="url(#user)"/>
+    </svg>"##);
+    assert_eq!(i.shapes.len(), 3);
+
+    // 1. Q/T path with objectBoundingBox gradient preserves legacy 0..20 y span and QuadTo anchors.
+    match &i.shapes[0].shape.fill {
+        Some(Paint::Linear { start, end, stops, .. }) => {
+            assert_eq!((*start, *end), (Vec2::new(0.0, 0.0), Vec2::new(0.0, 20.0)));
+            assert_eq!(stops[0].color, Rgba::BLACK);
+            assert_eq!(stops[1].color, Rgba::WHITE);
+        }
+        other => panic!("expected linear gradient for Q/T objectBoundingBox, got {other:?}"),
+    }
+    assert_eq!(
+        i.shapes[0].shape.path.cmds,
+        vec![
+            anicraft_geom::PathCmd::MoveTo(Vec2::new(0.0, 10.0)),
+            anicraft_geom::PathCmd::QuadTo(Vec2::new(5.0, 20.0), Vec2::new(10.0, 10.0)),
+            anicraft_geom::PathCmd::QuadTo(Vec2::new(15.0, 0.0), Vec2::new(20.0, 10.0)),
+            anicraft_geom::PathCmd::Close,
+        ]
+    );
+
+    // 2. Genuine C/S cubics keep CubicTo anchors and objectBoundingBox bounds unchanged.
+    match &i.shapes[1].shape.fill {
+        Some(Paint::Linear { start, end, .. }) => {
+            assert_eq!((*start, *end), (Vec2::new(0.0, 0.0), Vec2::new(0.0, 20.0)));
+        }
+        other => panic!("expected linear gradient for C/S objectBoundingBox, got {other:?}"),
+    }
+    assert_eq!(
+        i.shapes[1].shape.path.cmds,
+        vec![
+            anicraft_geom::PathCmd::MoveTo(Vec2::new(0.0, 10.0)),
+            anicraft_geom::PathCmd::CubicTo(Vec2::new(0.0, 20.0), Vec2::new(10.0, 20.0), Vec2::new(10.0, 10.0)),
+            anicraft_geom::PathCmd::CubicTo(Vec2::new(10.0, 0.0), Vec2::new(20.0, 0.0), Vec2::new(20.0, 10.0)),
+            anicraft_geom::PathCmd::Close,
+        ]
+    );
+
+    // 3. userSpaceOnUse gradient on Q/T path keeps user-space coordinates unchanged.
+    match &i.shapes[2].shape.fill {
+        Some(Paint::Linear { start, end, .. }) => {
+            assert_eq!((*start, *end), (Vec2::new(0.0, 2.0), Vec2::new(0.0, 18.0)));
+        }
+        other => panic!("expected linear gradient for Q/T userSpaceOnUse, got {other:?}"),
+    }
 }
