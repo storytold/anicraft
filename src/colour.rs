@@ -340,13 +340,26 @@ pub(crate) fn picker(ui: &mut egui::Ui, popup: Id, c: &mut [u8; 4], alpha: bool,
     changed
 }
 
+/// The hex field's text box in picker `popup`.
+fn hex_edit_id(popup: Id) -> Id {
+    popup.with("hex_edit")
+}
+
 /// The hex field: shows the colour, and takes a typed one as soon as it reads as a colour.
 fn hex_field(ui: &mut egui::Ui, popup: Id, c: &[u8; 4], alpha: bool) -> Option<[u8; 4]> {
     let buf_id = popup.with("hex");
     let current = to_hex(*c, alpha);
     let mut s: String = ui.data(|d| d.get_temp(buf_id)).unwrap_or_else(|| current.clone());
-    let r = with_type(ui, Type::Data, |ui| ui.add(egui::TextEdit::singleline(&mut s).desired_width(if alpha { 86.0 } else { 66.0 }).char_limit(10)));
+    let had_focus = ui.memory(|m| m.has_focus(hex_edit_id(popup)));
+    let r = with_type(ui, Type::Data, |ui| ui.add(egui::TextEdit::singleline(&mut s).id(hex_edit_id(popup)).desired_width(if alpha { 86.0 } else { 66.0 }).char_limit(10)));
     let r = r.named(tr!("Hex colour")).on_hover_text(if alpha { tr!("Hex colour: #rrggbb, or #rrggbbaa with alpha") } else { tr!("Hex colour: #rrggbb") });
+    // Enter only confirms the field. The text box gives up focus on it but leaves the key, and
+    // a dialog around the picker (a plug-in's parameters) would take that Enter as its own and
+    // apply and close before the other values are set. Only the Enter the field had this frame:
+    // `lost_focus` stays true a frame longer, and a later Enter is the dialog's again.
+    if had_focus && !r.has_focus() {
+        ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+    }
     let mut out = None;
     if r.has_focus() || r.lost_focus() {
         if r.changed()
@@ -509,6 +522,94 @@ mod tests {
             remember(&ctx, a, [v, v, v]);
         }
         assert_eq!(list(&ctx).len(), RECENT, "bounded");
+    }
+
+    /// One frame of a swatch button with alpha inside a dialog that, like the plug-in dialog,
+    /// takes an unclaimed Enter as "apply" once its controls are drawn. Returns whether the
+    /// colour changed, whether the dialog saw Enter, the button and the hex field's text.
+    fn dialog_frame(ctx: &egui::Context, input: egui::RawInput, c: &mut [u8; 4]) -> (bool, bool, Response, Option<String>) {
+        let mut res = None;
+        let mut out = ctx.run_ui(input, |ui| {
+            let r = button_alpha(ui, c);
+            let enter = ui.ctx().input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
+            res = Some((r.changed(), enter, r));
+        });
+        out.textures_delta.clear();
+        let hex = out.platform_output.accesskit_update.and_then(|u| u.nodes.iter().find(|(_, n)| n.label() == Some("Hex colour")).and_then(|(_, n)| n.value().map(str::to_owned)));
+        let Some((changed, enter, r)) = res else { panic!("the frame ran") };
+        (changed, enter, r, hex)
+    }
+
+    fn key(k: egui::Key) -> egui::RawInput {
+        egui::RawInput { events: vec![egui::Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }], ..Default::default() }
+    }
+
+    /// Opens the picker of a swatch at `c` and focuses its hex field. Returns the picker's id
+    /// and the text the field shows.
+    fn open_and_focus_hex(ctx: &egui::Context, c: &mut [u8; 4]) -> (Id, String) {
+        ctx.enable_accesskit();
+        let (_, _, r, _) = dialog_frame(ctx, egui::RawInput::default(), c);
+        let click = |pressed| egui::Event::PointerButton { pos: r.rect.center(), button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        dialog_frame(ctx, egui::RawInput { events: vec![click(true), click(false)], ..Default::default() }, c);
+        let popup = r.id.with("colour_popup");
+        assert!(egui::Popup::is_id_open(ctx, popup), "the click opens the picker");
+        ctx.memory_mut(|m| m.request_focus(hex_edit_id(popup)));
+        let (changed, _, _, hex) = dialog_frame(ctx, egui::RawInput::default(), c);
+        assert!(!changed, "focusing the field changes nothing");
+        assert!(ctx.memory(|m| m.has_focus(hex_edit_id(popup))), "the hex field has focus");
+        (popup, hex.unwrap_or_default())
+    }
+
+    /// #224: Enter in the hex field confirms the field only. A plug-in dialog around the picker
+    /// must not also take it as "apply" and run the plug-in before its other values are set.
+    #[test]
+    fn enter_in_the_hex_field_is_not_the_dialogs_enter() {
+        let ctx = egui::Context::default();
+        let mut c = [0x4f, 0xa3, 0xff, 255];
+        let (popup, shown) = open_and_focus_hex(&ctx, &mut c);
+        assert_eq!(shown, "#4fa3ff");
+        // Type a colour: it applies as soon as it reads as one.
+        let typed = egui::RawInput { events: vec![egui::Event::Key { key: egui::Key::A, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }, egui::Event::Text("#ff6b4a".into())], ..Default::default() };
+        let (changed, _, _, _) = dialog_frame(&ctx, typed, &mut c);
+        assert!(changed);
+        assert_eq!(c, [0xff, 0x6b, 0x4a, 255]);
+        // Enter leaves the field; the dialog doesn't see it.
+        let (changed, enter, _, _) = dialog_frame(&ctx, key(egui::Key::Enter), &mut c);
+        assert!(!ctx.memory(|m| m.has_focus(hex_edit_id(popup))), "Enter leaves the field");
+        assert!(!enter, "the dialog must not take the hex field's Enter as its own");
+        assert!(!changed);
+        assert_eq!(c, [0xff, 0x6b, 0x4a, 255]);
+        // An Enter the field didn't have is still the dialog's.
+        let (_, enter, _, _) = dialog_frame(&ctx, key(egui::Key::Enter), &mut c);
+        assert!(enter, "with the field left, Enter applies the dialog again");
+    }
+
+    /// #224: a translucent colour shows as its own (unmultiplied) `#rrggbbaa`, and confirming
+    /// or leaving the field without typing keeps it exactly, however often.
+    #[test]
+    fn a_translucent_colour_round_trips_through_the_hex_field() {
+        let ctx = egui::Context::default();
+        let start = [0xff, 0x00, 0x00, 0x80];
+        let mut c = start;
+        let (popup, shown) = open_and_focus_hex(&ctx, &mut c);
+        assert_eq!(shown, "#ff000080", "the hex shows the colour as set, not premultiplied");
+        assert_eq!(parse_hex(&shown, true), Some(start));
+        for _ in 0..3 {
+            // Confirm with Enter, unchanged.
+            let (changed, _, _, _) = dialog_frame(&ctx, key(egui::Key::Enter), &mut c);
+            assert!(!changed, "confirming the shown hex is not an edit");
+            assert_eq!(c, start);
+            // Focus again and leave it another way (focus moves elsewhere).
+            ctx.memory_mut(|m| m.request_focus(hex_edit_id(popup)));
+            let (_, _, _, hex) = dialog_frame(&ctx, egui::RawInput::default(), &mut c);
+            assert_eq!(hex.as_deref(), Some("#ff000080"));
+            ctx.memory_mut(|m| m.surrender_focus(hex_edit_id(popup)));
+            let (changed, _, _, _) = dialog_frame(&ctx, egui::RawInput::default(), &mut c);
+            assert!(!changed, "leaving the field is not an edit");
+            assert_eq!(c, start);
+            ctx.memory_mut(|m| m.request_focus(hex_edit_id(popup)));
+            dialog_frame(&ctx, egui::RawInput::default(), &mut c);
+        }
     }
 
     #[test]
