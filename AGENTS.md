@@ -93,7 +93,7 @@ A crate depends only on lower layers, and nothing below `src/` uses egui, eframe
 - `doc::evaluate` is pure: time is a function, and animation never mutates the document. The CPU renderer in `crates/render` is the oracle the GPU renderer is tested against.
 - Text goes through `theme::Type` roles (`guidelines_tests` checks it; `docs/ui-guidelines.md`). Interface text uses `tr!`, `trn!` and `tr_noop!` (ADR 0040, `docs/localisation.md`; check with `--lang pseudo`). The app-local craft-i18n catalog parser stays until ADR 0040's cutover.
 - OS-specific code lives in `src/platform.rs`; shortcut text goes through `platform::shortcut_label`.
-- `unsafe_code = "forbid"`; no module allows `unsafe`.
+- `unsafe_code = "forbid"`; no workspace module allows `unsafe`. The plug-in SDK in `examples/plugins/sdk` is outside the workspace and uses `unsafe` for the WebAssembly host calls.
 - `deny.toml` is the dependency policy (permissive licences; craft-libs is the one allowed Git source, pinned by `rev`). Assets get a row in `ATTRIBUTION.md` with licence text under `licenses/`; fonts come from craft-fonts through `CRAFT_FONTS_DIR`. Legal notes: `docs/legal/compliance.md`.
 - `scripts/git-hooks` refuses commits on `main` (`git config core.hooksPath scripts/git-hooks`). Branches are `feat/`, `fix/`, `docs/` or `m<N>/<topic>`; commit subjects use conventional prefixes (`feat(render): ...`), and milestone work ends them with `(M5)`. Credits: `AUTHORS.md`.
 - Build footprint settings (one `target/`, incremental off): `docs/development.md`.
