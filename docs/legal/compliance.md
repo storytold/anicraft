@@ -50,7 +50,7 @@ tracked with that team in storytold/craft-libs#2100. CI runs `cargo deny check l
 sources` in its own job again (the shared gate doesn't).
 
 ```sh
-cargo deny check licenses bans sources   # policy in deny.toml; must pass before every commit
+cargo deny check licenses bans sources   # policy in deny.toml; must pass when dependencies change
 cargo deny check advisories              # RustSec security advisories (needs network)
 ```
 
