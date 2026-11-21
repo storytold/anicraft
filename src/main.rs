@@ -271,13 +271,23 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
                 Some(w) if (64..=8192).contains(&w) => out.look.shot_width = Some(w),
                 _ => return Err("--shot-width takes a width in pixels, from 64 to 8192".into()), // i18n-exempt: a console message
             },
-            "--theme" => match args.next().as_deref() {
-                Some("graphite" | "dark") => out.look.theme = Some(theme::Palette::Graphite),
-                Some("light") => out.look.theme = Some(theme::Palette::Light),
-                Some("high-contrast") => out.look.theme = Some(theme::Palette::HighContrast),
-                Some(file) if file.to_ascii_lowercase().ends_with(".json") => out.look.theme_file = Some(PathBuf::from(file)),
-                other => return Err(format!("--theme takes dark (graphite), light, high-contrast or a theme file (.json), not {}", other.unwrap_or("nothing"))), // i18n-exempt: a console message
-            },
+            "--theme" => {
+                let (palette, file) = match args.next().as_deref() {
+                    Some("graphite" | "dark") => (Some(theme::Palette::Graphite), None),
+                    Some("light") => (Some(theme::Palette::Light), None),
+                    Some("high-contrast") => (Some(theme::Palette::HighContrast), None),
+                    Some(file) if file.to_ascii_lowercase().ends_with(".json") => (None, Some(PathBuf::from(file))),
+                    // i18n-exempt: a console message
+                    other => {
+                        return Err(format!(
+                            "--theme takes dark (graphite), light, high-contrast or a theme file (.json), not {}",
+                            other.unwrap_or("nothing")
+                        ));
+                    }
+                };
+                out.look.theme = palette;
+                out.look.theme_file = file;
+            }
             "--scale" => match args.next().and_then(|s| s.trim_end_matches('%').parse::<f32>().ok()) {
                 Some(pct) if pct.is_finite() => out.look.scale = Some(pct / 100.0),
                 _ => return Err("--scale takes a percentage, such as 150".into()), // i18n-exempt: a console message
@@ -449,6 +459,15 @@ mod args_tests {
 
     fn parse(args: &[&str]) -> Args {
         parse_args(args.iter().map(|a| a.to_string())).unwrap_or_else(|e| panic!("{args:?}: {e}"))
+    }
+
+    #[test]
+    fn last_theme_option_wins_across_builtin_and_file_themes() {
+        let file = "themes/Plum.JSON";
+        let look = parse(&["--theme", file, "--theme", "light"]).look;
+        assert_eq!((look.theme, look.theme_file), (Some(theme::Palette::Light), None));
+        let look = parse(&["--theme", "dark", "--theme", file]).look;
+        assert_eq!((look.theme, look.theme_file), (None, Some(PathBuf::from(file))));
     }
 
     /// Windows (`"%1"`) and Linux (`%f`) hand a double-clicked document over as the one plain
