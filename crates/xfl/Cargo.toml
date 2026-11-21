@@ -12,6 +12,8 @@ craft-video.workspace = true
 anicraft-geom.workspace = true
 anicraft-doc.workspace = true
 anicraft-xml.workspace = true
+# Animate's own bitmap and sound payloads in bin/*.dat (shared with the legacy importer).
+anicraft-flamedia.workspace = true
 # Lays imported text out with the fonts on this computer (ADR 0012, ADR 0014).
 anicraft-text.workspace = true
 craft-xfl.workspace = true

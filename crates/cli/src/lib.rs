@@ -19,6 +19,8 @@ AniCraft CLI — headless animation engine
 
 USAGE:
   anicraft-cli info <file|--sample>
+  anicraft-cli fla-dump <legacy.fla> [--stream <name>]   the legacy Flash 8–CS4 container's
+                                                         streams and CPic* record tags (JSON)
   anicraft-cli render <file|--sample> --out <frame.png> [--frame N] [--scale S]
   anicraft-cli render-seq <file|--sample> --out-dir <dir> [--from A] [--to B] [--scale S]
   anicraft-cli gif <file|--sample> --out <anim.gif> [--from A] [--to B] [--scale S] [--overwrite yes]
@@ -290,6 +292,44 @@ pub fn run(argv: &[String]) -> Result<String, String> {
         "info" => {
             let s = session(&a, Some(src.ok_or("info needs a file or --sample")?))?;
             serde_json::to_string_pretty(&s.info()).map_err(|e| e.to_string())
+        }
+        // The legacy Flash container's stream tree and record tags (ADR 0096): the
+        // reverse-engineering microscope for Flash 8–CS4 era `.fla` files.
+        "fla-dump" => {
+            let p = src.ok_or("fla-dump needs a legacy .fla file")?;
+            // A file over the container's cap is refused by its size, and the read stops one
+            // byte past the cap, so one that grows in between is refused before parsing too.
+            let (path, max) = (std::path::Path::new(p), anicraft_fla::cfb::MAX_FILE);
+            let too_large = || format!("{p}: {}", anicraft_fla::cfb::Error::TooLarge);
+            if anicraft_engine::vfs::len(path).map_err(|e| format!("{p}: {e}"))? > max {
+                return Err(too_large());
+            }
+            let data = anicraft_engine::vfs::read_bounded(path, max).map_err(|e| format!("{p}: {e}"))?;
+            if data.len() as u64 > max {
+                return Err(too_large());
+            }
+            if !anicraft_fla::is_legacy(&data) {
+                return Err(format!("{p}: not a legacy Flash document (its first bytes are not the compound binary signature)"));
+            }
+            let streams = anicraft_fla::dump(&data).map_err(|e| format!("{p}: {e}"))?;
+            let wanted = a.flag("stream");
+            let list: Vec<Value> = streams.iter()
+                .filter(|s| wanted.is_none_or(|w| s.path == w))
+                .map(|s| {
+                    let mut v = json!({
+                        "stream": s.path,
+                        "size": s.size,
+                        "head": s.head,
+                        "tags": s.tags.iter().map(|(o, n)| json!({"at": o, "name": n})).collect::<Vec<_>>(),
+                    });
+                    // A scan that stopped at its budget says so: its tags are the first ones only.
+                    if !s.tags_complete {
+                        v["tags_truncated"] = json!(true);
+                    }
+                    v
+                })
+                .collect();
+            serde_json::to_string_pretty(&list).map_err(|e| e.to_string())
         }
         "render" => {
             let mut s = session(&a, Some(src.ok_or("render needs a file or --sample")?))?;
@@ -943,6 +983,29 @@ pub(crate) mod tests {
         assert_eq!(lines[4]["bye"], true);
         assert_eq!(lines.len(), 5, "nothing runs after quit");
         assert_eq!(s.visible_elements().len(), 1);
+    }
+
+    /// `fla-dump` reads a file only up to the legacy container's cap, and refuses one over it
+    /// before parsing; a file that isn't a compound binary is refused by its first bytes.
+    #[test]
+    fn fla_dump_refuses_files_over_the_cap_and_other_formats() {
+        let dir = std::env::temp_dir().join(format!("anicraft-cli-fla-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip = dir.join("new.fla");
+        std::fs::write(&zip, b"PK\x03\x04").unwrap();
+        let err = run(&["fla-dump".into(), zip.display().to_string()]).unwrap_err();
+        assert!(err.contains("not a legacy Flash document"), "{err}");
+        // One byte over the cap, sparse where the file system allows: refused, not parsed.
+        #[cfg(unix)]
+        {
+            let big = dir.join("big.fla");
+            let f = std::fs::File::create(&big).unwrap();
+            std::io::Write::write_all(&mut &f, &anicraft_fla::MAGIC).unwrap();
+            f.set_len(anicraft_fla::cfb::MAX_FILE + 1).unwrap();
+            let err = run(&["fla-dump".into(), big.display().to_string()]).unwrap_err();
+            assert!(err.contains("larger than AniCraft reads"), "{err}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

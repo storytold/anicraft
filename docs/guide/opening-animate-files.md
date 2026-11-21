@@ -101,9 +101,12 @@ These come across, but look a little different from Animate, and the report coun
 ### Left out, for now
 
 * **Motion tweens** come across as keyframes, without their property curves or motion path.
-* **Bitmaps and sounds stored only in Animate's own internal format.** Animate keeps some media
-  in an undocumented form; those are listed, by name for sounds, instead of guessed at. Media
-  kept as PNG, JPEG, WAV, Ogg or MP3 comes across.
+* **Rare forms of Animate's own media storage.** Animate often keeps a library image or sound
+  only in its own data format. Lossless bitmaps and uncompressed 16-bit sounds in that format
+  come across, like media kept as PNG, JPEG, WAV, Ogg or MP3. Forms not yet seen in real files
+  (other pixel formats, uncompressed or JPEG-backed bitmaps, compressed or 8-bit sounds) are
+  listed by name, with why, instead of guessed at. AniCraft opens up to 256 million pixels of
+  images from one file, whatever their format; bitmaps beyond it are named in the report.
 * Sounds in formats AniCraft doesn't decode (AIFF, compressed WAV such as ADPCM, FLAC, AAC);
   convert them to WAV, Ogg or MP3 and import them again (**File › Import › Import to
   Library**).
@@ -127,10 +130,26 @@ again to see the text as designed.
 Once you save, the `.anicraft` document keeps the letter shapes, so it looks the same on
 computers without the font.
 
+## Flash 8 to CS4 files
+
+A `.fla` saved by **Flash 8, CS3 or CS4** uses an older, binary format. AniCraft opens it like
+any other Animate file, untitled, so saving asks for a new `.anicraft` name.
+
+* **What comes across**: scenes, layers and layer folders, keyframes and their timing, shapes
+  with their curves, gradients and strokes (dashed and dotted ones with their pattern), groups,
+  symbol instances (transform, loop mode, first frame, colour effect), classic and shape tweens
+  with their eases and shape hints, static and dynamic text, bitmaps, sounds on frames, button
+  names, Library folders, and the stage size and frame rate.
+* **Frame scripts** are kept exactly as written, but don't run in Test Movie.
+* **Not yet**: filters, movie clip component settings and bitmap fills are left out, and
+  ragged, stipple and hatched strokes are drawn solid. An instance with filters also loses its blend mode and is
+  drawn as Normal. The report names each of them.
+
 ## Old, damaged and unusual files
 
-* A `.fla` saved by **Flash CS4 or earlier** uses an older format AniCraft can't read. AniCraft
-  says so: open it in Animate and save it again, then open that copy.
+* A `.fla` saved by **Flash MX 2004 or earlier**, or by a version AniCraft doesn't read, can't
+  be opened yet. AniCraft says so: open it in Animate (or Flash 8 to CS4) and save it again,
+  then open that copy.
 * A renamed `.fla` still opens; AniCraft recognises it by what is inside.
 * Flash and Animate write most `.fla` files with a small slip in the archive's closing record
   (it overstates the size of the file list). AniCraft opens them as Animate does.

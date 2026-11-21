@@ -1,0 +1,18 @@
+[package]
+name = "anicraft-flamedia"
+description = "AniCraft L0: Animate's own bitmap and sound payloads (bin/*.dat in XFL packages, the Media streams of legacy .fla files), decoded with bounded memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+# Inflates the bitmap payload's zlib stream (already in the tree through craft-xfl and the PNG stack).
+miniz_oxide = "0.8"
+# Wraps raw sound payloads as WAV files (its streaming WAV header writer).
+craft-audio.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

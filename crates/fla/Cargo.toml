@@ -1,0 +1,28 @@
+[package]
+name = "anicraft-fla"
+description = "AniCraft legacy Flash import (L2): the Flash 8–CS4 compound binary .fla container (MS-CFB) and its record streams, read from the public Microsoft [MS-CFB] specification"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+anicraft-doc.workspace = true
+anicraft-geom.workspace = true
+# Lays imported text out with the fonts on this computer, as the XFL importer does (ADR 0012).
+anicraft-text.workspace = true
+# Animate's own bitmap and sound payloads: the `Media` streams are the XFL twins' `bin/*.dat` files.
+anicraft-flamedia.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The env-gated corpus tests read the Animate twins (zip packages, XFL edge strings).
+craft-xfl.workspace = true
+# The twins' XML trees, for the timeline differential (keyframes, instances).
+craft-xml.workspace = true
+# The text corpus test reads the twins' XML text fields through the shared XFL schema view.
+anicraft-xml.workspace = true
+
+[lints]
+workspace = true

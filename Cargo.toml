@@ -23,7 +23,9 @@ anicraft-doc = { path = "crates/doc" }
 anicraft-render = { path = "crates/render" }
 anicraft-engine = { path = "crates/engine" }
 anicraft-xfl = { path = "crates/xfl" }
+anicraft-fla = { path = "crates/fla" }
 anicraft-xml = { path = "crates/xml" }
+anicraft-flamedia = { path = "crates/flamedia" }
 anicraft-svg = { path = "crates/svg" }
 anicraft-text = { path = "crates/text" }
 anicraft-plugins = { path = "crates/plugins" }

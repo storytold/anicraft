@@ -12,6 +12,8 @@ anicraft-geom.workspace = true
 anicraft-doc.workspace = true
 anicraft-render.workspace = true
 anicraft-xfl.workspace = true
+# The Flash 8–CS4 era compound binary `.fla` (ADR 0096).
+anicraft-fla.workspace = true
 anicraft-svg.workspace = true
 anicraft-text.workspace = true
 anicraft-plugins.workspace = true

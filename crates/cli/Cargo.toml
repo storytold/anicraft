@@ -20,6 +20,8 @@ anicraft-engine.workspace = true
 anicraft-render.workspace = true
 anicraft-geom.workspace = true
 anicraft-guide.workspace = true
+# The legacy Flash container, for `fla-dump` (ADR 0096).
+anicraft-fla.workspace = true
 serde_json.workspace = true
 
 # The live control port's per-run token (ADR 0104): the operating system's random numbers.
