@@ -70,6 +70,9 @@ pub fn is_rtl_code(code: &str) -> bool {
     let normalized = Languages::normalize_code(code.split(['.', '@']).next().unwrap_or(code));
     let mut parts = normalized.split('-').filter(|p| !p.is_empty());
     let Some(base) = parts.next() else { return false };
+    if base == "x" {
+        return false;
+    }
     let next = parts.find(|p| !(p.len() == 3 && p.chars().all(|c| c.is_ascii_alphabetic())));
     if let Some(script) = next.filter(|p| p.len() == 4 && p.chars().all(|c| c.is_ascii_alphabetic())) {
         return matches!(script, "arab" | "hebr" | "thaa" | "syrc" | "nkoo" | "adlm" | "mand" | "samr" | "rohg");

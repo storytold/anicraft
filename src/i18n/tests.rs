@@ -382,7 +382,7 @@ fn right_to_left_codes_are_recognised_by_language_and_script() {
     for rtl in ["he", "he-IL", "he-Hebr-IL", "he-x-test", "iw", "iw_IL", "iw_IL.UTF-8", "ar", "fa-IR", "ku-Arab-IQ", "zh-yue-Arab"] {
         assert!(is_rtl_code(rtl), "{rtl}");
     }
-    for ltr in ["en", "ka", "ku-Latn-TR", "sd-Deva-IN", "en-x-arab", "", "-", "pseudo"] {
+    for ltr in ["en", "ka", "ku-Latn-TR", "sd-Deva-IN", "en-x-arab", "x-Arab", "x-Hebr", "", "-", "pseudo"] {
         assert!(!is_rtl_code(ltr), "{ltr}");
     }
     // No right-to-left language is offered, so the interface never is.
