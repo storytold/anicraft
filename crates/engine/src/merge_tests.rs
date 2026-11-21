@@ -217,6 +217,35 @@ fn a_stroke_on_one_keyframe_only_shrinks_away_or_grows_in() {
     assert!(n5 > 0 && (w5 - w10 * 0.5).abs() < w10 * 0.1, "halfway: {w5} of {w10}");
 }
 
+/// A filled, stroked raw shape tween that follows a curved motion guide: the joined stroke
+/// travels the guide with its fill, oriented to the path or not (#119).
+#[test]
+fn a_guided_shape_tween_carries_the_stroke_along_the_guide_with_the_fill() {
+    let mut s = polygon_tween((3, json!("#ff0000"), json!("#000000")), (5, json!("#ff0000"), json!("#000000")));
+    let art = s.layer;
+    run(&mut s, "timeline.goto", json!({"frame": 10}));
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "element.translate", json!({"dx": 200, "dy": 0}));
+    run(&mut s, "layer.add_motion_guide", json!({"layer": art.0}));
+    run(&mut s, "draw.path", json!({"d": "M0 0 C0 -300 200 -300 200 0"}));
+    let bounds = |items: &[&anicraft_doc::DisplayItem]| items.iter().fold(anicraft_geom::Rect::EMPTY, |r, i| r.union(&i.path.transformed(&i.transform).bounds()));
+    for (frame, orient) in [3u32, 5, 7].into_iter().flat_map(|f| [(f, false), (f, true)]) {
+        run(&mut s, "layer.select", json!({"layer": art.0}));
+        run(&mut s, "timeline.goto", json!({"frame": 0}));
+        assert_eq!(run(&mut s, "timeline.set_orient", json!({"orient": orient}))["orient"], orient);
+        let list = anicraft_doc::evaluate(&s.doc, frame);
+        let on = |want_fill: bool| -> Vec<&anicraft_doc::DisplayItem> {
+            list.items.iter().filter(|i| i.layer == art && if want_fill { i.fill.is_some() } else { i.stroke.is_some() }).collect()
+        };
+        let (fill, stroke) = (bounds(&on(true)), bounds(&on(false)));
+        assert!(!fill.is_empty() && !stroke.is_empty(), "frame {frame}");
+        assert!(fill.center().y < -60.0, "frame {frame}: the fill rides up the arch: {fill:?}");
+        for (a, b) in [(fill.min, stroke.min), (fill.max, stroke.max)] {
+            assert!(a.distance(b) < 1.0, "frame {frame} (orient {orient}): the stroke left its fill: {fill:?} vs {stroke:?}");
+        }
+    }
+}
+
 /// A shape hint placed on a raw outline's stroke steers the stroke's morph when the keyframes'
 /// outlines have different numbers of runs (#119).
 #[test]

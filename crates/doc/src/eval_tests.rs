@@ -739,6 +739,233 @@ fn raw_stroke_runs_with_different_colour_effects_keep_them_in_a_shape_tween() {
     assert_eq!(by(1).color, ColorEffect::None.transform(), "the first run took the later run's colour");
 }
 
+/// A plain black stroke 2 wide.
+fn solid_stroke() -> crate::Stroke {
+    Shape::filled(Path::new(), Paint::Solid(Rgba::BLACK)).with_stroke(Rgba::BLACK, 2.0).stroke.unwrap()
+}
+
+/// A shape tween from a triangle's raw stroke runs (ids 1-3) to a square's (ids 11-14), all in
+/// `stroke`: different run counts, so the runs are joined into outlines that morph.
+fn polygon_runs_doc(stroke: &crate::Stroke) -> Document {
+    let v = anicraft_geom::Vec2::new;
+    let runs = |first: u64, pts: &[anicraft_geom::Vec2]| -> Vec<Arc<Element>> {
+        (0..pts.len())
+            .map(|k| {
+                let mut p = Path::new();
+                p.move_to(pts[k]).line_to(pts[(k + 1) % pts.len()]);
+                let mut s = Shape::filled(p, Paint::Solid(Rgba::BLACK));
+                s.fill = None;
+                s.stroke = Some(stroke.clone());
+                s.merge = true;
+                Arc::new(Element { id: ElementId(first + k as u64), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, kind: ElementKind::Shape(s) })
+            })
+            .collect()
+    };
+    let mut d = Document::default();
+    let mut k0 = Keyframe::new(0, 10);
+    k0.elements = runs(1, &[v(50.0, 0.0), v(100.0, 90.0), v(0.0, 90.0)]);
+    k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+    let mut k1 = Keyframe::new(10, 1);
+    k1.elements = runs(11, &[v(0.0, 0.0), v(100.0, 0.0), v(100.0, 100.0), v(0.0, 100.0)]);
+    layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+    d
+}
+
+/// Runs joined into one outline in a shape tween all keep their identities in between: the
+/// first draws the outline, the others stand over it undrawn, so a selection of any of them
+/// survives the tween and has bounds (a selection of a run missing from the frame is dropped).
+#[test]
+fn joined_stroke_runs_keep_their_identities_in_a_shape_tween() {
+    let d = polygon_runs_doc(&solid_stroke());
+    let els = crate::evaluate_layer_elements(&d.timeline(0).layers[0], 5).unwrap().1;
+    let ids: Vec<u64> = els.iter().map(|e| e.id.0).collect();
+    assert_eq!(ids, [1, 2, 3], "every run of the start key is there");
+    let stroked: Vec<_> = els.iter().filter(|e| matches!(&e.kind, ElementKind::Shape(s) if s.stroke.is_some())).collect();
+    assert_eq!(stroked.len(), 1, "one outline is drawn, once");
+    assert_eq!(stroked[0].id, ElementId(1));
+    for e in els.iter() {
+        assert!(!e.bounds(&d).is_empty(), "{:?} has bounds", e.id);
+    }
+    let list = evaluate(&d, 5);
+    assert_eq!(list.items.iter().filter(|i| i.stroke.is_some() || i.fill.is_some()).count(), 1, "nothing is drawn twice");
+    // Horizontal and vertical outlines have zero height or width before stroke padding: undrawn
+    // members still keep non-empty bounds.
+    let v = anicraft_geom::Vec2::new;
+    let seg = |id: u64, a, b| {
+        let mut p = Path::new();
+        p.move_to(a).line_to(b);
+        let mut s = Shape::filled(p, Paint::Solid(Rgba::BLACK));
+        s.fill = None;
+        s.stroke = Some(solid_stroke());
+        s.merge = true;
+        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, kind: ElementKind::Shape(s) })
+    };
+    for (a0, a1, a2, b0, b1, b2, b3) in [
+        (v(0.0, 20.0), v(40.0, 20.0), v(80.0, 20.0), v(0.0, 20.0), v(30.0, 20.0), v(60.0, 20.0), v(90.0, 20.0)),
+        (v(20.0, 0.0), v(20.0, 40.0), v(20.0, 80.0), v(20.0, 0.0), v(20.0, 30.0), v(20.0, 60.0), v(20.0, 90.0)),
+    ] {
+        let mut d = Document::default();
+        let mut k0 = Keyframe::new(0, 10);
+        k0.elements = vec![seg(1, a0, a1), seg(2, a1, a2)];
+        k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+        let mut k1 = Keyframe::new(10, 1);
+        k1.elements = vec![seg(11, b0, b1), seg(12, b1, b2), seg(13, b2, b3)];
+        layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+        let els = crate::evaluate_layer_elements(&d.timeline(0).layers[0], 5).unwrap().1;
+        assert_eq!(els.len(), 2);
+        for e in els.iter() {
+            assert!(!e.bounds(&d).is_empty(), "axis-aligned run {:?} has bounds", e.id);
+        }
+    }
+}
+
+/// A dash pattern restarts on each run and a width profile is measured along each, so dashed or
+/// profiled runs are not chained into one outline: right after the key they look as they did.
+#[test]
+fn dashed_or_profiled_stroke_runs_stay_apart_in_a_shape_tween() {
+    let subpaths = |d: &Document| {
+        let list = evaluate(d, 1);
+        list.items.iter().filter(|i| i.stroke.is_some()).map(|i| i.path.cmds.iter().filter(|c| matches!(c, anicraft_geom::PathCmd::MoveTo(_))).count()).sum::<usize>()
+    };
+    let solid = solid_stroke();
+    assert_eq!(subpaths(&polygon_runs_doc(&solid)), 1, "solid runs join into one outline");
+    let mut dashed = solid.clone();
+    dashed.style.dash = crate::Dash::dashed(6.0, 3.0);
+    assert!(dashed.style.dash.is_some());
+    // Three runs on the start key: three pieces still, the square's fourth side growing in.
+    assert!(subpaths(&polygon_runs_doc(&dashed)) >= 3, "a dashed outline keeps its runs");
+    let mut tapered = solid;
+    tapered.profile = crate::ProfilePreset::ALL.into_iter().find_map(crate::ProfilePreset::profile);
+    assert!(tapered.profile.is_some());
+    assert!(subpaths(&polygon_runs_doc(&tapered)) >= 3, "a profiled outline keeps its runs");
+}
+
+/// A raw regular polygon centred on `at` as the merge stores it: its fill element (id `first`),
+/// then one stroke run per side (ids `first + 1`…), each with its own origin.
+fn polygon_at(first: u64, at: anicraft_geom::Vec2, radius: f32, sides: usize, stroke: &crate::Stroke) -> Vec<Arc<Element>> {
+    use std::f32::consts::{PI, TAU};
+    let pts: Vec<anicraft_geom::Vec2> = (0..sides)
+        .map(|k| {
+            let a = -PI / 2.0 + k as f32 * TAU / sides as f32;
+            at + anicraft_geom::Vec2::new(radius * a.cos(), radius * a.sin())
+        })
+        .collect();
+    let mut outline = Path::new();
+    if let Some(&p) = pts.first() {
+        outline.move_to(p);
+    }
+    for &p in pts.iter().skip(1) {
+        outline.line_to(p);
+    }
+    outline.close();
+    let piece = |id: u64, path: &Path, centre: anicraft_geom::Vec2, fill: bool| {
+        let mut s = Shape::filled(path.transformed(&Affine::translate(-centre.x, -centre.y)), Paint::Solid(Rgba::BLACK));
+        s.fill = fill.then_some(Paint::Solid(Rgba::BLACK));
+        s.stroke = (!fill).then(|| stroke.clone());
+        s.merge = true;
+        Arc::new(Element {
+            id: ElementId(id),
+            name: String::new(),
+            transform: Affine::translate(centre.x, centre.y),
+            color: ColorEffect::None,
+            kind: ElementKind::Shape(s),
+        })
+    };
+    let mut out = vec![piece(first, &outline, at, true)];
+    for (k, &a) in pts.iter().enumerate() {
+        let b = pts[(k + 1) % sides];
+        let mut side = Path::new();
+        side.move_to(a).line_to(b);
+        out.push(piece(first + 1 + k as u64, &side, (a + b) * 0.5, false));
+    }
+    out
+}
+
+/// A solid outline on one key against a dashed one on the other: the keys' outlines correspond
+/// as the fill's do, so the stroke stays on the morphed fill instead of pairing a whole outline
+/// with the other key's loose runs.
+#[test]
+fn a_solid_outline_morphs_against_a_dashed_one() {
+    let v = anicraft_geom::Vec2::new;
+    let solid = solid_stroke();
+    let mut dashed = solid.clone();
+    dashed.style.dash = crate::Dash::dashed(6.0, 3.0);
+    let mut d = Document::default();
+    let mut k0 = Keyframe::new(0, 10);
+    k0.elements = polygon_at(1, v(50.0, 45.0), 50.0, 3, &solid);
+    k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+    let mut k1 = Keyframe::new(10, 1);
+    k1.elements = polygon_at(11, v(50.0, 50.0), 55.0, 4, &dashed);
+    layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+    for frame in [3u32, 5, 7] {
+        let list = evaluate(&d, frame);
+        let fill = list.items.iter().find(|i| i.fill.is_some()).expect("the fill");
+        let strokes: Vec<_> = list.items.iter().filter(|i| i.stroke.is_some()).collect();
+        assert!(!strokes.is_empty(), "frame {frame}: the stroke is drawn");
+        for pl in fill.path.flatten(&fill.transform, 0.25) {
+            for &p in &pl.points {
+                let d = strokes.iter().map(|st| st.path.distance_to_edge(p, &st.transform)).fold(f32::INFINITY, f32::min);
+                assert!(d < 1.5, "frame {frame}: fill edge point {p:?} is {d} from the stroke");
+            }
+        }
+        for st in &strokes {
+            for pl in st.path.flatten(&st.transform, 0.25) {
+                for &p in &pl.points {
+                    let d = fill.path.distance_to_edge(p, &fill.transform);
+                    assert!(d < 1.5, "frame {frame}: stroke point {p:?} is {d} off the fill's edge");
+                }
+            }
+        }
+    }
+}
+
+/// A guide places each element by its own origin, so each joined stroke outline takes the origin
+/// of the fill it edges: with two merged fill regions, each stroke travels with its own fill
+/// rather than following the first region's guide path.
+#[test]
+fn a_guided_shape_tween_keeps_each_stroke_with_its_own_fill() {
+    let v = anicraft_geom::Vec2::new;
+    let black = solid_stroke();
+    let mut blue = black.clone();
+    blue.color = Rgba::hex(0x0000ff);
+    // Both different stroke styles and the same stroke style across the two regions: runs that
+    // edge different fills stay in separate outlines and each travels its own fill's stretch.
+    for second_stroke in [&blue, &black] {
+        let mut d = Document::default();
+        let mut k0 = Keyframe::new(0, 10);
+        k0.elements = polygon_at(1, v(0.0, 0.0), 40.0, 3, &black);
+        k0.elements.extend(polygon_at(10, v(300.0, 0.0), 40.0, 4, second_stroke));
+        k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
+        let mut k1 = Keyframe::new(10, 1);
+        k1.elements = polygon_at(20, v(0.0, 100.0), 40.0, 5, &black);
+        k1.elements.extend(polygon_at(30, v(300.0, 100.0), 40.0, 5, second_stroke));
+        layer0(&mut d).keyframes = vec![Arc::new(k0), Arc::new(k1)];
+        // A straight guide from the first region's start to the second's end: each element travels
+        // the stretch of it between its own start and end origins.
+        let pts: Vec<anicraft_geom::Vec2> = (0..=20).map(|k| v(300.0 * k as f32 / 20.0, 100.0 * k as f32 / 20.0)).collect();
+        let walk = anicraft_geom::walk::PathWalk::new(&pts).expect("the guide");
+        let layer = d.timeline(0).layers[0].clone();
+        let of = |els: &[Arc<Element>], id: u64| els.iter().find(|e| e.id == ElementId(id)).cloned();
+        for frame in [1u32, 3, 5, 7, 9] {
+            let (_, els) = crate::evaluate_guided(&layer, frame, Some(&walk)).expect("an in-between frame");
+            // The outline standing for a region's first run takes that region's fill's origin, so it
+            // travels the same stretch of the guide as the fill it edges.
+            for (run, fill) in [(2u64, 1u64), (11, 10)] {
+                let (Some(r), Some(f)) = (of(&els, run), of(&els, fill)) else { panic!("frame {frame}: run {run} and fill {fill}") };
+                let (a, b) = (r.transform.translation(), f.transform.translation());
+                assert!(a.distance(b) < 0.01, "frame {frame}: run {run} at {a:?} left its fill at {b:?}");
+            }
+            // The regions travel different stretches: a stroke on the first region's path would be
+            // far from the second region's fill.
+            let (Some(first), Some(second)) = (of(&els, 1), of(&els, 10)) else { panic!("both fills") };
+            assert!(first.transform.translation().distance(second.transform.translation()) > 100.0, "frame {frame}: the regions are apart");
+            let (Some(run), Some(fill)) = (of(&els, 11), of(&els, 10)) else { panic!("the second region") };
+            let off = run.bounds(&d).center().distance(fill.bounds(&d).center());
+            assert!(off < 20.0, "frame {frame}: the second region's stroke is {off} from its fill");
+        }
+    }
+}
+
 /// A classic tween from scale `a` to scale `b` (with a turn and a skew at the end), eased.
 fn squash_doc(a: (f32, f32), b: (f32, f32), easing: Easing, keep_area: bool) -> Document {
     let at = |s: (f32, f32), rot: f32, skew: f32, x: f32| {
