@@ -1437,6 +1437,21 @@ fn copy_and_paste_frames_inserts_and_cuts_at_the_selection_edges() {
 }
 
 #[test]
+fn a_failed_cut_keeps_previously_copied_frames() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 10, "h": 10}));
+    run(&mut s, "timeline.copy_frames", json!({"frame": 0}));
+    run(&mut s, "layer.new", json!({}));
+
+    let err = s.execute("timeline.cut_frames", &json!({"frame": 0})).unwrap_err();
+    assert!(matches!(err, EngineError::State(message) if message == "cannot remove the layer's only frame"));
+
+    run(&mut s, "timeline.paste_frames", json!({"frame": 0}));
+    let pasted = s.active_layer().unwrap().keyframe_at(0).unwrap();
+    assert_eq!(pasted.elements.len(), 1);
+}
+
+#[test]
 fn pasting_several_layers_fills_the_layers_below_and_creates_missing_ones() {
     let mut s = Session::new(anicraft_doc::sample::demo());
     let layers: Vec<u64> = s.doc.timeline(s.scene).layers.iter().map(|l| l.id.0).collect();

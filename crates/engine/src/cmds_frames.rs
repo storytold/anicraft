@@ -77,7 +77,7 @@ fn slice(layer: &Layer, frame: u32, count: u32) -> Result<Vec<Arc<Keyframe>>> {
         .collect())
 }
 
-fn copy_frames(s: &mut Session, p: &Value) -> Result<Value> {
+fn collect_frames(s: &Session, p: &Value) -> Result<FrameClipboard> {
     let (_, frame) = target(s, p)?;
     let count = count_param(p)?;
     let mut ids = target_layers(s, p)?;
@@ -94,16 +94,20 @@ fn copy_frames(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::State("no frames there to copy".into()));
     }
     let elements: Vec<Element> = clip.layers.iter().flat_map(|l| l.keys.iter().flat_map(|k| k.elements.iter().map(|e| (**e).clone()))).collect();
-    let n = clip.layers.len();
     let sounds: Vec<anicraft_doc::SoundId> = clip.layers.iter().flat_map(|l| l.keys.iter().filter_map(|k| k.sound.as_ref().map(|f| f.sound))).collect();
     let carried = crate::transfer::carry(s, &elements, sounds);
-    s.frame_clipboard = FrameClipboard { carried, ..clip };
-    Ok(json!({"copied": count, "layers": n}))
+    Ok(FrameClipboard { carried, ..clip })
+}
+
+fn copy_frames(s: &mut Session, p: &Value) -> Result<Value> {
+    s.frame_clipboard = collect_frames(s, p)?;
+    Ok(json!({"copied": s.frame_clipboard.count, "layers": s.frame_clipboard.layers.len()}))
 }
 
 fn cut_frames(s: &mut Session, p: &Value) -> Result<Value> {
-    copy_frames(s, p)?;
+    let clip = collect_frames(s, p)?;
     remove_frame(s, p)?;
+    s.frame_clipboard = clip;
     Ok(json!({"cut": s.frame_clipboard.count, "layers": s.frame_clipboard.layers.len()}))
 }
 
