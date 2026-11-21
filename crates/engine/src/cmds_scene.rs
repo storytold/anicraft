@@ -153,9 +153,11 @@ fn delete_scene(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let i = target_scene(s, p)?;
     s.doc.scenes.remove(i);
-    if i <= s.scene {
-        let keep = if i == s.scene { i.min(s.doc.scenes.len() - 1) } else { s.scene - 1 };
-        open_scene(s, keep);
+    if i < s.scene {
+        // The same scene is still open at its new index.
+        s.scene -= 1;
+    } else if i == s.scene {
+        open_scene(s, i.min(s.doc.scenes.len() - 1));
     }
     Ok(scene_json(s))
 }
@@ -200,6 +202,40 @@ fn step_scene(s: &mut Session, d: i64) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deleting_an_earlier_scene_preserves_the_active_edit() {
+        let mut s = Session::default();
+        s.execute("scene.new", &json!({"name": "Current"})).unwrap();
+        s.execute("draw.rect", &json!({"x": 10, "y": 10, "w": 20, "h": 20, "fill": "#0000ff", "stroke": null, "object": true})).unwrap();
+        s.execute("modify.convert_to_symbol", &json!({"name": "Box"})).unwrap();
+        s.execute("symbol.edit", &json!({})).unwrap();
+        let symbol = s.editing_symbol().unwrap();
+        let layer = s.layer;
+        s.execute("timeline.insert_frame", &json!({"count": 2, "advance": true})).unwrap();
+        s.execute("layer.new", &json!({})).unwrap();
+        s.execute("layer.select", &json!({"layer": layer.0, "select": true})).unwrap();
+        let selection = s.selection.clone();
+        assert!(!selection.is_empty());
+
+        let assert_edit = |s: &Session, index, count| {
+            assert_eq!((s.scene, s.doc.scenes.len()), (index, count));
+            assert_eq!(s.doc.scenes[index].name, "Current");
+            assert_eq!(s.editing_symbol(), Some(symbol));
+            assert_eq!((s.frame, s.layer), (2, layer));
+            assert_eq!(s.selection, selection);
+        };
+        assert_edit(&s, 1, 2);
+        let steps = s.history_len();
+        s.execute("scene.delete", &json!({"scene": 0})).unwrap();
+        assert_eq!(s.history_len(), steps + 1);
+        assert_edit(&s, 0, 1);
+
+        s.undo().unwrap();
+        assert_edit(&s, 1, 2);
+        s.redo().unwrap();
+        assert_edit(&s, 0, 1);
+    }
 
     #[test]
     fn oversized_scene_indices_are_errors_without_edits() {
