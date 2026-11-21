@@ -70,6 +70,25 @@ fn f5_past_every_layer_lengthens_the_active_one() {
 }
 
 #[test]
+fn f5_does_not_add_frames_to_the_active_folder() {
+    let mut s = Session::default();
+    let artwork = s.layer;
+    let folder = LayerId(run(&mut s, "layer.new_folder", json!({}))["layer"].as_u64().unwrap());
+    let params = json!({"all_layers": true, "advance": true});
+
+    let v = run(&mut s, "timeline.insert_frame", params.clone());
+    assert_eq!(v["layers"], json!([artwork.0]));
+    assert_eq!(spans(&s, artwork), [(0, 2)]);
+    assert!(spans(&s, folder).is_empty());
+
+    s.set_frame(9);
+    let err = s.execute("timeline.insert_frame", &params).unwrap_err();
+    assert!(matches!(err, EngineError::State(message) if message == "a folder holds layers, not frames; pick a layer inside it"));
+    assert!(spans(&s, folder).is_empty());
+    assert_eq!(spans(&s, artwork), [(0, 2)]);
+}
+
+#[test]
 fn f5_advance_moves_the_playhead_onto_the_new_frame() {
     let mut s = Session::default();
     let a = layer_with(&mut s, &[(0, 1)]);

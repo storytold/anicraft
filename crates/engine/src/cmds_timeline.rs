@@ -279,6 +279,9 @@ fn insert_frame(s: &mut Session, p: &Value) -> Result<Value> {
     let mut frames = 0;
     for &id in &ids {
         let layer = s.layer_mut(Some(id))?;
+        if layer.kind == LayerKind::Folder {
+            return Err(EngineError::State("a folder holds layers, not frames; pick a layer inside it".into()));
+        }
         for _ in 0..count {
             if all && layer.keyframe_index_at(frame).is_none() && layer.end_frame() > frame {
                 // A gap (or the frames before the first key) under the playhead: insert an
