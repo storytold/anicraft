@@ -197,20 +197,35 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         // Imported, not adopted: the document is untitled, so Save asks for a new .anicraft
         // name and never writes over the Animate file.
         let fla = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("fla")) && crate::vfs::is_file(&path);
-        let imported = if fla {
-            // Through `vfs`, so an archive the browser handed over opens too (ADR 0036).
-            if crate::vfs::len(&path)? > anicraft_xfl::MAX_FLA_BYTES {
-                return Err(EngineError::Format(format!("{} is too large to open", path.display())));
+        // (document, report JSON fields) — the XFL and legacy-FLA importers share the
+        // report's shape, so the open path surfaces both alike.
+        type ImportedDoc = (anicraft_doc::Document, String, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value, serde_json::Value);
+        let imported: Result<ImportedDoc> = if fla {
+            // Through `vfs`, so an archive the browser handed over opens too (ADR 0036). The
+            // size is checked before reading, and the read stops past the limit, so a file
+            // that grows in between is refused too.
+            let max = anicraft_xfl::MAX_FLA_BYTES;
+            let data = if crate::vfs::len(&path)? > max { None } else { Some(crate::vfs::read_bounded(&path, max)?).filter(|d| d.len() as u64 <= max) };
+            match data {
+                None => Err(EngineError::Format(format!("{} is too large to open", path.display()))),
+                // The Flash 8–CS4 era compound binary (ADR 0096).
+                Some(data) if anicraft_fla::is_legacy(&data) => anicraft_fla::import(&data)
+                    .map(|(d, r)| (d, r.summary(), json!(r.skipped), json!(r.kept), json!(r.runs), json!(r.missing_fonts), json!(r.names)))
+                    .map_err(|e| EngineError::Format(format!("{}: {e}", path.display()))),
+                Some(data) => anicraft_xfl::import_fla(&data)
+                    .map(|(d, r)| (d, r.summary(), json!(r.skipped), json!(r.kept), json!(r.runs), json!(r.missing_fonts), json!(r.names)))
+                    .map_err(|e| EngineError::Format(format!("{}: {e}", path.display()))),
             }
-            anicraft_xfl::import_fla(&crate::vfs::read(&path)?)
         } else if crate::vfs::in_memory() {
-            return Err(EngineError::Param("an XFL document is a folder, which a web browser can't hand over: open the .fla instead".into()));
+            Err(EngineError::Param("an XFL document is a folder, which a web browser can't hand over: open the .fla instead".into()))
         } else {
             // The XFL reader opens the folder's files itself (ADR 0124).
             crate::access::check(&path, crate::access::Access::Read)?;
             anicraft_xfl::import_path(&path)
+                .map(|(d, r)| (d, r.summary(), json!(r.skipped), json!(r.kept), json!(r.runs), json!(r.missing_fonts), json!(r.names)))
+                .map_err(|e| EngineError::Format(format!("{}: {e}", path.display())))
         };
-        let (mut doc, report) = imported.map_err(|e| EngineError::Format(format!("{}: {e}", path.display())))?;
+        let (mut doc, summary, skipped, kept, runs, missing_fonts, named) = imported?;
         // Raw artwork arrives one shape per style: each keyframe's becomes one merged drawing,
         // as it was in Animate (ADR 0042).
         let merged = crate::merge::merge_document(&mut doc);
@@ -219,13 +234,13 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         s.recent.add(&path);
         let mut info = s.info();
         info["imported"] = json!(path.display().to_string());
-        info["report"] = json!(report.summary());
-        info["skipped"] = json!(report.skipped);
-        info["kept"] = json!(report.kept);
-        info["runs"] = json!(report.runs);
-        info["missing_fonts"] = json!(report.missing_fonts);
+        info["report"] = json!(summary);
+        info["skipped"] = skipped;
+        info["kept"] = kept;
+        info["runs"] = runs;
+        info["missing_fonts"] = missing_fonts;
         // The sounds and videos that didn't come across, by name and why (ADR 0086).
-        info["named"] = json!(report.names);
+        info["named"] = named;
         info["merged_keyframes"] = json!(merged);
         return Ok(info);
     }

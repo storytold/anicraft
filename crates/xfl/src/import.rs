@@ -8,14 +8,14 @@
 //! primitives; symbol instances with their matrix, colour effect (every style, ADR 0056), loop mode and first frame;
 //! library symbols (graphic, movie clip, button) with their own timelines, nested to any
 //! depth; bitmaps (library items, instances and bitmap fills) whose image is stored as PNG or
-//! JPEG in the package; text fields, laid out with this computer's fonts (`text`, ADR 0014);
+//! JPEG in the package, or in Animate's own lossless layout in `bin/` (`anicraft_flamedia`); text fields, laid out with this computer's fonts (`text`, ADR 0014);
 //! frame scripts, symbol linkage classes and the document class, kept verbatim (ADR 0013 tier
 //! 1); frame scripts in the ActionScript 3.0 subset run in Test Movie (tier 2), and the report
 //! lists which run and which are only kept; sounds whose file is in the package as WAV, Ogg
-//! Vorbis or MP3, and the sounds on frames that use them, buttons' states included, with their
+//! Vorbis or MP3, or as Animate's own raw PCM in `bin/`, and the sounds on frames that use them, buttons' states included, with their
 //! sync, repeats and effect or envelope (ADR 0057, ADR 0086); Screen Video videos as a still of
 //! their first frame (`video`, ADR 0086). Sounds and videos that don't come across are named in
-//! the report with why. Everything else (bitmaps kept only in Animate's own storage, video playback,
+//! the report with why. Everything else (variants of Animate's own media storage not yet seen, video playback,
 //! motion tweens with property curves, unknown filters) is counted in the report instead of guessed at,
 //! and so is whatever is drawn the nearest way AniCraft can (ragged, stipple and hatched
 //! strokes, reflecting gradients, …). The self-authored corpus in `tests/corpus/` covers
@@ -174,6 +174,55 @@ const MAX_BITMAPS: usize = 10_000;
 pub(crate) const MAX_BITMAP_PIXELS: u64 = 256 * 1024 * 1024;
 const MAX_SOUNDS: usize = 10_000;
 const MAX_VIDEOS: usize = 10_000;
+/// `data` as a WAV, Ogg Vorbis or MP3 file, when it starts like one, its container is complete
+/// ([`complete_container`]) and the decoders read it; `None` otherwise. Copies the data only
+/// when it passes the container check. This decides between such a file and raw PCM of the
+/// same length, so it is stricter than ordinary import, whose decoders forgive a damaged file.
+fn encoded_sound(data: &[u8], name: &str) -> Option<anicraft_doc::Sound> {
+    let format = anicraft_doc::audio::Format::sniff(data)?;
+    if !complete_container(data, format) {
+        return None;
+    }
+    anicraft_doc::Sound::from_data(anicraft_doc::SoundId(0), name, data.to_vec()).ok()
+}
+
+/// Whether `data` holds a whole file of `format`, as its own structure says: a WAV whose RIFF
+/// size and chunks (with a `data` chunk) all fit within it, so no declared length is cut
+/// short; an Ogg stream whose pages run exactly to its end, the last one ending the stream.
+/// MP3 frames carry no length of the whole, so an MP3 is one the decoder reads.
+pub(crate) fn complete_container(data: &[u8], format: anicraft_doc::audio::Format) -> bool {
+    let u32_at = |at: usize| data.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes);
+    match format {
+        anicraft_doc::audio::Format::Wav => {
+            let Some(riff) = u32_at(4).and_then(|n| usize::try_from(n).ok()).and_then(|n| n.checked_add(8)) else { return false };
+            if data.get(8..12) != Some(b"WAVE".as_slice()) || riff > data.len() {
+                return false;
+            }
+            let (mut at, mut found_data) = (12, false);
+            while at < riff {
+                let (Some(id), Some(n)) = (data.get(at..at + 4), u32_at(at + 4).and_then(|n| usize::try_from(n).ok())) else { return false };
+                let Some(end) = (at + 8).checked_add(n).filter(|&end| end <= riff) else { return false };
+                found_data |= id == b"data";
+                at = end + (n & 1);
+            }
+            found_data
+        }
+        anicraft_doc::audio::Format::Vorbis => {
+            let (mut at, mut last_flags) = (0, None);
+            while at < data.len() {
+                let (true, Some(&flags), Some(&segments)) = (data.get(at..at + 4) == Some(b"OggS".as_slice()), data.get(at + 5), data.get(at + 26)) else {
+                    return false;
+                };
+                let table = at + 27;
+                let Some(lacing) = data.get(table..table + usize::from(segments)) else { return false };
+                at = table + lacing.len() + lacing.iter().map(|&l| usize::from(l)).sum::<usize>();
+                last_flags = Some(flags);
+            }
+            at == data.len() && last_flags.is_some_and(|f| f & 0x04 != 0)
+        }
+        anicraft_doc::audio::Format::Mp3 => true,
+    }
+}
 
 /// Names the format of sound data that didn't decode, and why when it is a kind AniCraft reads:
 /// "AIFF", "WAV in IMA ADPCM", "Animate's own sound data".
@@ -967,8 +1016,9 @@ impl<'a> Builder<'a> {
 
     /// Reads the document's bitmap library items. Each one's image is looked for as the
     /// original file in `LIBRARY/` (XFL folders keep it there) and then as its data file in
-    /// `bin/`; either is used when it is a PNG or JPEG. Animate's own encodings of the data
-    /// file are not public, so those bitmaps are reported instead.
+    /// `bin/`; either is used when it is a PNG or JPEG, and the data file also when it is in
+    /// Animate's own lossless layout (`anicraft_flamedia`). A variant of that layout which
+    /// hasn't been observed is reported by name with why, not guessed at.
     fn register_bitmaps(&mut self, root: &X) -> Result<(), XflError> {
         for item in craft_xfl::media::Catalog::new(root).bitmaps().take(MAX_BITMAPS) {
             let Some(name) = item.name().filter(|n| !self.bitmaps.contains_key(*n)) else { continue };
@@ -985,6 +1035,9 @@ impl<'a> Builder<'a> {
             }
             let short: String = name.rsplit('/').next().unwrap_or(name).chars().take(256).collect();
             let (mut found_data, mut unreadable) = (false, false);
+            // Why data in Animate's own layout didn't decode, and its size when it was left out
+            // for being past what is left of the pixel budget.
+            let (mut why, mut over_budget) = (None, None);
             let mut bitmap = None;
             for path in candidates {
                 let bytes = match (self.read)(&path) {
@@ -998,11 +1051,42 @@ impl<'a> Builder<'a> {
                     }
                 };
                 found_data = true;
+                if anicraft_flamedia::is_bitmap(&bytes) {
+                    // What it would hold once decoded, read from its header and weighed against
+                    // what is left of the budget before anything is inflated. A header the
+                    // decoder refuses anyway (an unseen variant, a bad size) is left to say why.
+                    let decodable = |h: &anicraft_flamedia::BitmapHeader| {
+                        h.format == anicraft_flamedia::FORMAT_ARGB32 && h.compressed && h.width > 0 && h.height > 0 && u32::from(h.width.max(h.height)) <= anicraft_flamedia::MAX_EDGE
+                    };
+                    if let Some(h) = anicraft_flamedia::bitmap_header(&bytes).ok().filter(decodable)
+                        && self.bitmap_pixels.saturating_add(u64::from(h.width) * u64::from(h.height)) > self.bitmap_pixel_budget
+                    {
+                        over_budget.get_or_insert((h.width, h.height));
+                        continue;
+                    }
+                    match anicraft_flamedia::decode_bitmap(&bytes) {
+                        Ok(px) => match Bitmap::from_rgba(BitmapId(0), short.clone(), px.width, px.height, px.rgba) {
+                            Some(b) => {
+                                // Charged below, with every other bitmap, once it comes across.
+                                bitmap = Some(b);
+                                break;
+                            }
+                            None => {
+                                why.get_or_insert_with(|| anicraft_flamedia::DatError::BadSize.to_string());
+                            }
+                        },
+                        Err(e) => {
+                            why.get_or_insert_with(|| e.to_string());
+                        }
+                    }
+                    continue;
+                }
                 if let Ok(b) = Bitmap::from_image(BitmapId(0), short.clone(), bytes) {
                     bitmap = Some(b);
                     break;
                 }
             }
+            let shown: String = name.chars().take(256).collect();
             match bitmap {
                 Some(mut b) => {
                     let pixels = u64::from(b.width).saturating_mul(u64::from(b.height));
@@ -1018,7 +1102,11 @@ impl<'a> Builder<'a> {
                     self.bitmaps.insert(name.to_string(), b.id);
                     self.doc.bitmaps.push(Arc::new(b));
                 }
-                None if found_data => self.report.skip("bitmaps stored in Animate's own format"),
+                None if let Some((w, h)) = over_budget => {
+                    self.report.skip_named("bitmaps past the import pixel budget", format!("{shown}: {w} × {h} px"))
+                }
+                None if let Some(why) = why => self.report.skip_named("bitmaps in Animate's own format AniCraft can't decode", format!("{shown}: {why}")),
+                None if found_data => self.report.skip("bitmaps in formats AniCraft can't read"),
                 None if unreadable => self.report.skip("bitmaps whose files couldn't be read"),
                 None => self.report.skip("missing bitmap files"),
             }
@@ -1028,12 +1116,21 @@ impl<'a> Builder<'a> {
 
     /// Reads the document's sound library items (ADR 0057, ADR 0086). Like a bitmap, each one's
     /// sound is looked for as the original file in `LIBRARY/` and then as its data file in
-    /// `bin/`, and is used when it is a WAV, Ogg Vorbis or MP3 file the decoders read. Animate's
-    /// own encoding of the data file is not public, so those sounds are reported by name, as is
-    /// every other sound that doesn't come across, with its format and why (ADR 0039).
+    /// `bin/`, and is used when it is a WAV, Ogg Vorbis or MP3 file the decoders read. A data
+    /// file may also be Animate's own raw PCM (`anicraft_flamedia`), told by its length: exactly
+    /// the item's `sampleCount` frames of its `format` ("44kHz 16bit Stereo"), and not a WAV,
+    /// Ogg or MP3 file the decoders read; it comes across as a WAV. Every sound that doesn't
+    /// come across is reported by name, with its format and why (ADR 0039).
     fn register_sounds(&mut self, root: &X) -> Result<(), XflError> {
-        for item in craft_xfl::media::Catalog::new(root).sounds().take(MAX_SOUNDS) {
+        use craft_xfl::shape::XflElement;
+        // The same elements, in the same order, as the catalog's: for the attributes it doesn't
+        // read (`format`, `sampleCount`).
+        let raw: Vec<&X> = XflElement::child(root, "media").into_iter().flat_map(|m| XflElement::elements_named(m, "DOMSoundItem")).collect();
+        for (n, item) in craft_xfl::media::Catalog::new(root).sounds().take(MAX_SOUNDS).enumerate() {
             let Some(name) = item.name().filter(|n| !self.sounds.contains_key(*n)) else { continue };
+            let element = raw.get(n);
+            let raw_format = element.and_then(|e| XflElement::attr(*e, "format")).map(anicraft_flamedia::SoundFormat::from_xfl);
+            let sample_count = element.and_then(|e| XflElement::attr(*e, "sampleCount")).and_then(|v| v.trim().parse::<u64>().ok());
             let mut candidates = Vec::new();
             if let Some(href) = item.href() {
                 candidates.push((craft_xfl::media::library_member(href), false));
@@ -1057,6 +1154,30 @@ impl<'a> Builder<'a> {
                         continue;
                     }
                 };
+                // Animate's raw PCM, when the data file is exactly the item's length of it.
+                // Another length is a file in another format (an MP3 kept as it came).
+                let mut raw_why = None;
+                if from_bin && let (Some(format), Some(count)) = (&raw_format, sample_count) {
+                    match format.clone().and_then(|f| anicraft_flamedia::decode_sound(&bytes, f, Some(count))) {
+                        // A WAV, Ogg or MP3 file can be that length too: one the decoders read
+                        // whole is that file. Raw PCM whose first samples only look like such a
+                        // file's signature doesn't decode, and stays PCM.
+                        Ok(_) if let Some(s) = encoded_sound(&bytes, &short) => {
+                            sound = Some(s);
+                            break;
+                        }
+                        Ok(pcm) => match pcm.to_wav().map(|wav| anicraft_doc::Sound::from_data(anicraft_doc::SoundId(0), short.clone(), wav)) {
+                            Some(Ok(s)) => {
+                                sound = Some(s);
+                                break;
+                            }
+                            Some(Err(e)) => raw_why = Some(e.to_string()),
+                            None => raw_why = Some(anicraft_flamedia::DatError::TooLong.to_string()),
+                        },
+                        Err(anicraft_flamedia::DatError::LengthMismatch { .. }) => {}
+                        Err(e) => raw_why = Some(e.to_string()),
+                    }
+                }
                 // Named from the first bytes, before the data moves into the sound.
                 let head: Vec<u8> = bytes.iter().take(4096).copied().collect();
                 match anicraft_doc::Sound::from_data(anicraft_doc::SoundId(0), short.clone(), bytes) {
@@ -1065,7 +1186,10 @@ impl<'a> Builder<'a> {
                         break;
                     }
                     Err(e) => {
-                        why.get_or_insert_with(|| sound_format(&head, from_bin, &e));
+                        why.get_or_insert_with(|| match raw_why {
+                            Some(r) => format!("Animate's own sound data ({r})"),
+                            None => sound_format(&head, from_bin, &e),
+                        });
                     }
                 }
             }

@@ -108,6 +108,12 @@ impl MemFs {
         self.files.get(&key(path)?).map(|f| f.data.clone()).ok_or_else(|| not_found(path))
     }
 
+    /// The file's first `limit` bytes at most.
+    pub fn read_at_most(&self, path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+        let n = usize::try_from(limit).unwrap_or(usize::MAX);
+        self.files.get(&key(path)?).map(|f| f.data.iter().take(n).copied().collect()).ok_or_else(|| not_found(path))
+    }
+
     pub fn len(&self, path: &Path) -> io::Result<u64> {
         self.files.get(&key(path)?).map(|f| f.data.len() as u64).ok_or_else(|| not_found(path))
     }
@@ -198,6 +204,20 @@ pub fn take_written() -> Vec<(PathBuf, Vec<u8>)> {
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
     check(path, Access::Read)?;
     mem(|m| m.read(path)).unwrap_or_else(|| std::fs::read(path))
+}
+
+/// Reads at most `limit` bytes of the file, and one more when it holds them: a result
+/// longer than `limit` says the file is over it, without the rest being read.
+pub fn read_bounded(path: &Path, limit: u64) -> io::Result<Vec<u8>> {
+    let limit = limit.saturating_add(1);
+    match mem(|m| m.read_at_most(path, limit)) {
+        Some(r) => r,
+        None => {
+            let mut out = Vec::new();
+            io::Read::read_to_end(&mut io::Read::take(std::fs::File::open(path)?, limit), &mut out)?;
+            Ok(out)
+        }
+    }
 }
 
 pub fn read_to_string(path: &Path) -> io::Result<String> {
@@ -390,6 +410,23 @@ mod tests {
         let out = m.take_written();
         assert_eq!(out.iter().map(|(p, _)| p.clone()).collect::<Vec<_>>(), vec![PathBuf::from("out").join("frame_0001.png"), PathBuf::from("out").join("frame_0002.png")]);
         assert_eq!((m.bytes(), m.is_file(Path::new("in/walk.anicraft"))), (0, false), "emptied, the picked file too");
+    }
+
+    #[test]
+    fn bounded_reads_stop_one_byte_past_the_limit() {
+        let dir = std::env::temp_dir().join(format!("anicraft-vfs-{}-{}", std::process::id(), random_suffix()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("big.bin");
+        std::fs::write(&f, [7u8; 10]).unwrap();
+        assert_eq!(read_bounded(&f, 4).unwrap().len(), 5, "the extra byte says the file is over the limit");
+        assert_eq!(read_bounded(&f, 10).unwrap().len(), 10);
+        assert_eq!(read_bounded(&f, u64::MAX).unwrap().len(), 10);
+        std::fs::remove_dir_all(&dir).ok();
+        let mut m = MemFs::default();
+        m.put(Path::new("big.bin"), vec![7; 10]).unwrap();
+        assert_eq!(m.read_at_most(Path::new("big.bin"), 5).unwrap().len(), 5);
+        assert_eq!(m.read_at_most(Path::new("big.bin"), u64::MAX).unwrap().len(), 10);
+        assert_eq!(m.read_at_most(Path::new("nope"), 5).unwrap_err().kind(), io::ErrorKind::NotFound);
     }
 
     #[test]

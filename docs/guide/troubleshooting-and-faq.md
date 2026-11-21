@@ -159,8 +159,10 @@ damaged preferences file never stops AniCraft from starting: it falls back to th
   icon, or use **Open With › AniCraft**, whether AniCraft is running or not. If you have unsaved
   changes, AniCraft asks first. This is new and still being checked on real Macs; if it doesn't
   work for you, use **File › Open…** and please report it.
-* **An old `.fla`**: files saved by Flash CS4 or earlier use an older format. AniCraft says so;
-  open the file in Animate, save it again, then open that copy.
+* **An old `.fla`**: files saved by Flash 8, CS3 or CS4 open, with a few things left out (see
+  [Flash 8 to CS4 files](opening-animate-files.md#flash-8-to-cs4-files)). Files from Flash MX
+  2004 or earlier can't be opened yet. AniCraft says so; open the file in Animate, save it
+  again, then open that copy.
 * **A damaged `.fla`**: AniCraft refuses it with a sentence that says what is wrong, and never
   writes anything from it to your disk. Version 0.2.1 said "the central directory is outside the
   archive" about most files saved by Flash and Animate, which were not damaged: that is fixed.
