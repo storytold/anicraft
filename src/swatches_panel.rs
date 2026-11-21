@@ -250,12 +250,15 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
     let cell_rect = |i: usize| Rect::from_min_size(pos2(area.left() + (i % cols) as f32 * (CELL + GAP), area.top() + (i / cols) as f32 * (CELL + GAP)), vec2(CELL, CELL));
     let drag_id = Id::new("anicraft.swatches.drag");
     let mut dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id));
-    let pointer = ui.ctx().pointer_interact_pos();
-    // Where a dragged swatch would land: the cell under the pointer (the last one past the end).
-    let drop_at = |p: egui::Pos2| -> usize {
+    let drop_area = area.intersect(ui.clip_rect());
+    // Inside the visible grid, unused cells in the last row map to the last swatch.
+    let drop_at = |p: egui::Pos2| -> Option<usize> {
+        if !drop_area.contains(p) {
+            return None;
+        }
         let col = (((p.x - area.left()) / (CELL + GAP)).floor().max(0.0) as usize).min(cols - 1);
         let row = ((p.y - area.top()) / (CELL + GAP)).floor().max(0.0) as usize;
-        (row * cols + col).min(n.saturating_sub(1))
+        Some((row * cols + col).min(n.saturating_sub(1)))
     };
     let mut act: Option<Act> = None;
     for (i, sw) in swatches.iter().enumerate() {
@@ -294,7 +297,14 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
             app.swatch_sel = Some(i);
         }
         if resp.drag_stopped() && dragging == Some(i) {
-            if let Some(to) = pointer.map(drop_at)
+            // Use the first primary release that ends this drag. The pointer can move again this frame.
+            let released_at = ui.input(|input| {
+                input.events.iter().find_map(|event| match event {
+                    egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, .. } => Some(*pos),
+                    _ => None,
+                })
+            });
+            if let Some(to) = released_at.and_then(drop_at)
                 && to != i
             {
                 act = Some(Act::Move(i, to));
@@ -339,15 +349,13 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         });
     }
     // The drop mark while a swatch is dragged: a bar on the side it would land.
-    if let (Some(from), Some(at)) = (dragging, pointer)
+    if let (Some(from), Some(to)) = (dragging, ui.ctx().pointer_interact_pos().and_then(drop_at))
         && ui.ctx().dragged_id().is_some()
+        && to != from
     {
-        let to = drop_at(at);
-        if to != from {
-            let r = cell_rect(to);
-            let x = if to > from { r.right() + GAP * 0.5 } else { r.left() - GAP * 0.5 };
-            ui.painter().line_segment([pos2(x, r.top() - 2.0), pos2(x, r.bottom() + 2.0)], Stroke::new(2.0, T.accent));
-        }
+        let r = cell_rect(to);
+        let x = if to > from { r.right() + GAP * 0.5 } else { r.left() - GAP * 0.5 };
+        ui.painter().line_segment([pos2(x, r.top() - 2.0), pos2(x, r.bottom() + 2.0)], Stroke::new(2.0, T.accent));
     } else if ui.ctx().dragged_id().is_none() {
         dragging = None;
     }
@@ -429,6 +437,36 @@ mod tests {
             let mut out = ctx.run_ui(screen.clone(), |ui| app.frame(ui));
             out.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn dropping_outside_the_swatch_grid_keeps_the_order() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(PathBuf::from("unused.png")));
+        let before = app.s.doc.swatches.clone();
+        let frame = |app: &mut App, events| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 800.0))), events, ..Default::default() };
+            ctx.run_ui(input, |ui| grid(app, ui)).textures_delta.clear();
+        };
+        let press =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let drag = |app: &mut App, from, to, next| {
+            frame(app, vec![egui::Event::PointerMoved(from)]);
+            frame(app, vec![press(from, true)]);
+            frame(app, vec![egui::Event::PointerMoved(to)]);
+            frame(app, vec![press(to, false), next]);
+            frame(app, vec![]);
+        };
+        frame(&mut app, vec![]);
+        frame(&mut app, vec![]);
+        let center = |i: usize| ctx.read_response(Id::new(("anicraft.swatch", i))).unwrap().rect.center();
+        let start = center(1);
+        let end = center(before.len() - 1);
+        let outside = pos2(start.x, end.y + 3.0 * (CELL + GAP));
+        drag(&mut app, start, outside, egui::Event::PointerMoved(end));
+        assert_eq!(app.s.doc.swatches, before);
+        drag(&mut app, start, end, egui::Event::PointerGone);
+        assert_eq!(app.s.doc.swatches.last(), before.get(1));
     }
 
     #[test]
