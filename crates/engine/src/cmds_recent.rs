@@ -38,10 +38,20 @@ pub struct RecentFiles {
 /// ignore case (by default), and Windows takes either slash.
 pub fn same_file(a: &Path, b: &Path) -> bool {
     if cfg!(any(windows, target_os = "macos")) {
-        let norm = |p: &Path| p.to_string_lossy().replace('\\', "/").to_lowercase();
-        norm(a) == norm(b)
+        normalized_path_text(a) == normalized_path_text(b)
     } else {
         a == b
+    }
+}
+
+fn normalized_path_text(path: &Path) -> String {
+    let text = path.to_string_lossy();
+    if cfg!(windows) {
+        text.replace('\\', "/").to_lowercase()
+    } else if cfg!(target_os = "macos") {
+        text.to_lowercase()
+    } else {
+        text.into_owned()
     }
 }
 
@@ -53,7 +63,7 @@ pub fn exists(path: &Path) -> bool {
 /// A short, stable key for a path (64-bit FNV-1a of its normalised text, as hex): the name its
 /// thumbnail is kept under.
 pub fn thumb_key(path: &Path) -> String {
-    let text = if cfg!(any(windows, target_os = "macos")) { path.to_string_lossy().replace('\\', "/").to_lowercase() } else { path.to_string_lossy().into_owned() };
+    let text = normalized_path_text(path);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for b in text.bytes() {
         h ^= u64::from(b);
@@ -339,6 +349,17 @@ mod tests {
         assert_eq!(r.entries().iter().filter(|e| !e.pinned).count(), MAX_RECENT);
         assert!(r.entries().iter().take(MAX_PINNED).all(|e| e.pinned), "pins first");
         assert!(RecentFiles { entries: vec![RecentFile { path: PathBuf::from("x".repeat(5000)), pinned: false }] }.sanitized().is_empty());
+    }
+
+    #[test]
+    fn only_windows_treats_backslash_as_a_path_separator() {
+        let literal = Path::new(r"shots\opening.anicraft");
+        let nested = Path::new("shots/opening.anicraft");
+        let mut recent = RecentFiles::default();
+        recent.add(literal);
+        recent.add(nested);
+        assert_eq!(recent.len(), if cfg!(windows) { 1 } else { 2 });
+        assert_eq!(thumb_key(literal) == thumb_key(nested), cfg!(windows));
     }
 
     #[test]
