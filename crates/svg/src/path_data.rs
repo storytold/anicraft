@@ -142,6 +142,13 @@ mod tests {
     }
 
     #[test]
+    fn numbers_overflowing_f32_are_errors() {
+        for bad in ["M0 0 L1e39 0", "M0 0 v , 3.4028236692e38 z", "M0 0 l3e38 0 3e38 0"] {
+            assert!(parse_path_data(bad).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn bad_input_is_an_error() {
         assert!(parse_path_data("").unwrap().is_empty());
         for bad in ["10 10", "M", "M 1", "M0 0 A1 1 0 2 0 3 3", "M0 0 Z 4 4", "M0 0 L1e999 0", "M0 0 L1e300 0", "M0 0 X1 1"] {
