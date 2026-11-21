@@ -63,13 +63,9 @@ pub struct Sound {
 
 impl PartialEq for Sound {
     fn eq(&self, o: &Sound) -> bool {
-        self.id == o.id
-            && self.name == o.name
-            && self.format == o.format
-            && self.rate == o.rate
-            && self.channels == o.channels
-            && self.frames == o.frames
-            && (Arc::ptr_eq(&self.data, &o.data) || self.data == o.data)
+        // Every field is named, so a new one cannot be left out (`decoded` is a cache of `data`).
+        let Sound { id, name, format, rate, channels, frames, data, decoded: _ } = self;
+        *id == o.id && *name == o.name && *format == o.format && *rate == o.rate && *channels == o.channels && *frames == o.frames && (Arc::ptr_eq(data, &o.data) || *data == o.data)
     }
 }
 

@@ -1,6 +1,6 @@
 # ADR 0029: GPU stage, second slice: no readback, masks and groups on the GPU
 
-* Status: accepted (2026-11-09)
+* Status: accepted (2026-11-09); "nothing is installed on the device" superseded by ADR 0092 (the app installs error and device-lost handlers), and submitting from the render threads amended by ADR 0105 (the submit gate)
 * Relates to: roadmap M3, ADR 0019 (GPU stage, first slice), ADR 0007 (tiled stage), ADR 0010
   (mask layers), AGENTS.md rule 4 (the CPU renderer is the oracle)
 

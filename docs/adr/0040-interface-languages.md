@@ -1,6 +1,6 @@
 # ADR 0040: Interface languages (localisation, first slice)
 
-* Status: accepted (2026-11-10)
+* Status: accepted (2026-11-10); the Context's "dependencies from crates.io only" no longer holds: storytold/craft-libs is an allowed Git source, pinned by `rev` (`deny.toml`, AGENTS.md rule 10), and the app-local catalog parser stays only until this ADR's cutover
 * Relates to: ADR 0005 (typography and fonts), ADR 0006 (platforms), ADR 0022 (accessibility),
   ADR 0036 (web build); outside PR #38 (ideas credited below)
 

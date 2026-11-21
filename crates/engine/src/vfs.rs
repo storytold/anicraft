@@ -217,12 +217,18 @@ pub fn write(path: &Path, data: impl AsRef<[u8]>) -> io::Result<()> {
 }
 
 /// Like [`write`], but the file must not exist yet (`O_EXCL`: a planted file or symlink makes it
-/// fail instead of being written through). For temporary files.
+/// fail instead of being written through). For the temporary file a save writes and then
+/// renames over the document: its bytes are on the disk (`fsync`) before this returns, as the
+/// recovery copy's are (`recovery::write_atomic`). Without that a power cut soon after the
+/// rename can leave the new name on an empty file, with the old document already gone.
 pub fn write_new(path: &Path, data: impl AsRef<[u8]>) -> io::Result<()> {
     check(path, Access::Write)?;
     match mem(|m| m.write(path, data.as_ref().to_vec())) {
         Some(r) => r,
-        None => std::fs::OpenOptions::new().write(true).create_new(true).open(path).and_then(|mut f| io::Write::write_all(&mut f, data.as_ref())),
+        None => std::fs::OpenOptions::new().write(true).create_new(true).open(path).and_then(|mut f| {
+            io::Write::write_all(&mut f, data.as_ref())?;
+            f.sync_all()
+        }),
     }
 }
 

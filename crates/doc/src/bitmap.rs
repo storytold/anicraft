@@ -61,7 +61,9 @@ fn is_yes(b: &bool) -> bool {
 
 impl PartialEq for Bitmap {
     fn eq(&self, o: &Bitmap) -> bool {
-        self.id == o.id && self.name == o.name && self.width == o.width && self.height == o.height && self.smoothing == o.smoothing && (Arc::ptr_eq(&self.png, &o.png) || self.png == o.png)
+        // Every field is named, so a new one cannot be left out (`decoded` is a cache of `png`).
+        let Bitmap { id, name, width, height, png, smoothing, decoded: _ } = self;
+        *id == o.id && *name == o.name && *width == o.width && *height == o.height && *smoothing == o.smoothing && (Arc::ptr_eq(png, &o.png) || *png == o.png)
     }
 }
 

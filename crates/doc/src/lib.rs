@@ -504,12 +504,15 @@ pub struct Shape {
 
 impl PartialEq for Shape {
     fn eq(&self, o: &Shape) -> bool {
-        arc_eq(&self.path, &o.path)
-            && self.fill == o.fill
-            && self.stroke == o.stroke
-            && self.fill_rule == o.fill_rule
-            && self.merge == o.merge
-            && match (&self.warp, &o.warp) {
+        // Every field is named here, so a new one cannot be left out: a field this missed
+        // would make an edit to it alone look like no change (no undo step, no redraw).
+        let Shape { path, fill, stroke, fill_rule, merge, warp } = self;
+        arc_eq(path, &o.path)
+            && *fill == o.fill
+            && *stroke == o.stroke
+            && *fill_rule == o.fill_rule
+            && *merge == o.merge
+            && match (warp, &o.warp) {
                 (Some(a), Some(b)) => arc_eq(a, b),
                 (None, None) => true,
                 _ => false,
@@ -1297,7 +1300,9 @@ pub struct Keyframe {
 
 impl PartialEq for Keyframe {
     fn eq(&self, o: &Keyframe) -> bool {
-        self.start == o.start && self.duration == o.duration && self.tween == o.tween && self.motion == o.motion && self.hints == o.hints && self.label == o.label && self.sound == o.sound && self.script == o.script && self.pose == o.pose && arcs_eq(&self.elements, &o.elements)
+        // Every field is named, so a new one cannot be left out (as in `Shape::eq`).
+        let Keyframe { start, duration, elements, tween, motion, hints, label, sound, script, pose } = self;
+        *start == o.start && *duration == o.duration && *tween == o.tween && *motion == o.motion && *hints == o.hints && *label == o.label && *sound == o.sound && *script == o.script && *pose == o.pose && arcs_eq(elements, &o.elements)
     }
 }
 
@@ -1489,30 +1494,32 @@ pub const MAX_LAYER_HEIGHT: u8 = 3;
 
 impl PartialEq for Layer {
     fn eq(&self, o: &Layer) -> bool {
-        self.id == o.id
-            && self.name == o.name
-            && self.kind == o.kind
-            && self.parent == o.parent
-            && self.visible == o.visible
-            && self.locked == o.locked
-            && self.outline == o.outline
-            && self.color == o.color
-            && self.onion == o.onion
-            && self.height_rows == o.height_rows
-            && self.depth.to_bits() == o.depth.to_bits()
-            && self.depth_keys == o.depth_keys
-            && self.attached == o.attached
-            && self.volume.to_bits() == o.volume.to_bits()
-            && self.muted == o.muted
-            && self.mask_mode == o.mask_mode
-            && self.opacity.to_bits() == o.opacity.to_bits()
-            && self.rig_parent == o.rig_parent
-            && self.video == o.video
-            && match (&self.armature, &o.armature) {
+        // Every field is named, so a new one cannot be left out (as in `Shape::eq`).
+        let Layer { id, name, kind, parent, visible, locked, outline, color, onion, height_rows, keyframes, depth, depth_keys, attached, volume, muted, armature, mask_mode, opacity, rig_parent, video } = self;
+        *id == o.id
+            && *name == o.name
+            && *kind == o.kind
+            && *parent == o.parent
+            && *visible == o.visible
+            && *locked == o.locked
+            && *outline == o.outline
+            && *color == o.color
+            && *onion == o.onion
+            && *height_rows == o.height_rows
+            && depth.to_bits() == o.depth.to_bits()
+            && *depth_keys == o.depth_keys
+            && *attached == o.attached
+            && volume.to_bits() == o.volume.to_bits()
+            && *muted == o.muted
+            && *mask_mode == o.mask_mode
+            && opacity.to_bits() == o.opacity.to_bits()
+            && *rig_parent == o.rig_parent
+            && *video == o.video
+            && match (armature, &o.armature) {
                 (Some(a), Some(b)) => arc_eq(a, b),
                 (a, b) => a.is_none() && b.is_none(),
             }
-            && arcs_eq(&self.keyframes, &o.keyframes)
+            && arcs_eq(keyframes, &o.keyframes)
     }
 }
 
@@ -1635,7 +1642,8 @@ pub struct Timeline {
 
 impl PartialEq for Timeline {
     fn eq(&self, o: &Timeline) -> bool {
-        arcs_eq(&self.layers, &o.layers)
+        let Timeline { layers } = self;
+        arcs_eq(layers, &o.layers)
     }
 }
 
@@ -2075,7 +2083,9 @@ static NO_TIMELINE: Timeline = Timeline { layers: Vec::new() };
 
 impl PartialEq for Document {
     fn eq(&self, o: &Document) -> bool {
-        self.stage == o.stage && self.next_id == o.next_id && self.document_class == o.document_class && arcs_eq(&self.scenes, &o.scenes) && arcs_eq(&self.library, &o.library) && arcs_eq(&self.bitmaps, &o.bitmaps) && arcs_eq(&self.sounds, &o.sounds) && arc_eq(&self.library_tree, &o.library_tree) && arc_eq(&self.publish, &o.publish) && arc_eq(&self.aids, &o.aids) && arc_eq(&self.swatches, &o.swatches) && arc_eq(&self.eases, &o.eases) && arc_eq(&self.data, &o.data)
+        // Every field is named, so a new one cannot be left out (as in `Shape::eq`).
+        let Document { stage, scenes, library, bitmaps, sounds, library_tree, document_class, publish, swatches, aids, eases, data, next_id } = self;
+        *stage == o.stage && *next_id == o.next_id && *document_class == o.document_class && arcs_eq(scenes, &o.scenes) && arcs_eq(library, &o.library) && arcs_eq(bitmaps, &o.bitmaps) && arcs_eq(sounds, &o.sounds) && arc_eq(library_tree, &o.library_tree) && arc_eq(publish, &o.publish) && arc_eq(aids, &o.aids) && arc_eq(swatches, &o.swatches) && arc_eq(eases, &o.eases) && arc_eq(data, &o.data)
     }
 }
 

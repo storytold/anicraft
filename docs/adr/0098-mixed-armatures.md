@@ -1,6 +1,6 @@
 # ADR 0098: Mixed armatures (symbol instances and shapes in one armature)
 
-* Status: accepted (2026-11-16)
+* Status: accepted (2026-11-16); §6's "the engine writes the same envelope itself" is over: `craft-anicraft-format` takes the version (`write_version`), and the engine only chooses it (`format::version_for`)
 * Relates to: roadmap M7 (Bone/IK tool), ADR 0043 (instance armatures), ADR 0071 (shape
   armatures), ADR 0084 (springs, translation; first proposal of this), ADR 0090 (painted
   weights, reshaping; second proposal), ADR 0003 (file format), ADR 0004 (destructive actions)

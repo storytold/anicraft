@@ -1,6 +1,6 @@
 # ADR 0092: Surviving GPU failures mid-session, and Motion Editor filter tracks
 
-* Status: accepted (2026-11-13)
+* Status: accepted (2026-11-13); Part 1's cause ("load on the GPU") corrected by ADR 0105: the error came from submitting on another thread while the window reconfigured its surface. The handlers and the retry stay
 * Relates to: roadmap M3 (GPU stage) and M5 (filters), issues #207 and #255, ADR 0006
   (cross-platform start-up), ADR 0015 (autosave), ADR 0016 (motion tweens), ADR 0029 and 0032
   (the GPU stage on the window's device), ADR 0081 (eases), ADR 0083 (retiming), ADR 0091

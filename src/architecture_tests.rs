@@ -21,13 +21,33 @@ fn layer_of(name: &str) -> Option<u8> {
 }
 
 /// Dependency names in a manifest's `[dependencies]`, `[dev-dependencies]` and
-/// `[build-dependencies]` tables.
+/// `[build-dependencies]` tables, the same tables for one target
+/// (`[target.'cfg(windows)'.dependencies]`) and a dependency with a table of its own
+/// (`[dependencies.serde]`).
 fn dependencies(manifest: &str) -> Vec<String> {
+    const TABLES: [&str; 3] = ["dependencies", "dev-dependencies", "build-dependencies"];
     let mut out = Vec::new();
     let mut in_deps = false;
     for line in manifest.lines().map(str::trim) {
-        if line.starts_with('[') {
-            in_deps = matches!(line, "[dependencies]" | "[dev-dependencies]" | "[build-dependencies]");
+        if let Some(header) = line.strip_prefix('[') {
+            let header = header.trim_end_matches(']').trim();
+            // The table's own name is what follows the last dot outside quotes: a target's
+            // `cfg(...)` is quoted and may hold dots.
+            let (mut quote, mut cut) = (None, None);
+            for (i, c) in header.char_indices() {
+                match (quote, c) {
+                    (None, '\'' | '"') => quote = Some(c),
+                    (Some(q), c) if c == q => quote = None,
+                    (None, '.') => cut = Some(i),
+                    _ => {}
+                }
+            }
+            let (before, last) = cut.map_or(("", header), |i| (&header[..i], &header[i + 1..]));
+            in_deps = TABLES.contains(&last);
+            // `[dependencies.serde]`: the dependency is named in the header itself.
+            if !in_deps && TABLES.iter().any(|t| before == *t || before.ends_with(&format!(".{t}"))) {
+                out.push(last.trim_matches(['\'', '"']).to_string());
+            }
             continue;
         }
         if !in_deps || line.is_empty() || line.starts_with('#') {
@@ -96,4 +116,8 @@ fn the_workspace_map_in_agents_md_matches_the_crates() {
 fn dependency_lines_are_read_from_every_table() {
     let m = "[package]\nname = \"x\"\n\n[dependencies]\nanicraft-geom.workspace = true\nserde = { version = \"1\" }\n# a comment\n\n[dev-dependencies]\npng.workspace = true\n\n[lints]\nworkspace = true\n";
     assert_eq!(dependencies(m), ["anicraft-geom", "serde", "png"]);
+    // A dependency for one target, or with a table of its own, counts like any other: a crate
+    // can't reach the UI toolkit or a higher layer by naming it there.
+    let m = "[target.'cfg(not(target_arch = \"wasm32\"))'.dependencies]\negui = \"0.36\"\n\n[target.x86_64-pc-windows-msvc.build-dependencies]\nwinit = \"0.30\"\n\n[dependencies.anicraft-engine]\npath = \"../engine\"\n\n[features]\ndefault = []\n";
+    assert_eq!(dependencies(m), ["egui", "winit", "anicraft-engine"]);
 }

@@ -1,6 +1,6 @@
 # ADR 0015: Crash-recovery autosave
 
-* Status: accepted (2026-11-09)
+* Status: accepted (2026-11-09); "Not yet: several documents open at once" is done by ADR 0112 (one recovery copy and one writer per open document)
 * Relates to: roadmap M8 (crash-recovery autosave), ADR 0001 (persistent document), ADR 0003
   (file format), ADR 0004 (destructive actions), ADR 0006 (platform layer)
 

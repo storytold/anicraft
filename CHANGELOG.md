@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+* **Reliability fixes from the November principal-engineer review** (M8,
+  `docs/reviews/2026-11-principal-review.md`).
+  * **Save is flushed to the disk** before the new file replaces the old one, as the
+    crash-recovery copy already was: a power cut right after a save can no longer leave an
+    empty document.
+  * **History picks and Save As Command stay with their document.** Showing another tab used
+    to keep the picked steps (and an open Save As Command) and apply them to that document's
+    history.
+  * **A document put aside keeps no pictures**, also when one was still being drawn as you
+    switched.
 * **The roadmap is now a guideline, with a parity matrix** (M8, ADR 0125). Docs only.
   `docs/parity.md` compares AniCraft with the reference app feature by feature (done, partial,
   missing, won't do), checked against the code and the guide. `docs/roadmap.md` replaces the
