@@ -202,10 +202,10 @@ As in Animate, the keys keep you moving along the timeline:
 * **F6** or **F7** on a frame that is already a keyframe adds the new keyframe on the *next*
   frame and moves there, so you can draw, press **F6**, draw again, and so on. On any other
   frame they key the frame you're on.
-* With no frames selected (for example after scrubbing the playhead), **F5** adds a frame on
-  every layer that has frames at or after the playhead, so the layers stay in step. Layers that
-  end before the playhead are left alone. When no layer reaches the playhead, it lengthens the
-  layer you're on up to it.
+* With no frames selected (for example after stepping the playhead out of the selection),
+  **F5** adds a frame on every layer that has frames at or after the playhead, so the layers
+  stay in step. Layers that end before the playhead are left alone. When no layer reaches the
+  playhead, it lengthens the layer you're on up to it.
 * With a frame selected, the keys act on that frame's layer, and the selection moves with the
   playhead.
 * With several frames selected, **F6** makes every one of them a keyframe of what it showed, and
@@ -220,6 +220,8 @@ An empty frame shows a hint in **Properties › Frame**: press **F7** to start d
 * Click a frame to select it and move the playhead there.
 * **Shift**-click, or drag across frames, to select a range. A selection can span several
   layers.
+* Click the playhead (the frame ruler) to select that frame on every layer. **F5**, **F6**
+  and the other frame keys then act on all layers, until you click a frame of one layer.
 * **Ctrl+Alt+A** selects every frame.
 
 The frame keys, the header buttons and the right-click menu all act on the whole selection.
