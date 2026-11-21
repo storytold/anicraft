@@ -317,6 +317,7 @@ dependencies = [
  "anicraft-svg",
  "anicraft-text",
  "anicraft-xfl",
+ "anicraft-xml",
  "craft-anicraft-format",
  "craft-csv",
  "craft-gif",

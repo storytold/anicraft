@@ -30,6 +30,7 @@ regex.workspace = true
 craft-csv.workspace = true
 
 [dev-dependencies]
+anicraft-xml.workspace = true
 # Packs the XFL corpus into .fla archives in tests (ADR 0054; already in the tree through xfl).
 miniz_oxide = "0.8"
 # Plug-in test fixtures written in WebAssembly text (Apache-2.0 WITH LLVM-exception).
