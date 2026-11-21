@@ -292,6 +292,9 @@ pub fn run(argv: &[String]) -> Result<String, String> {
             serde_json::to_string_pretty(&s.info()).map_err(|e| e.to_string())
         }
         "render" => {
+            if let Some((key, _)) = a.flags.iter().find(|(key, _)| !matches!(key.as_str(), "out" | "frame" | "scale" | "plugins")) {
+                return Err(format!("unknown render option --{key}"));
+            }
             let mut s = session(&a, Some(src.ok_or("render needs a file or --sample")?))?;
             let out = a.flag("out").ok_or("render needs --out <file.png>")?;
             let mut p = json!({"path": out, "frame": one_based(&a, "frame")?.unwrap_or(0)});
@@ -950,6 +953,12 @@ pub(crate) mod tests {
         for flag in ["--version", "-V", "version"] {
             assert_eq!(run(&[flag.to_string()]).unwrap(), format!("anicraft-cli {}", env!("CARGO_PKG_VERSION")));
         }
+    }
+
+    #[test]
+    fn render_rejects_unknown_options_before_opening_the_document() {
+        let argv = ["render", "missing.anicraft", "--frmae", "12"].map(str::to_owned);
+        assert_eq!(run(&argv).unwrap_err(), "unknown render option --frmae");
     }
 
     #[test]
