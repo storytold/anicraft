@@ -767,14 +767,15 @@ pub fn serve_in<R: BufRead, W: Write>(s: &mut Session, roots: Option<&Arc<Roots>
             }
             Line::Text(l) => l,
         };
+        let line = line.trim_start_matches('\u{feff}');
         if line.trim().is_empty() {
             continue;
         }
-        if line.contains("\"quit\"") && serde_json::from_str::<Value>(&line).ok().and_then(|v| v.get("cmd").cloned()) == Some(json!("quit")) {
+        if line.contains("\"quit\"") && serde_json::from_str::<Value>(line).ok().and_then(|v| v.get("cmd").cloned()) == Some(json!("quit")) {
             writeln!(out, "{}", json!({"ok": true, "bye": true}))?;
             break;
         }
-        let resp = handle_request_in(s, roots, &line);
+        let resp = handle_request_in(s, roots, line);
         writeln!(out, "{resp}")?;
         out.flush()?;
     }
@@ -932,7 +933,7 @@ pub(crate) mod tests {
     #[test]
     fn serve_round_trip() {
         let mut s = Session::default();
-        let input = b"\xef\xbb\xbf{\"id\":1,\"cmd\":\"draw.rect\",\"params\":{\"x\":1,\"y\":1,\"w\":5,\"h\":5}}\nnot json\n{\"id\":3,\"cmd\":\"nope\"}\n{\"cmd\":\"quit\"}\n{\"id\":4,\"cmd\":\"edit.undo\"}\n";
+        let input = b"\xef\xbb\xbf{\"id\":1,\"cmd\":\"draw.rect\",\"params\":{\"x\":1,\"y\":1,\"w\":5,\"h\":5}}\nnot json\n{\"id\":3,\"cmd\":\"nope\"}\n\xef\xbb\xbf{\"cmd\":\"quit\"}\n{\"id\":4,\"cmd\":\"edit.undo\"}\n";
         let mut out = Vec::new();
         serve(&mut s, &input[..], &mut out).unwrap();
         let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
