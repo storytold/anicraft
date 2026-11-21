@@ -122,6 +122,31 @@ fn switching_keeps_each_documents_undo_selection_playhead_and_view() {
 }
 
 #[test]
+fn history_picks_and_save_as_command_stay_with_their_document() {
+    let (_ctx, mut app) = app();
+    app.macros.test_folder = Some(std::env::temp_dir().join(format!("anicraft-tabs-picks-{}", std::process::id())));
+    three(&mut app);
+    // The second document has as long a history as the third, so the same numbers name steps
+    // in both.
+    assert!(activate(&mut app, 1));
+    for x in [10, 80] {
+        app.run("draw.rect", json!({"x": x, "y": 10, "w": 50, "h": 50}));
+    }
+    assert!(activate(&mut app, 2));
+    for x in [10, 80] {
+        app.run("draw.ellipse", json!({"x": x, "y": 10, "w": 50, "h": 50}));
+    }
+    crate::macros_ui::pick(&mut app, 0, false, false);
+    crate::macros_ui::pick(&mut app, 1, true, false);
+    crate::macros_ui::open_save(&mut app);
+    assert!(app.macros.save.is_some() && crate::macros_ui::picked(&mut app).len() == 2);
+    // Shown another document, nothing is picked there and nothing waits to be saved from it.
+    assert!(activate(&mut app, 1));
+    assert!(app.macros.save.is_none(), "Save As Command listed the other document's steps");
+    assert!(crate::macros_ui::picked(&mut app).is_empty(), "the other document's picks");
+}
+
+#[test]
 fn a_copy_in_one_document_pastes_into_another_with_its_symbols() {
     let (_, mut app) = app();
     app.tabs.keep_first();

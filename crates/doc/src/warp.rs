@@ -88,7 +88,9 @@ pub struct Warp {
 
 impl PartialEq for Warp {
     fn eq(&self, o: &Warp) -> bool {
-        crate::arc_eq(&self.rest, &o.rest) && self.resolution == o.resolution && self.pins == o.pins && self.shown == o.shown
+        // Every field is named, so a new one cannot be left out of the comparison.
+        let Warp { rest, resolution, pins, shown } = self;
+        crate::arc_eq(rest, &o.rest) && *resolution == o.resolution && *pins == o.pins && *shown == o.shown
     }
 }
 

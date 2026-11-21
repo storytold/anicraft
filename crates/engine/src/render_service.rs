@@ -341,6 +341,9 @@ pub struct FrameCache {
     pub native_budget_bytes: usize,
     pub hits: u64,
     pub misses: u64,
+    /// How many times the cache was cleared: a picture whose drawing began before a clear
+    /// belongs to the document that was put aside, and is not kept.
+    cleared: u64,
 }
 
 /// `(bytes in memory, bytes on the GPU)` an image holds.
@@ -351,7 +354,7 @@ fn cost(img: &FrameImage) -> (usize, usize) {
 
 impl FrameCache {
     pub fn new(budget_bytes: usize) -> Self {
-        FrameCache { map: HashMap::new(), tick: 0, bytes: 0, native_bytes: 0, budget_bytes, native_budget_bytes: DEFAULT_NATIVE_CACHE_BYTES, hits: 0, misses: 0 }
+        FrameCache { map: HashMap::new(), tick: 0, bytes: 0, native_bytes: 0, budget_bytes, native_budget_bytes: DEFAULT_NATIVE_CACHE_BYTES, hits: 0, misses: 0, cleared: 0 }
     }
     pub fn get(&mut self, key: u64) -> Option<Arc<FrameImage>> {
         self.tick += 1;
@@ -403,6 +406,7 @@ impl FrameCache {
         self.map.clear();
         self.bytes = 0;
         self.native_bytes = 0;
+        self.cleared += 1;
     }
     pub fn len(&self) -> usize {
         self.map.len()
@@ -609,7 +613,16 @@ impl RenderService {
 
     /// Forgets every finished picture, in memory and on the GPU: an editor showing another
     /// document calls it, so the one put aside keeps no pictures (ADR 0112).
+    ///
+    /// Work still waiting is dropped, and a batch the worker is drawing right now is thrown
+    /// away when it finishes (it began before the clear), so nothing of that document comes
+    /// back into the cache afterwards.
     pub fn forget_pictures(&self) {
+        {
+            let mut q = self.queue();
+            q.urgent.clear();
+            q.prefetch.clear();
+        }
         self.cache().clear();
     }
 
@@ -670,16 +683,19 @@ fn worker_loop(s: &Shared) {
                 q = s.wake.wait(q).unwrap_or_else(PoisonError::into_inner);
             }
         };
-        let todo: Vec<FrameJob> = {
+        let (todo, cleared): (Vec<FrameJob>, u64) = {
             let cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            jobs.iter().filter(|j| !cache.contains(j.key)).cloned().collect()
+            (jobs.iter().filter(|j| !cache.contains(j.key)).cloned().collect(), cache.cleared)
         };
         let slot = s.raster.lock().unwrap_or_else(PoisonError::into_inner).clone();
         let imgs = render_batch_by(&todo, &slot);
         {
             let mut cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            for img in imgs {
-                cache.insert(Arc::new(img));
+            // Cleared meanwhile (`forget_pictures`): these show a document put aside.
+            if cache.cleared == cleared {
+                for img in imgs {
+                    cache.insert(Arc::new(img));
+                }
             }
         }
         {
@@ -716,6 +732,28 @@ mod tests {
         assert_eq!(img.rgba_premul, direct.rgba_premul);
         // second request is a cache hit
         assert!(svc.request(j).is_some());
+    }
+
+    /// Forgetting the pictures (another document is shown, ADR 0112) also covers the ones
+    /// still being drawn: none of them lands in the cache afterwards.
+    #[test]
+    fn pictures_in_progress_are_not_kept_once_forgotten() {
+        let doc = sample::demo();
+        for round in 0..20u64 {
+            let svc = RenderService::new(64 << 20, None);
+            svc.prefetch((0..8).map(|f| job(&doc, 100 + round, f)).collect());
+            // At a different moment of the worker's batch each round.
+            std::thread::sleep(std::time::Duration::from_micros(round * 150));
+            svc.forget_pictures();
+            for _ in 0..10_000 {
+                if !svc.busy() {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            assert!(!svc.busy(), "the worker finished");
+            assert_eq!(svc.cache_stats().0, 0, "round {round}: a picture drawn for the forgotten document was kept");
+        }
     }
 
     #[test]

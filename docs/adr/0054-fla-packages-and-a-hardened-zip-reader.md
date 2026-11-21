@@ -1,6 +1,6 @@
 # ADR 0054: `.fla` packages: corpus variants and a hardened zip reader
 
-* Status: accepted (2026-11-11)
+* Status: accepted (2026-11-11); the reader moved, with these limits, from `crates/xfl/src/zip.rs` to storytold/craft-libs (`craft-xfl`, re-exported as `anicraft_xfl::zip`)
 * Relates to: ADR 0009 (XFL import, own zip reader), ADR 0035 (the XFL corpus and golden
   renders), ADR 0036 (web build: a `.fla` handed over as bytes), roadmap M4
 

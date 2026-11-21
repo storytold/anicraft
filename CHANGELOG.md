@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+* **Reliability fixes from the November principal-engineer review** (M8,
+  `docs/reviews/2026-11-principal-review.md`).
+  * **Save is flushed to the disk** before the new file replaces the old one, as the
+    crash-recovery copy already was: a power cut right after a save can no longer leave an
+    empty document.
+  * **History picks and Save As Command stay with their document.** Showing another tab used
+    to keep the picked steps (and an open Save As Command) and apply them to that document's
+    history.
+  * **A document put aside keeps no pictures**, also when one was still being drawn as you
+    switched.
 * **Text: paths you can reshape, lines on a path, and the rest of the text-field API** (M5,
   ADR 0107).
   * **Edit the path of text on a path in place.** With the Subselection tool (or Properties ›

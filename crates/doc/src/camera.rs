@@ -44,7 +44,8 @@ pub struct DepthKey {
 
 impl PartialEq for DepthKey {
     fn eq(&self, o: &DepthKey) -> bool {
-        self.frame == o.frame && self.depth.to_bits() == o.depth.to_bits()
+        let DepthKey { frame, depth } = self;
+        *frame == o.frame && depth.to_bits() == o.depth.to_bits()
     }
 }
 

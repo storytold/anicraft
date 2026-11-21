@@ -1,6 +1,6 @@
 # ADR 0009: XFL / FLA import
 
-* Status: accepted (2026-10-29)
+* Status: accepted (2026-10-29); its own zip reader now comes from storytold/craft-libs (`craft-xfl`, re-exported as `anicraft_xfl::zip`), with the limits ADR 0054 set
 * Relates to: roadmap M4 (the project lead's first interchange priority), ADR 0003 (file format)
 
 ## Context

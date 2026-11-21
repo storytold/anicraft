@@ -70,7 +70,7 @@ fn undo_step_in_a_large_document_costs_only_what_changed() {
     let before = s.doc.clone();
     run(&mut s, "element.translate", json!({"dx": 1, "dy": 0}));
     let shared = before.timeline(0).layers.iter().zip(&s.doc.timeline(s.scene).layers).filter(|(a, b)| std::sync::Arc::ptr_eq(a, b)).count();
-    assert_eq!(shared, 19);
+    assert_eq!(shared, before.timeline(0).layers.len() - 1, "every layer but the edited one");
 }
 
 #[test]
@@ -579,9 +579,28 @@ fn save_load_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Adversarial params for every command: must return Ok or Err, never panic.
-#[test]
-fn panic_hunt_every_command() {
+/// One test per starting document, `panic_hunt_every_command::<start>`, so the test runner
+/// runs them side by side: as one test the sweep took 318 s of the 319 s the engine's tests
+/// take (docs/reviews/2026-11-principal-review.md). The names are the starting documents in
+/// the order [`panic_hunt`] lists them.
+macro_rules! panic_hunts {
+    ($($start:ident),*) => {
+        const HUNTS: &[&str] = &[$(stringify!($start)),*];
+        mod panic_hunt_every_command {
+            $(
+                #[test]
+                fn $start() {
+                    super::panic_hunt(stringify!($start));
+                }
+            )*
+        }
+    };
+}
+panic_hunts!(blank, demo, with_sound, arm, on_path, raw, rig, shaped, mixed, warped, layered, in_symbol, keyed, library, button, grouped, eased);
+
+/// Adversarial params for every command, from the starting document called `only`: must return
+/// Ok or Err, never panic. Every start gets the whole hostile list, whichever is run.
+fn panic_hunt(only: &str) {
     let mut hostile: Vec<Value> = vec![
         Value::Null,
         json!({}),
@@ -1010,7 +1029,10 @@ Exec=evil", "data_home": "relative/share", "refresh": false}),
         json!({"parent": u64::MAX, "layer": limbs.get(1), "keep": false, "sx": 0, "sy": 0}),
         json!({"parent": null, "layers": [u64::MAX, 0], "frame": 4_000_000_000u64}),
     ]);
-    for start in [Session::default(), Session::new(sample::demo()), Session::new(with_sound), arm, on_path, raw, rig, shaped, mixed, warped, layered, in_symbol, keyed, library, button, grouped, eased] {
+    // A start added here needs its name in `panic_hunts!` (the array's length says so).
+    let starts: [Session; HUNTS.len()] = [Session::default(), Session::new(sample::demo()), Session::new(with_sound), arm, on_path, raw, rig, shaped, mixed, warped, layered, in_symbol, keyed, library, button, grouped, eased];
+    let which = HUNTS.iter().position(|n| *n == only).unwrap_or_else(|| panic!("no starting document is called {only}"));
+    for start in starts.into_iter().skip(which).take(1) {
         let mut s = start;
         for spec in commands().iter().filter(|c| !skip(c.id)) {
             for p in &hostile {
