@@ -228,7 +228,7 @@ fn list(app: &mut App, ui: &mut egui::Ui, t: &Tree) {
     let mut toggle: Option<String> = None;
     let mut select: Option<String> = None;
     let mut go: Option<usize> = None;
-    let room = (ui.available_height() - 8.0).clamp(140.0, 320.0);
+    let room = (ui.available_height() - 8.0).max(0.0);
     let filtering = !app.explorer.filter.trim().is_empty();
     egui::ScrollArea::vertical().id_salt("explorer_rows").max_height(room).auto_shrink([false, true]).show_rows(ui, TARGET, t.rows.len(), |ui, range| {
         for i in range {
