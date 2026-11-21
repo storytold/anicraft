@@ -137,6 +137,9 @@ If the status bar ever says "Autosave failed", save your work by hand; AniCraft 
 Preferences, shortcuts, recent files, recovery copies, your templates and your plug-ins all live
 in one settings folder. Its path is shown at the bottom of the Preferences window.
 
+A [portable copy](getting-started.md#portable-copies) keeps its settings in a `data` folder beside
+AniCraft. If that folder can't be written to, AniCraft uses the standard settings folder below.
+
 | System | Settings folder |
 |---|---|
 | Windows | `%APPDATA%\AniCraft` |
