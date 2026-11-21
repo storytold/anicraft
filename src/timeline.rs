@@ -603,10 +603,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     painter.rect_filled(Rect::from_min_max(body.left_top(), pos2(grid.left(), ruler.bottom())), 0.0, T.panel_alt);
     let heading = painter.text(pos2(body.left() + 10.0, ruler.center().y), Align2::LEFT_CENTER, tr!("Layers"), font(Type::Heading), color(Type::Heading));
     // The parenting view's toggle sits beside the heading, as in Animate (ADR 0113).
-    {
-        let side = TOGGLE.min(RULER_H);
-        crate::parenting::head_toggle(app, ui, &painter, Rect::from_center_size(pos2(heading.right() + 8.0 + side * 0.5, ruler.center().y), vec2(side, side)));
-    }
+    let header_side = TOGGLE.min(RULER_H);
+    let parent_toggle = Rect::from_center_size(pos2(heading.right() + 8.0 + header_side * 0.5, ruler.center().y), vec2(header_side, header_side));
+    crate::parenting::head_toggle(app, ui, &painter, parent_toggle);
+    let all_layers_head =
+        |k: f32| Rect::from_center_size(pos2(grid.left() - 16.0 - k * (TOGGLE + 2.0), ruler.center().y), vec2(header_side, header_side));
     // The eye, the padlock and the square above the columns they head show, lock or outline
     // every layer at once, as in Animate (#422). Each shows its other face once every layer
     // is that way, and the next click brings them all back.
@@ -617,15 +618,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let any = plain().next().is_some();
             (any && plain().all(|l| !l.visible), any && plain().all(|l| l.locked), any && plain().all(|l| l.outline))
         };
-        let side = TOGGLE.min(RULER_H);
-        let head = |k: f32| Rect::from_center_size(pos2(grid.left() - 16.0 - k * (TOGGLE + 2.0), ruler.center().y), vec2(side, side));
         let hover = ui.input(|inp| inp.pointer.hover_pos());
         for (k, id, salt, name, away) in [
             (2.0, "layer.toggle_visible", "eye", if all_hidden { tr!("Show all layers") } else { tr!("Hide all layers") }, all_hidden),
             (1.0, "layer.toggle_lock", "lock", if all_locked { tr!("Unlock all layers") } else { tr!("Lock all layers") }, all_locked),
             (0.0, "layer.toggle_outline", "outline", if all_outline { tr!("Show all layers as artwork") } else { tr!("Show all layers as outlines") }, all_outline),
         ] {
-            let r = head(k);
+            let r = all_layers_head(k);
             if hover.is_some_and(|h| r.contains(h)) {
                 painter.rect_filled(r, T.rc(), T.hover);
             }
@@ -1620,8 +1619,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let footer = Rect::from_min_max(pos2(body.left(), body.bottom() - FOOTER_H), pos2(grid.left(), body.bottom()));
     if n_layers > rows_visible {
         let more = trn!("{first}–{last} of {n} layer", "{first}–{last} of {n} layers", n_layers, first = first_row + 1, last = (first_row + rows_visible).min(n_layers));
-        // In the "Layers" header row, never over a layer row.
-        painter.text(pos2(grid.left() - 8.0, ruler.center().y), Align2::RIGHT_CENTER, more, font(Type::Caption), color(Type::Caption));
+        // Use the gap between the two sets of header buttons. Keep the count available on the heading when it does not fit.
+        let tint = color(Type::Caption);
+        let label = painter.layout_no_wrap(more.clone(), font(Type::Caption), tint);
+        let right = all_layers_head(2.0).left() - 4.0;
+        let at = pos2(right - label.rect.width(), ruler.center().y - label.rect.height() * 0.5);
+        let fits = at.x >= parent_toggle.right() + 4.0;
+        let label_rect = Rect::from_min_size(at, label.rect.size());
+        if fits {
+            painter.galley(at, label, tint);
+        }
+        let response = ui.interact(if fits { label_rect } else { heading }, ui.id().with("layer_range"), Sense::hover());
+        a11y::control(ui, &response, WidgetType::Label, &more, None);
+        if !fits {
+            response.on_hover_text(more);
+        }
     }
     {
         painter.rect_filled(footer, 0.0, T.panel_alt);
