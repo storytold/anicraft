@@ -263,10 +263,12 @@ fn parse_args(args: impl IntoIterator<Item = String>) -> Result<Args, String> {
     while let Some(a) = args.next() {
         match a.as_str() {
             "--screenshot" => out.shot = Some(PathBuf::from(args.next().ok_or("--screenshot needs a file name")?)), // i18n-exempt: a console message
-            "--open" => out.open = args.next(),
+            // i18n-exempt: a console message
+            "--open" => out.open = Some(args.next().filter(|value| !value.starts_with('-')).ok_or("--open needs a panel name")?),
             // i18n-exempt: a console message
             "--control" => out.control = Some(anicraft_cli::control::parse_port(&args.next().unwrap_or_default()).map_err(|e| format!("--control: {e}"))?),
-            "--renderer" => out.renderer = args.next(),
+            // i18n-exempt: a console message
+            "--renderer" => out.renderer = Some(args.next().filter(|value| !value.starts_with('-')).ok_or("--renderer needs a renderer name")?),
             "--shot-width" => match args.next().and_then(|s| s.parse::<u32>().ok()) {
                 Some(w) if (64..=8192).contains(&w) => out.look.shot_width = Some(w),
                 _ => return Err("--shot-width takes a width in pixels, from 64 to 8192".into()), // i18n-exempt: a console message
@@ -449,6 +451,18 @@ mod args_tests {
 
     fn parse(args: &[&str]) -> Args {
         parse_args(args.iter().map(|a| a.to_string())).unwrap_or_else(|e| panic!("{args:?}: {e}"))
+    }
+
+    #[test]
+    fn desktop_panel_and_renderer_options_require_values() {
+        for (flag, expected) in [("--open", "--open needs a panel name"), ("--renderer", "--renderer needs a renderer name")] {
+            for args in [&[flag][..], &[flag, "--help"], &[flag, "--version"]] {
+                assert_eq!(parse_args(args.iter().map(|arg| arg.to_string())).unwrap_err(), expected, "{args:?}");
+            }
+        }
+        let a = parse(&["--open", "testmovie", "--renderer", "wgpu", "walk.anicraft"]);
+        assert_eq!((a.open.as_deref(), a.renderer.as_deref()), (Some("testmovie"), Some("wgpu")));
+        assert_eq!(a.file, Some(PathBuf::from("walk.anicraft")));
     }
 
     /// Windows (`"%1"`) and Linux (`%f`) hand a double-clicked document over as the one plain
