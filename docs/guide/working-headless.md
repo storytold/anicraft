@@ -39,11 +39,17 @@ Two rules hold everywhere:
 | `gif <file> --out anim.gif [--from A] [--to B] [--scale S] [--overwrite yes]` | An animated GIF. |
 | `apng <file> --out anim.png [...]` | An animated PNG, full colour with real transparency. |
 | `webp <file> --out anim.webp [...]` | A lossless animated WebP. |
+| `formats` | A JSON list of available export formats and their IDs. |
+| `export <file> --format ID --out PATH` | A built-in or plug-in export, selected by format ID. |
 | `new --out file.anicraft [--width W] [--height H] [--fps F]` | A new, empty document. |
 
 `apng` and `webp` take the same range and scale flags as `gif`, plus `--loop forever` (the
 default) or `--loop N` for how many times it plays, and `--background yes` to draw the stage
 colour instead of transparency.
+
+Use the `id` from `formats` with `export --format`. To use an exporter plug-in, pass the
+same `--plugins <folder>` to both commands. For PNG and SVG, `export --frame N` selects a
+frame using the same 1-based numbering as `render`.
 
 Every frame is drawn by the same renderer the app uses for its exports, so what you render here
 matches File › Export exactly.
@@ -53,18 +59,18 @@ anicraft-cli render shot010.anicraft --frame 24 --out shot010_f24.png
 anicraft-cli render-seq shot010.anicraft --out-dir frames/shot010 --scale 0.5
 anicraft-cli gif --sample --out preview.gif --scale 0.5
 anicraft-cli webp shot010.anicraft --out loop.webp --loop 3
+anicraft-cli export --sample --format svg --frame 1 --out preview.svg
 ```
 
 ### Replacing files
 
 Exports never overwrite a file silently. If the output already exists, the command fails and
 says so ("Replace existing file? f.png already exists…"). Pass `--overwrite yes` to `gif`,
-`apng` and `webp` when replacing is what you want. `render` has no such flag: delete the old file
-first, or run the export command itself with `"confirm": true` (see
-[Destructive commands need "confirm"](#destructive-commands-need-confirm)):
+`apng`, `webp` or `export` when you want to replace it. To replace a PNG, use `export`
+with the `png` format:
 
 ```sh
-anicraft-cli exec shot010.anicraft file.export_png '{"path":"f24.png","frame":23,"confirm":true}'
+anicraft-cli export shot010.anicraft --format png --frame 24 --out f24.png --overwrite yes
 ```
 
 ## Running any command
