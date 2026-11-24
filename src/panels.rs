@@ -2954,7 +2954,7 @@ fn frame_props(app: &mut App, ui: &mut egui::Ui, layer: &anicraft_engine::doc::L
                     None => {
                         ui.horizontal_wrapped(|ui| {
                             if ui.button(tr!("Create Motion Tween")).on_hover_text(tr!("Animate this span's object property by property")).clicked() {
-                                app.run("timeline.create_motion_tween", json!({}));
+                                app.invoke("timeline.create_motion_tween");
                             }
                             if ui.button(tr!("Create Classic Tween")).clicked() {
                                 app.run("timeline.create_tween", json!({}));

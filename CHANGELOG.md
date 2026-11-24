@@ -45,6 +45,17 @@
     under the tools opens its colour picker (#246), and the docks keep their size while the
     pointer moves over them at every interface scale (#159, not reproduced; the issue stays
     open for a retest).
+
+* **Create Motion Tween asks before converting raw artwork to a symbol** (#604).
+  * Running **Insert › Create Motion Tween** (or the timeline, Properties or Motion Editor buttons)
+    on raw shapes, a bitmap, a group or several objects now asks before converting the artwork to
+    a symbol, lets you choose the symbol type (reusing Convert to Symbol's choices and default),
+    and leaves the document unchanged on Cancel. A keyframe that already holds a single symbol
+    instance creates the tween directly with no dialog.
+  * Headless `timeline.create_motion_tween` now accepts an optional `kind` (`graphic`,
+    `movie_clip` or `button`, default `graphic`) and reports the created `symbol`, `symbol_name`
+    and `symbol_kind` whenever it converts artwork, still in one undo step.
+
 * **Text reads right: mixed directions, and letters from a fallback face** (M5, backlog P-008,
   ADR 0130). With outside pull requests #39 and #40 by SoldierPePe, whose commits are merged
   here and rebuilt on styled text.

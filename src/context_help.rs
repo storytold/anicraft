@@ -353,8 +353,11 @@ pub fn subject(app: &App, ctx: &egui::Context, pointer: bool) -> Subject {
     if let Some(p) = &app.prompt {
         return Subject::Command(p.cmd.to_string());
     }
-    if app.convert.is_some() {
-        return Subject::Dialog(Dialog::ConvertSymbol);
+    if let Some(d) = &app.convert {
+        return match d.purpose {
+            crate::convert_symbol::Purpose::Symbol => Subject::Dialog(Dialog::ConvertSymbol),
+            crate::convert_symbol::Purpose::MotionTween { .. } => Subject::Topic("tweens.md#motion-tweens"),
+        };
     }
     // Expand Fill and Soften Fill Edges (ADR 0109).
     if app.shape_dialog.is_some() {

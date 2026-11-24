@@ -134,7 +134,7 @@ This page is generated from the command registry, so it always matches the versi
 - **Clear Keyframe** `timeline.clear_keyframe` · Insert › Timeline · **Shift+F6** (macOS **⇧F6**) · changes the document
   Parameters: `{layer? | layers?: [..] | all_layers?: true (every layer with a keyframe there, as Shift+F6 with no frame selection), frame?, count?}`
 - **Create Motion Tween** `timeline.create_motion_tween` · changes the document
-  Parameters: `{layer?, frame?} (several objects on the key become one graphic symbol; a one-frame span grows to a second)`
+  Parameters: `{layer?, frame?, kind?: graphic|movie_clip|button (default: graphic)} (raw artwork or bitmaps or groups or several objects on the key become one symbol and report it; a one-frame span grows to a second)`
 - **Create Classic Tween** `timeline.create_tween` · changes the document
   Parameters: `{layer?, frame?, easing? (as timeline.set_easing takes it)}`
 - **Create Shape Tween** `timeline.create_shape_tween` · changes the document

@@ -261,3 +261,71 @@ fn motion_tweens_round_trip_through_the_file_format() {
     let k = &s.doc.timeline(1).layers[0].keyframes[0];
     assert_eq!(k.motion.as_ref().map(|m| m.target), Some(k.elements[0].id));
 }
+
+#[test]
+fn raw_artwork_converts_to_the_chosen_symbol_type_and_reports_it() {
+    use anicraft_doc::{SymbolId, SymbolKind};
+
+    // Single raw (ungrouped) shape with explicit movie_clip type.
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 20, "h": 20, "stroke": null, "object": false}));
+    let before = s.doc.clone();
+    let steps = s.history_len();
+    assert!(crate::cmds_motion::needs_symbol_conversion(&s, None, None));
+    let v = run(&mut s, "timeline.create_motion_tween", json!({"kind": "movie_clip"}));
+    assert_eq!(v["converted"], true);
+    assert_eq!(v["symbol_kind"], "movie_clip");
+    let sym_id = SymbolId(v["symbol"].as_u64().expect("converted symbol id"));
+    let sym = s.doc.symbol(sym_id).expect("symbol in library");
+    assert_eq!(sym.kind, SymbolKind::MovieClip);
+    assert_eq!(v["symbol_name"], sym.name);
+    assert!(matches!(layer(&s).keyframes[0].elements[0].kind, ElementKind::Symbol { symbol, .. } if symbol == sym_id));
+    assert_eq!(s.history_len(), steps + 1, "conversion and tween are one undo step");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc, before, "one undo restores both the artwork and the library");
+
+    // Group with default type -> graphic symbol.
+    let mut g = Session::default();
+    run(&mut g, "draw.rect", json!({"x": 0, "y": 0, "w": 20, "h": 20, "object": true}));
+    run(&mut g, "modify.group", json!({}));
+    assert!(crate::cmds_motion::needs_symbol_conversion(&g, None, None));
+    let v = run(&mut g, "timeline.create_motion_tween", json!({}));
+    assert_eq!(v["converted"], true);
+    assert_eq!(v["symbol_kind"], "graphic");
+    let sym_id = SymbolId(v["symbol"].as_u64().expect("group symbol id"));
+    assert_eq!(g.doc.symbol(sym_id).expect("group symbol").kind, SymbolKind::Graphic);
+
+    // Bitmap with explicit button type -> button symbol.
+    let mut b = Session::default();
+    run(&mut b, "draw.rect", json!({"x": 0, "y": 0, "w": 20, "h": 20, "object": true}));
+    run(&mut b, "modify.convert_to_bitmap", json!({}));
+    assert!(crate::cmds_motion::needs_symbol_conversion(&b, None, None));
+    let v = run(&mut b, "timeline.create_motion_tween", json!({"kind": "button"}));
+    assert_eq!(v["converted"], true);
+    assert_eq!(v["symbol_kind"], "button");
+    let sym_id = SymbolId(v["symbol"].as_u64().expect("bitmap symbol id"));
+    assert_eq!(b.doc.symbol(sym_id).expect("bitmap symbol").kind, SymbolKind::Button);
+
+    // Unknown symbol type is refused without changing the document.
+    let mut bad = Session::default();
+    run(&mut bad, "draw.rect", json!({"x": 0, "y": 0, "w": 20, "h": 20, "object": false}));
+    let before = bad.doc.clone();
+    assert!(bad.execute("timeline.create_motion_tween", &json!({"kind": "invalid"})).is_err());
+    assert_eq!(bad.doc, before);
+}
+
+#[test]
+fn an_existing_symbol_instance_is_not_converted_again() {
+    use anicraft_doc::{SymbolId, SymbolKind};
+
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 20, "h": 20, "object": true}));
+    let sym = SymbolId(run(&mut s, "modify.convert_to_symbol", json!({"name": "Hero", "kind": "movie_clip"}))["symbol"].as_u64().unwrap());
+    assert!(!crate::cmds_motion::needs_symbol_conversion(&s, None, None));
+    let v = run(&mut s, "timeline.create_motion_tween", json!({"kind": "graphic"}));
+    assert_eq!(v["converted"], false);
+    assert!(v.get("symbol").is_none());
+    assert!(v.get("symbol_kind").is_none());
+    assert_eq!(s.doc.library.len(), 1, "no second symbol created");
+    assert_eq!(s.doc.symbol(sym).expect("existing symbol").kind, SymbolKind::MovieClip);
+}

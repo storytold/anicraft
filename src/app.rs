@@ -3761,6 +3761,20 @@ impl App {
             "plugin.run" | "plugin.install" | "plugin.remove" | "plugin.reload" => crate::plugins_ui::status(self, id, v),
             id if id.starts_with("macro.") => crate::macros_ui::done(self, id, v),
             id if id.starts_with("text.") => self.text_note(v),
+            "timeline.create_motion_tween" if v["converted"].as_bool() == Some(true) => {
+                let name = v["symbol_name"].as_str().unwrap_or("");
+                let kind = v["symbol_kind"]
+                    .as_str()
+                    .and_then(|k| match k {
+                        "movie_clip" => Some(anicraft_engine::doc::SymbolKind::MovieClip),
+                        "button" => Some(anicraft_engine::doc::SymbolKind::Button),
+                        "graphic" => Some(anicraft_engine::doc::SymbolKind::Graphic),
+                        _ => None,
+                    })
+                    .map(crate::panels::symbol_kind_label)
+                    .unwrap_or("");
+                self.status_ok(tr!("Converted to {kind} “{name}” and created a motion tween — {undo} to undo", kind = kind, name = name, undo = self.undo_key()));
+            }
             "timeline.remove_frame" => {
                 let n = v["removed"].as_u64().unwrap_or(1);
                 self.status_ok(if n == 1 { tr!("Removed frame — {undo} to undo", undo = self.undo_key()).to_string() } else { trn!("Removed {n} frame — {undo} to undo", "Removed {n} frames — {undo} to undo", n, undo = self.undo_key()) });
@@ -3889,6 +3903,11 @@ impl App {
         if id == "modify.convert_to_symbol" {
             // Name, type and Library folder (ADR 0053).
             crate::convert_symbol::open(self);
+            return;
+        }
+        if id == "timeline.create_motion_tween" {
+            // Ask before converting raw artwork, bitmaps, groups or several objects to a symbol (#604).
+            crate::convert_symbol::open_for_motion_tween(self);
             return;
         }
         // A picture copied in another app (a paint program, a screenshot) is what Paste means

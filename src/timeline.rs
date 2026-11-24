@@ -2131,7 +2131,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     app.run("timeline.create_shape_tween", json!({}));
                 }
                 if ui.selectable_label(false, tr!("Motion tween")).on_hover_text(tr!("Animate each property on its own curve")).clicked() {
-                    app.run("timeline.create_motion_tween", json!({}));
+                    app.invoke("timeline.create_motion_tween");
                 }
                 ui.separator();
                 if ui.selectable_label(false, tr!("Remove tween")).clicked() {
@@ -2151,7 +2151,7 @@ fn header(app: &mut App, ui: &mut egui::Ui) {
                     (tr!("Shape tween"), tr!("Morph this keyframe's shapes into the next keyframe's"), "timeline.create_shape_tween"),
                 ] {
                     if ui.selectable_label(false, label).on_hover_text(tip).clicked() {
-                        app.run(id, json!({}));
+                        app.invoke(id);
                     }
                 }
             })
