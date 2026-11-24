@@ -211,6 +211,8 @@ pub struct Armature {
     /// The armature's springs are turned off (Properties › Bone › Springs, ADR 0084): it plays
     /// its keyed poses exactly, for posing without the swing.
     pub springs_off: bool,
+    /// Optional Hybrid Automatic Character Rig bound to this armature layer.
+    pub char_rig: Option<Arc<crate::autorig::CharacterRig>>,
 }
 
 /// An armature as files hold it. Two forms (ADR 0098):
@@ -232,6 +234,8 @@ struct ArmatureIn {
     skins: Vec<Skin>,
     #[serde(default)]
     springs_off: bool,
+    #[serde(default)]
+    char_rig: Option<Arc<crate::autorig::CharacterRig>>,
 }
 
 impl From<ArmatureIn> for Armature {
@@ -244,7 +248,7 @@ impl From<ArmatureIn> for Armature {
             }
             skins.insert(0, k);
         }
-        Armature { bones, skins, springs_off: a.springs_off }
+        Armature { bones, skins, springs_off: a.springs_off, char_rig: a.char_rig }
     }
 }
 
@@ -257,16 +261,18 @@ struct ArmatureOut<'a> {
     skins: &'a [Skin],
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     springs_off: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    char_rig: Option<&'a Arc<crate::autorig::CharacterRig>>,
 }
 
 impl Serialize for Armature {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         let out = if self.is_mixed() {
-            ArmatureOut { bones: Cow::Borrowed(&self.bones), skin: None, skins: &self.skins, springs_off: self.springs_off }
+            ArmatureOut { bones: Cow::Borrowed(&self.bones), skin: None, skins: &self.skins, springs_off: self.springs_off, char_rig: self.char_rig.as_ref() }
         } else {
             // The first form doesn't mark its bones: with a skin, all of them are inside it.
             let bones = if self.skins.is_empty() { Cow::Borrowed(self.bones.as_slice()) } else { Cow::Owned(self.bones.iter().map(|b| Bone { shape: None, ..b.clone() }).collect()) };
-            ArmatureOut { bones, skin: self.skins.first(), skins: &[], springs_off: self.springs_off }
+            ArmatureOut { bones, skin: self.skins.first(), skins: &[], springs_off: self.springs_off, char_rig: None }
         };
         out.serialize(ser)
     }
@@ -278,11 +284,11 @@ impl Armature {
     }
 
     /// Whether the armature needs the mixed file form (ADR 0098): more than one shape with
-    /// bones, or bones inside a shape next to bones that move elements. Otherwise it is an
-    /// armature of instances (ADR 0043) or of one shape (ADR 0071), written as it always was.
+    /// bones, bones inside a shape next to bones that move elements, or a bound character rig.
+    /// Otherwise it is an armature of instances (ADR 0043) or of one shape (ADR 0071), written as it always was.
     pub fn is_mixed(&self) -> bool {
         let only = self.skins.first().map(|k| k.shape);
-        self.skins.len() > 1 || self.bones.iter().any(|b| b.shape != only)
+        self.char_rig.is_some() || self.skins.len() > 1 || self.bones.iter().any(|b| b.shape != only)
     }
 
     /// The skin of `shape`, when the armature has bones inside it.
@@ -394,9 +400,12 @@ impl Armature {
     /// limit and one sane binding per point. Returns whether anything changed.
     pub fn sanitize(&mut self) -> bool {
         let before = self.clone();
-        // One skin per shape, each within the point limit.
+        // One skin per shape, each within the point limit (plus any shape bound to a `CharacterRig`).
         let mut shapes = HashSet::new();
         self.skins.retain(|k| skin::anchors(&k.rest).len() <= skin::MAX_SKIN_POINTS && shapes.insert(k.shape));
+        if let Some(rig_shape) = self.char_rig.as_ref().and_then(|r| r.target_shape) {
+            shapes.insert(rig_shape);
+        }
         let mut seen_id = HashSet::new();
         let mut seen_child = HashSet::new();
         let mut kept: Vec<Bone> = Vec::new();

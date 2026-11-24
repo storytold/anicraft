@@ -36,12 +36,12 @@ fn bar(len: f32, half: f32, step: f32) -> Path {
 
 fn shape(id: ElementId, path: Arc<Path>, at: Vec2) -> Arc<Element> {
     let shape = Shape { path, ..Shape::filled(Path::new(), Paint::Solid(Rgba::BLACK)) };
-    Arc::new(Element { id, name: String::new(), transform: Affine::translate(at.x, at.y), color: ColorEffect::default(), kind: ElementKind::Shape(shape) })
+    Arc::new(Element { id, name: String::new(), transform: Affine::translate(at.x, at.y), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) })
 }
 
 fn instance(id: ElementId, at: Vec2) -> Arc<Element> {
     let kind = ElementKind::Symbol { symbol: SymbolId(1), loop_mode: LoopMode::Loop, first_frame: 0, blend: BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None };
-    Arc::new(Element { id, name: String::new(), transform: Affine::translate(at.x, at.y), color: ColorEffect::default(), kind })
+    Arc::new(Element { id, name: String::new(), transform: Affine::translate(at.x, at.y), color: ColorEffect::default(), transform_3d: None, kind })
 }
 
 /// A body lying along y = 100 from x = 100 to 300 with two bones inside it (joint at x = 200),
@@ -62,6 +62,7 @@ fn rig() -> (Armature, Vec<Arc<Element>>) {
         ],
         skins: vec![Skin::new(BODY, body.clone()), Skin::new(HAT, hat.clone())],
         springs_off: false,
+        char_rig: None,
     };
     rebind(&mut arm);
     (arm, vec![shape(BODY, body, v(100.0, 100.0)), instance(HEAD, v(330.0, 100.0)), shape(HAT, hat, v(360.0, 100.0))])
@@ -336,7 +337,7 @@ fn a_big_mixed_armature_is_fast() {
     }
     at += 1050.0;
     chain(&mut parent, &mut at, &mut bones, &mut els, &mut fresh, v(1000.0, 0.0));
-    let mut arm = Armature { bones, skins: vec![Skin::new(s1, a), Skin::new(s2, b)], springs_off: false };
+    let mut arm = Armature { bones, skins: vec![Skin::new(s1, a), Skin::new(s2, b)], springs_off: false, char_rig: None };
     let t = std::time::Instant::now();
     rebind(&mut arm);
     let bind = t.elapsed();

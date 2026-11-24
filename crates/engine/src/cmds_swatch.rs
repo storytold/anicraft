@@ -12,7 +12,8 @@
 use crate::params::*;
 use crate::{CommandSpec, EngineError, Result, Session};
 use anicraft_doc::swatch::{MAX_PALETTE_BYTES, clean_name, default_set, parse_gpl};
-use anicraft_doc::{GradientStop, MAX_SWATCHES, Rgba, Spread, Swatch, SwatchPaint};
+use anicraft_doc::{Document, Element, ElementKind, GradientStop, MAX_GROUP_DEPTH, MAX_SWATCHES, Paint, Rgba, Shape, Spread, Swatch, SwatchPaint, Timeline};
+use anicraft_geom::{Rect, Vec2};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -32,6 +33,20 @@ pub fn specs() -> Vec<CommandSpec> {
         c("swatch.move", "Move Swatch", "{from, to} (indices: the swatch at `from` ends up at `to`) → {index}", true, move_swatch),
         c("swatch.duplicate", "Duplicate Swatch", "{index} puts a copy right after it → {index, count}", true, duplicate),
         c("swatch.rename", "Rename Swatch", "{index, name} (empty: no name, the hex shows on hover)", true, rename),
+        c(
+            "swatch.set_tagged",
+            "Tagged Swatch",
+            "{index, tagged?: bool (default true), link_existing?: bool (default false)} turns a swatch into a Live Tagged Swatch (or untags it when false); with link_existing, shapes across scenes and Library symbols whose fill or stroke matches this swatch link to it → {index, tagged, tag_id, linked}",
+            true,
+            set_tagged,
+        ),
+        c(
+            "swatch.edit",
+            "Edit Swatch",
+            "{index, type?: solid|linear|radial, color?, stops?, spread?, linear_rgb?: bool, focal?, name?} edits a swatch in place; when it is a Tagged Swatch, every shape linked to it across scenes and Library symbols updates to the new colour or gradient in one undo step → {index, tagged, tag_id, updated}",
+            true,
+            edit_swatch,
+        ),
         c(
             "swatch.apply",
             "Apply Swatch",
@@ -62,10 +77,14 @@ pub fn swatch_json(s: &Swatch) -> Value {
         SwatchPaint::Linear { stops, spread, linear_rgb } => json!({"type": "linear", "stops": stops_json(stops), "spread": spread.key(), "linear_rgb": linear_rgb}),
         SwatchPaint::Radial { stops, spread, linear_rgb, focal } => json!({"type": "radial", "stops": stops_json(stops), "spread": spread.key(), "linear_rgb": linear_rgb, "focal": focal}),
     };
-    if !s.name.is_empty()
-        && let Some(o) = v.as_object_mut()
-    {
-        o.insert("name".into(), json!(s.name));
+    if let Some(o) = v.as_object_mut() {
+        if !s.name.is_empty() {
+            o.insert("name".into(), json!(s.name));
+        }
+        if let Some(tid) = s.tag_id {
+            o.insert("tagged".into(), json!(true));
+            o.insert("tag_id".into(), json!(tid));
+        }
     }
     v
 }
@@ -129,7 +148,7 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
 /// The swatch `swatch.add` makes from the current colours: the fill swatch, or the stroke.
 fn current(s: &Session, from: &str) -> Result<Swatch> {
     match from {
-        "fill" => SwatchPaint::from_paint(&s.style.fill_paint()).map(|p| Swatch { name: String::new(), paint: p }).ok_or_else(|| EngineError::State("a bitmap fill can't be a swatch (swatches hold colours and gradients)".into())),
+        "fill" => SwatchPaint::from_paint(&s.style.fill_paint()).map(|p| Swatch { name: String::new(), paint: p, tag_id: None }).ok_or_else(|| EngineError::State("a bitmap fill can't be a swatch (swatches hold colours and gradients)".into())),
         "stroke" => Ok(Swatch::solid(s.style.stroke)),
         other => Err(EngineError::Param(format!("param 'from' must be fill or stroke, not '{other}'"))),
     }
@@ -158,9 +177,18 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
 
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index_param(s, p, "index")?;
-    let v = swatches_mut(s);
-    v.remove(i);
-    Ok(json!({"count": v.len()}))
+    let old_tag = swatches_mut(s).remove(i).tag_id;
+    let count = s.doc.swatches.len();
+    if let Some(tid) = old_tag {
+        let _ = clear_tag_across_doc(&mut s.doc, tid);
+        if s.style.fill_tag == Some(tid) {
+            s.style.fill_tag = None;
+        }
+        if s.style.stroke_tag == Some(tid) {
+            s.style.stroke_tag = None;
+        }
+    }
+    Ok(json!({"count": count}))
 }
 
 fn move_swatch(s: &mut Session, p: &Value) -> Result<Value> {
@@ -180,7 +208,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::State(format!("a document keeps at most {MAX_SWATCHES} swatches; delete some first")));
     }
     let v = swatches_mut(s);
-    let copy = v.get(i).cloned().ok_or_else(|| EngineError::Param("no such swatch".into()))?;
+    let mut copy = v.get(i).cloned().ok_or_else(|| EngineError::Param("no such swatch".into()))?;
+    copy.tag_id = None;
     v.insert(i + 1, copy);
     Ok(json!({"index": i + 1, "count": v.len()}))
 }
@@ -194,6 +223,313 @@ fn rename(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"index": i, "name": name}))
 }
 
+fn set_tagged(s: &mut Session, p: &Value) -> Result<Value> {
+    let i = index_param(s, p, "index")?;
+    let tagged = opt_bool(p, "tagged")?.unwrap_or(true);
+    let link_existing = opt_bool(p, "link_existing")?.unwrap_or(false);
+    if tagged {
+        let tid = match s.doc.swatches.get(i).and_then(|sw| sw.tag_id) {
+            Some(id) => id,
+            None => {
+                let id = s.doc.alloc_id();
+                if let Some(sw) = swatches_mut(s).get_mut(i) {
+                    sw.tag_id = Some(id);
+                }
+                id
+            }
+        };
+        let paint = s.doc.swatches.get(i).map(|sw| sw.paint.clone()).ok_or_else(|| EngineError::Param("no such swatch".into()))?;
+        let linked = if link_existing { link_matching_shapes(&mut s.doc, &paint, tid) } else { 0 };
+        Ok(json!({"index": i, "tagged": true, "tag_id": tid, "linked": linked}))
+    } else {
+        let old = swatches_mut(s).get_mut(i).and_then(|sw| sw.tag_id.take());
+        let mut unlinked = 0u64;
+        if let Some(tid) = old {
+            unlinked = clear_tag_across_doc(&mut s.doc, tid);
+            if s.style.fill_tag == Some(tid) {
+                s.style.fill_tag = None;
+            }
+            if s.style.stroke_tag == Some(tid) {
+                s.style.stroke_tag = None;
+            }
+        }
+        Ok(json!({"index": i, "tagged": false, "tag_id": Value::Null, "linked": unlinked}))
+    }
+}
+
+fn edit_swatch(s: &mut Session, p: &Value) -> Result<Value> {
+    let i = index_param(s, p, "index")?;
+    let cur = s.doc.swatches.get(i).cloned().ok_or_else(|| EngineError::Param("no such swatch".into()))?;
+    let kind_opt = opt_str(p, "type")?;
+    let color_opt = opt_color(p, "color")?;
+    let stops_opt = crate::cmds_paint::opt_stops(p)?;
+    let spread_opt = match opt_str(p, "spread")? {
+        None => None,
+        Some(k) => Some(Spread::from_key(k).ok_or_else(|| EngineError::Param(format!("unknown spread '{k}' (extend, reflect or repeat)")))?),
+    };
+    let linear_opt = opt_bool(p, "linear_rgb")?;
+    let focal_opt = crate::cmds_paint::opt_focal(p)?;
+    let name_opt = opt_str(p, "name")?;
+    if kind_opt.is_none()
+        && color_opt.is_none()
+        && stops_opt.is_none()
+        && spread_opt.is_none()
+        && linear_opt.is_none()
+        && focal_opt.is_none()
+        && name_opt.is_none()
+    {
+        return Err(EngineError::Param("give a swatch field to edit ('color', 'stops', 'type', 'spread', 'linear_rgb', 'focal' or 'name')".into()));
+    }
+    let target_kind = match (kind_opt, &color_opt, &stops_opt) {
+        (Some(k), ..) => k,
+        (None, Some(_), None) => "solid",
+        (None, _, Some(_)) if !cur.paint.is_gradient() => "linear",
+        (None, ..) => cur.paint.kind(),
+    };
+    let cur_spread = match &cur.paint {
+        SwatchPaint::Linear { spread, .. } | SwatchPaint::Radial { spread, .. } => *spread,
+        SwatchPaint::Solid { .. } => Spread::Pad,
+    };
+    let cur_linear = match &cur.paint {
+        SwatchPaint::Linear { linear_rgb, .. } | SwatchPaint::Radial { linear_rgb, .. } => *linear_rgb,
+        SwatchPaint::Solid { .. } => false,
+    };
+    let cur_focal = match &cur.paint {
+        SwatchPaint::Radial { focal, .. } => *focal,
+        _ => 0.0,
+    };
+    let default_ramp = || {
+        let c = cur.paint.primary_color();
+        vec![GradientStop { offset: 0.0, color: c }, GradientStop { offset: 1.0, color: Rgba::BLACK }]
+    };
+    let raw_paint = match target_kind {
+        "solid" => SwatchPaint::Solid { color: color_opt.unwrap_or_else(|| cur.paint.primary_color()) },
+        "linear" => SwatchPaint::Linear {
+            stops: stops_opt.or_else(|| cur.paint.stops().map(<[GradientStop]>::to_vec)).unwrap_or_else(default_ramp),
+            spread: spread_opt.unwrap_or(cur_spread),
+            linear_rgb: linear_opt.unwrap_or(cur_linear),
+        },
+        "radial" => SwatchPaint::Radial {
+            stops: stops_opt.or_else(|| cur.paint.stops().map(<[GradientStop]>::to_vec)).unwrap_or_else(default_ramp),
+            spread: spread_opt.unwrap_or(cur_spread),
+            linear_rgb: linear_opt.unwrap_or(cur_linear),
+            focal: focal_opt.unwrap_or(cur_focal),
+        },
+        other => return Err(EngineError::Param(format!("unknown swatch type '{other}' (solid, linear or radial)"))),
+    };
+    let new_paint = raw_paint.sanitized().ok_or_else(|| EngineError::Param("that swatch can't be kept (a gradient needs two stops)".into()))?;
+    let new_name = name_opt.map_or_else(|| cur.name.clone(), clean_name);
+    let updated_swatch = Swatch { name: new_name, paint: new_paint.clone(), tag_id: cur.tag_id };
+    if let Some(slot) = swatches_mut(s).get_mut(i) {
+        *slot = updated_swatch.clone();
+    }
+    let mut updated = 0u64;
+    if let Some(tid) = cur.tag_id {
+        updated = propagate_tagged_paint(&mut s.doc, tid, &new_paint);
+        if s.style.fill_tag == Some(tid) {
+            let stage = Rect::new(0.0, 0.0, s.doc.stage.width as f32, s.doc.stage.height as f32);
+            let old_tool = s.style.fill_paint();
+            let placed = apply_swatch_to_paint(&new_paint, &old_tool, &stage);
+            s.style.fill = placed.primary_color();
+            s.style.fill_paint = (!matches!(placed, Paint::Solid(_))).then_some(placed);
+        }
+        if s.style.stroke_tag == Some(tid) {
+            s.style.stroke = new_paint.primary_color();
+        }
+    }
+    Ok(json!({
+        "index": i,
+        "tagged": cur.tag_id.is_some(),
+        "tag_id": cur.tag_id,
+        "updated": updated,
+        "swatch": swatch_json(&updated_swatch),
+    }))
+}
+
+fn apply_swatch_to_paint(sw: &SwatchPaint, old: &Paint, bounds: &Rect) -> Paint {
+    match sw {
+        SwatchPaint::Solid { color } => Paint::Solid(*color),
+        SwatchPaint::Linear { stops, spread, linear_rgb } => match old {
+            Paint::Linear { start, end, .. } => Paint::Linear {
+                start: *start,
+                end: *end,
+                stops: stops.clone(),
+                spread: *spread,
+                linear_rgb: *linear_rgb,
+            },
+            _ => Paint::Linear {
+                start: Vec2::new(-1.0, 0.0),
+                end: Vec2::new(1.0, 0.0),
+                stops: stops.clone(),
+                spread: *spread,
+                linear_rgb: *linear_rgb,
+            }
+            .fitted(bounds),
+        },
+        SwatchPaint::Radial { stops, spread, linear_rgb, focal } => match old {
+            Paint::Radial { center, radius, matrix, .. } => Paint::Radial {
+                center: *center,
+                radius: *radius,
+                stops: stops.clone(),
+                spread: *spread,
+                linear_rgb: *linear_rgb,
+                focal: *focal,
+                matrix: *matrix,
+            },
+            _ => Paint::Radial {
+                center: Vec2::ZERO,
+                radius: 1.0,
+                stops: stops.clone(),
+                spread: *spread,
+                linear_rgb: *linear_rgb,
+                focal: *focal,
+                matrix: anicraft_geom::Affine::IDENTITY,
+            }
+            .fitted(bounds),
+        },
+    }
+}
+
+fn walk_shapes_cow(doc: &mut Document, mut pred: impl FnMut(&Shape) -> bool, mut edit: impl FnMut(&mut Shape) -> u64) -> u64 {
+    fn tl_has(tl: &Timeline, pred: &mut impl FnMut(&Shape) -> bool, depth: usize) -> bool {
+        if depth > MAX_GROUP_DEPTH {
+            return false;
+        }
+        tl.layers.iter().any(|l| {
+            l.keyframes.iter().any(|k| {
+                k.elements.iter().any(|e| match &e.kind {
+                    ElementKind::Shape(sh) => pred(sh),
+                    ElementKind::Group { members } => tl_has(members, pred, depth + 1),
+                    _ => false,
+                })
+            })
+        })
+    }
+    fn el_has(e: &Element, pred: &mut impl FnMut(&Shape) -> bool, depth: usize) -> bool {
+        if depth > MAX_GROUP_DEPTH {
+            return false;
+        }
+        match &e.kind {
+            ElementKind::Shape(sh) => pred(sh),
+            ElementKind::Group { members } => tl_has(members, pred, depth + 1),
+            _ => false,
+        }
+    }
+    fn edit_tl(tl: &mut Timeline, pred: &mut impl FnMut(&Shape) -> bool, edit: &mut impl FnMut(&mut Shape) -> u64, depth: usize) -> u64 {
+        if depth > MAX_GROUP_DEPTH {
+            return 0;
+        }
+        let mut total = 0u64;
+        for layer in &mut tl.layers {
+            let layer_hits = layer.keyframes.iter().any(|k| k.elements.iter().any(|e| el_has(e, pred, depth)));
+            if !layer_hits {
+                continue;
+            }
+            let l = Arc::make_mut(layer);
+            for kf in &mut l.keyframes {
+                let kf_hits = kf.elements.iter().any(|e| el_has(e, pred, depth));
+                if !kf_hits {
+                    continue;
+                }
+                let k = Arc::make_mut(kf);
+                for el in &mut k.elements {
+                    if !el_has(el, pred, depth) {
+                        continue;
+                    }
+                    match &mut Arc::make_mut(el).kind {
+                        ElementKind::Shape(sh) => total += edit(sh),
+                        ElementKind::Group { members } => total += edit_tl(members, pred, edit, depth + 1),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        total
+    }
+    let mut count = 0u64;
+    for scene in &mut doc.scenes {
+        if tl_has(&scene.timeline, &mut pred, 0) {
+            count += edit_tl(&mut Arc::make_mut(scene).timeline, &mut pred, &mut edit, 0);
+        }
+    }
+    for sym in &mut doc.library {
+        if tl_has(&sym.timeline, &mut pred, 0) {
+            count += edit_tl(&mut Arc::make_mut(sym).timeline, &mut pred, &mut edit, 0);
+        }
+    }
+    count
+}
+
+fn link_matching_shapes(doc: &mut Document, target: &SwatchPaint, tid: u64) -> u64 {
+    let matches_fill = |sh: &Shape| sh.fill_tag != Some(tid) && sh.fill.as_ref().and_then(SwatchPaint::from_paint).as_ref() == Some(target);
+    let matches_stroke = |sh: &Shape| match (&sh.stroke, target) {
+        (Some(st), SwatchPaint::Solid { color }) => sh.stroke_tag != Some(tid) && st.color == *color,
+        _ => false,
+    };
+    walk_shapes_cow(
+        doc,
+        |sh| matches_fill(sh) || matches_stroke(sh),
+        |sh| {
+            let mut n = 0u64;
+            if sh.fill.as_ref().and_then(SwatchPaint::from_paint).as_ref() == Some(target) && sh.fill_tag != Some(tid) {
+                sh.fill_tag = Some(tid);
+                n = 1;
+            }
+            if let (Some(st), SwatchPaint::Solid { color }) = (&sh.stroke, target)
+                && st.color == *color
+                && sh.stroke_tag != Some(tid)
+            {
+                sh.stroke_tag = Some(tid);
+                n = 1;
+            }
+            n
+        },
+    )
+}
+
+fn clear_tag_across_doc(doc: &mut Document, tid: u64) -> u64 {
+    walk_shapes_cow(
+        doc,
+        |sh| sh.fill_tag == Some(tid) || sh.stroke_tag == Some(tid),
+        |sh| {
+            let mut hit = false;
+            if sh.fill_tag == Some(tid) {
+                sh.fill_tag = None;
+                hit = true;
+            }
+            if sh.stroke_tag == Some(tid) {
+                sh.stroke_tag = None;
+                hit = true;
+            }
+            u64::from(hit)
+        },
+    )
+}
+
+fn propagate_tagged_paint(doc: &mut Document, tid: u64, new_paint: &SwatchPaint) -> u64 {
+    walk_shapes_cow(
+        doc,
+        |sh| (sh.fill_tag == Some(tid) && sh.fill.is_some()) || (sh.stroke_tag == Some(tid) && sh.stroke.is_some()),
+        |sh| {
+            let mut hit = false;
+            if sh.fill_tag == Some(tid)
+                && let Some(old) = &sh.fill
+            {
+                let bounds = sh.path.bounds();
+                sh.fill = Some(apply_swatch_to_paint(new_paint, old, &bounds));
+                hit = true;
+            }
+            if sh.stroke_tag == Some(tid)
+                && let Some(st) = &mut sh.stroke
+            {
+                st.color = new_paint.primary_color();
+                hit = true;
+            }
+            u64::from(hit)
+        },
+    )
+}
+
 fn apply(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index_param(s, p, "index")?;
     let sw = s.doc.swatches.get(i).cloned().ok_or_else(|| EngineError::Param("no such swatch".into()))?;
@@ -203,24 +539,28 @@ fn apply(s: &mut Session, p: &Value) -> Result<Value> {
             let mut fill = swatch_json(&sw);
             if let Some(o) = fill.as_object_mut() {
                 o.remove("name");
+                o.remove("tagged");
+                o.remove("tag_id");
                 o.insert("selection".into(), json!(selection));
             }
-            let r = crate::cmds_paint::set_fill(s, &fill)?;
-            Ok(json!({"target": "fill", "changed": r.get("changed").cloned().unwrap_or(json!(0))}))
+            let r = crate::cmds_paint::set_fill_tagged(s, &fill, sw.tag_id)?;
+            Ok(json!({"target": "fill", "changed": r.get("changed").cloned().unwrap_or(json!(0)), "tag_id": sw.tag_id}))
         }
         "stroke" => {
             let SwatchPaint::Solid { color } = sw.paint else {
                 return Err(EngineError::State("strokes are one colour: apply a gradient swatch to the fill instead".into()));
             };
             s.style.stroke = color;
+            s.style.stroke_tag = sw.tag_id;
             s.style.use_stroke = true;
             let changed = if selection && !s.selection.is_empty() {
-                s.each_layer(false, |s| crate::cmds_draw::set_stroke(s, &json!({"color": hex(color)})))?;
+                let tag_id = sw.tag_id;
+                s.each_layer(false, |s| crate::cmds_draw::set_stroke_tagged(s, &json!({"color": hex(color)}), tag_id))?;
                 s.selection.len()
             } else {
                 0
             };
-            Ok(json!({"target": "stroke", "changed": changed}))
+            Ok(json!({"target": "stroke", "changed": changed, "tag_id": sw.tag_id}))
         }
         other => Err(EngineError::Param(format!("param 'target' must be fill or stroke, not '{other}'"))),
     }

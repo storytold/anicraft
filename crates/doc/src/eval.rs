@@ -400,6 +400,35 @@ pub(crate) fn evaluate_tweened<'a>(layer: &'a Layer, frame: u32, guide: Option<&
     Some((kf.start, Cow::Owned(els)))
 }
 
+/// Keyframe-level `(blend, color_effect, filters)` on `layer` at `frame` (P-027). Across a
+/// classic tween with an adjacent next keyframe, `color_effect` and `filters` interpolate by
+/// their easing groups (`Progress::color`, `Progress::filters`), while `blend` holds until the
+/// next keyframe.
+pub fn evaluate_keyframe_effects(layer: &Layer, frame: u32) -> Option<(crate::BlendMode, crate::ColorEffect, Vec<crate::FilterEntry>)> {
+    let idx = layer.keyframe_index_at(frame)?;
+    let kf = layer.keyframes.get(idx)?;
+    if let (Some(tween), Some(next)) = (&kf.tween, layer.keyframes.get(idx + 1))
+        && tween.kind == TweenKind::Classic
+        && next.start == kf.end()
+        && frame > kf.start
+    {
+        let pr = Progress::of(tween, (frame - kf.start) as f32 / kf.duration.max(1) as f32);
+        let blend = if pr.main >= 1.0 { next.blend } else { kf.blend };
+        let color = if !kf.color_effect.is_none() || !next.color_effect.is_none() {
+            kf.color_effect.lerp(&next.color_effect, pr.color)
+        } else {
+            crate::ColorEffect::None
+        };
+        let filters = if !kf.filters.is_empty() || !next.filters.is_empty() {
+            crate::filter::lerp_filters(&kf.filters, &next.filters, pr.filters).unwrap_or_else(|| kf.filters.clone())
+        } else {
+            Vec::new()
+        };
+        return Some((blend, color, filters));
+    }
+    Some((kf.blend, kf.color_effect, kf.filters.clone()))
+}
+
 /// How far a classic tween has gone, eased, for each property group (ADR 0081): `main` for
 /// what has no group (outlines, fills, strokes, a group's members), the rest each by its
 /// group's ease (the tween's own when the group has none).
@@ -724,7 +753,9 @@ fn interpolate(a: &Element, b: &Element, pr: Progress, morph: bool, hints: &[(an
                 // Not tweening the pins: the shape keeps its warp only while it shows it.
                 None => sa.warp.clone().filter(|w| w.shows(&path)),
             };
-            ElementKind::Shape(Shape { path, fill, stroke, fill_rule: sa.fill_rule, merge: sa.merge, warp })
+            let fill_tag = (sa.fill_tag == sb.fill_tag).then_some(sa.fill_tag).flatten();
+            let stroke_tag = (sa.stroke_tag == sb.stroke_tag).then_some(sa.stroke_tag).flatten();
+            ElementKind::Shape(Shape { path, fill, stroke, fill_rule: sa.fill_rule, merge: sa.merge, warp, fill_tag, stroke_tag })
         }
         // An instance tweens its filters: pairwise when both keyframes have the same kinds in
         // the same order, else as Animate pairs them, a filter without a partner fading in or
@@ -793,7 +824,21 @@ fn interpolate(a: &Element, b: &Element, pr: Progress, morph: bool, hints: &[(an
     if let Some((g, orient)) = guide {
         transform = follow(g, orient, &a.transform, &b.transform, pr.position, transform);
     }
-    let mut el = Element { id: a.id, name: a.name.clone(), transform, color: a.color.lerp(&b.color, pr.color), kind };
+    let transform_3d = match (a.transform_3d, b.transform_3d) {
+        (None, None) => None,
+        (ta, tb) => {
+            let sa = ta.unwrap_or_default();
+            let sb = tb.unwrap_or_default();
+            let (sa, sb) = match (ta, tb) {
+                (Some(x), None) => (x, crate::Transform3D { fov_deg: x.fov_deg, vanishing: x.vanishing, ..sb }),
+                (None, Some(y)) => (crate::Transform3D { fov_deg: y.fov_deg, vanishing: y.vanishing, ..sa }, y),
+                _ => (sa, sb),
+            };
+            let lerped = sa.lerp(&sb, pr.rotation);
+            (!lerped.is_identity()).then_some(lerped)
+        }
+    };
+    let mut el = Element { id: a.id, name: a.name.clone(), transform, color: a.color.lerp(&b.color, pr.color), transform_3d, kind };
     if pivot.is_some() {
         el.set_pivot(pivot);
     }
@@ -1041,18 +1086,49 @@ fn eval_timeline(doc: &Document, tl: &Timeline, frame: u32, cx: &Ctx<'_>, out: &
         let Some((kf_start, elements)) = shown else { continue };
         // Data bindings (ADR 0118): a table's column in place of a bound instance's property.
         let elements = doc.bound_elements(elements, frame);
-        let lc = LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf };
-        // A layer below full opacity (its own, or a folder's it is in; ADR 0111) fades as one:
-        // its artwork composites in a group, and the group blends at the layer's opacity, so
-        // its overlapping parts don't show through each other. Mask artwork ignores opacity,
-        // and guide artwork is never in the movie; an empty frame needs no group.
-        let fade = if masks.is_none() && !guide && !elements.is_empty() { tl.layer_opacity(index) } else { 1.0 };
-        let faded;
-        let cx = if fade < 1.0 - 1e-4 {
-            let gid = out.groups.len() as u32;
-            out.groups.push(Group { parent: cx.group, alpha: fade, blend: crate::BlendMode::Normal, filters: Arc::from(Vec::new()), clip });
-            faded = Ctx { group: Some(gid), ..*cx };
-            &faded
+        let rig_mesh = layer
+            .armature
+            .as_deref()
+            .filter(|a| layer.kind == LayerKind::Armature && a.char_rig.is_some())
+            .and_then(|arm| {
+                let pose = crate::spring::sprung_pose(layer, frame, doc.stage.fps).unwrap_or_default();
+                let face = crate::autorig::face_pose_at(layer, frame);
+                crate::autorig::deform_skinned_mesh(arm, &elements, &pose, &face).map(|(id, m)| (id, Arc::new(m)))
+            });
+        let lc = LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf, rig_mesh: rig_mesh.as_ref() };
+        // A layer or keyframe with opacity, blend mode, colour effect or filters composites as a
+        // group (ADR 0111, P-027), so overlapping parts on the layer don't bleed through each
+        // other and filters run across the whole layer/frame before blending. Mask artwork ignores
+        // effects, and guide artwork is never in the movie; an empty frame needs no group.
+        let mut layered_cx;
+        let cx = if masks.is_none() && !guide && !elements.is_empty() {
+            layered_cx = *cx;
+            let fade = tl.layer_opacity(index);
+            let lfx = layer.color_effect.transform();
+            let l_alpha = fade * lfx.alpha_factor().unwrap_or(1.0);
+            let l_filters = crate::filter::active(&layer.filters);
+            let l_grouped = l_alpha < 1.0 - 1e-4 || !layer.blend.is_normal() || !l_filters.is_empty();
+            let l_color = if l_grouped && lfx.alpha_factor().is_some() { lfx.without_alpha() } else { lfx };
+            layered_cx.color = layered_cx.color.concat(&l_color);
+            if l_grouped && out.groups.len() < u32::MAX as usize {
+                let gid = out.groups.len() as u32;
+                out.groups.push(Group { parent: layered_cx.group, alpha: l_alpha, blend: layer.blend, filters: l_filters.into(), clip });
+                layered_cx.group = Some(gid);
+            }
+            if let Some((kf_blend, kf_color, kf_filters)) = evaluate_keyframe_effects(layer, frame) {
+                let kfx = kf_color.transform();
+                let k_alpha = kfx.alpha_factor().unwrap_or(1.0);
+                let k_active = crate::filter::active(&kf_filters);
+                let k_grouped = k_alpha < 1.0 - 1e-4 || !kf_blend.is_normal() || !k_active.is_empty();
+                let k_color = if k_grouped && kfx.alpha_factor().is_some() { kfx.without_alpha() } else { kfx };
+                layered_cx.color = layered_cx.color.concat(&k_color);
+                if k_grouped && out.groups.len() < u32::MAX as usize {
+                    let gid = out.groups.len() as u32;
+                    out.groups.push(Group { parent: layered_cx.group, alpha: k_alpha, blend: kf_blend, filters: k_active.into(), clip });
+                    layered_cx.group = Some(gid);
+                }
+            }
+            &layered_cx
         } else {
             cx
         };
@@ -1075,6 +1151,8 @@ struct LayerCtx<'a> {
     outline: Option<Rgba>,
     /// The layer's space (and, inside a group, the group's) to stage space.
     xf: Affine,
+    /// Evaluated Dual-Quaternion character skin mesh + facial pose on this armature layer.
+    rig_mesh: Option<&'a (ElementId, Arc<crate::warp::WarpMesh>)>,
 }
 
 fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, out: &mut DisplayList, play: Option<&Play<'_>>) {
@@ -1083,7 +1161,7 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
     if !cx.work.visit(el) {
         return;
     }
-    let LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf } = *lc;
+    let LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf, rig_mesh } = *lc;
     // In the player, a symbol instance has its own path, and maybe properties a script set.
     let child = match (&el.kind, play) {
         (ElementKind::Symbol { .. }, Some(p)) => Some(p.child(el.id)),
@@ -1104,44 +1182,101 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
     let xf = layer_xf.mul(&el.transform);
     let fx = el.color.transform();
     let color = cx.color.concat(&fx);
+    let items_before_3d = out.items.len();
     match &el.kind {
         ElementKind::Shape(s) => {
             // Inside a 9-slice instance, the shape's outline is cut and mapped (bitmap
             // fills scale normally, as in Animate).
             let sliced = cx.slice.filter(|_| !matches!(s.fill, Some(Paint::Bitmap { .. }))).map(|sl| sliced_shape(s, &el.transform, &sl));
             let is_sliced = sliced.is_some();
-            let (path, transform, fill, stroke) = match sliced {
+            let rig_deform = rig_mesh.filter(|(target_id, _)| *target_id == el.id).map(|(_, m)| m);
+            let (mut path, transform, fill, stroke) = match sliced {
                 Some(x) => x,
                 None => (s.path.clone(), xf, s.fill.clone(), s.stroke.clone()),
             };
-            out.items.push(DisplayItem {
-                path,
-                transform,
-                fill,
-                stroke,
-                fill_rule: s.fill_rule,
-                color,
-                layer: root_layer,
-                element: root_el,
-                outline: layer_outline,
-                clip,
-                masks,
-                guide,
-                group: cx.group,
-                image: match &s.fill {
-                    Some(Paint::Bitmap { bitmap, .. }) => doc.bitmap(*bitmap).and_then(crate::Bitmap::pixels),
+            if let Some(m) = rig_deform
+                && !matches!(fill, Some(Paint::Bitmap { .. }))
+            {
+                path = crate::autorig::deform_path_by_mesh(&path, m);
+            }
+            let warp_mesh = match &s.fill {
+                Some(Paint::Bitmap { .. }) if !is_sliced => rig_deform.cloned().or_else(|| s.live_warp().filter(|w| !w.at_rest()).and_then(crate::warp::Warp::mesh).map(Arc::new)),
+                _ => None,
+            };
+            // When BOTH fill and stroke use distinct bitmaps, emit fill then stroke so each gets its own decoded Pixels.
+            let split_bitmaps = match (&fill, stroke.as_ref().and_then(|st| st.paint.as_ref())) {
+                (Some(Paint::Bitmap { bitmap: bf, .. }), Some(Paint::Bitmap { bitmap: bs, .. })) => bf != bs,
+                _ => false,
+            };
+            if split_bitmaps {
+                let bf = match &fill {
+                    Some(Paint::Bitmap { bitmap, .. }) => Some(*bitmap),
                     _ => None,
-                },
-                smooth: match &s.fill {
-                    Some(Paint::Bitmap { bitmap, .. }) => doc.bitmap(*bitmap).is_none_or(|b| b.smoothing),
-                    _ => true,
-                },
-                // A bitmap bent by its warp is drawn through the mesh (ADR 0079).
-                warp: match &s.fill {
-                    Some(Paint::Bitmap { .. }) if !is_sliced => s.live_warp().filter(|w| !w.at_rest()).and_then(crate::warp::Warp::mesh).map(Arc::new),
+                };
+                let bs = match stroke.as_ref().and_then(|st| st.paint.as_ref()) {
+                    Some(Paint::Bitmap { bitmap, .. }) => Some(*bitmap),
                     _ => None,
-                },
-            });
+                };
+                out.items.push(DisplayItem {
+                    path: path.clone(),
+                    transform,
+                    fill,
+                    stroke: None,
+                    fill_rule: s.fill_rule,
+                    color,
+                    layer: root_layer,
+                    element: root_el,
+                    outline: layer_outline,
+                    clip,
+                    masks,
+                    guide,
+                    group: cx.group,
+                    image: bf.and_then(|id| doc.bitmap(id)).and_then(crate::Bitmap::pixels),
+                    smooth: bf.and_then(|id| doc.bitmap(id)).is_none_or(|b| b.smoothing),
+                    warp: warp_mesh,
+                });
+                out.items.push(DisplayItem {
+                    path,
+                    transform,
+                    fill: None,
+                    stroke,
+                    fill_rule: s.fill_rule,
+                    color,
+                    layer: root_layer,
+                    element: root_el,
+                    outline: layer_outline,
+                    clip,
+                    masks,
+                    guide,
+                    group: cx.group,
+                    image: bs.and_then(|id| doc.bitmap(id)).and_then(crate::Bitmap::pixels),
+                    smooth: bs.and_then(|id| doc.bitmap(id)).is_none_or(|b| b.smoothing),
+                    warp: None,
+                });
+            } else {
+                let bmp_id = match (&fill, stroke.as_ref().and_then(|st| st.paint.as_ref())) {
+                    (Some(Paint::Bitmap { bitmap, .. }), _) | (_, Some(Paint::Bitmap { bitmap, .. })) => Some(*bitmap),
+                    _ => None,
+                };
+                out.items.push(DisplayItem {
+                    path,
+                    transform,
+                    fill,
+                    stroke,
+                    fill_rule: s.fill_rule,
+                    color,
+                    layer: root_layer,
+                    element: root_el,
+                    outline: layer_outline,
+                    clip,
+                    masks,
+                    guide,
+                    group: cx.group,
+                    image: bmp_id.and_then(|id| doc.bitmap(id)).and_then(crate::Bitmap::pixels),
+                    smooth: bmp_id.and_then(|id| doc.bitmap(id)).is_none_or(|b| b.smoothing),
+                    warp: warp_mesh,
+                });
+            }
         }
         ElementKind::Text(t) => {
             // Text with filters draws on its own, as a movie clip does (ADR 0099): its items
@@ -1243,6 +1378,81 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
             let inner = Ctx { work: cx.work, xf, color, depth: cx.depth + 1, root: Some((root_layer, root_el)), outline: layer_outline, stage: cx.stage, clip, masks, guide, group, camera: None, slice };
             eval_timeline(doc, &sym.timeline, local, &inner, out, child.as_ref());
         }
+    }
+    if let Some(t3) = el.transform_3d.filter(crate::Transform3D::has_effect)
+        && let Some(slice) = out.items.get_mut(items_before_3d..)
+    {
+        project_items_3d(doc, el, &layer_xf, &xf, &t3, slice);
+    }
+}
+
+/// Projects emitted [`DisplayItem`]s of an element with a non-identity [`crate::Transform3D`]
+/// through the pinhole homography (`P-044`): vector paths subdivide adaptively in perspective,
+/// and `Paint::Bitmap` items receive a `12×12` perspective-foreshortened [`crate::warp::WarpMesh`]
+/// so both the CPU oracle and `wgpu` Metal stage render smooth perspective textures.
+fn project_items_3d(
+    doc: &Document,
+    el: &Element,
+    layer_xf: &Affine,
+    xf: &Affine,
+    t3: &crate::Transform3D,
+    items: &mut [DisplayItem],
+) {
+    let pivot = match el.pivot() {
+        Some(p) => xf.apply(p),
+        None => {
+            let b = el.bounds(doc).transformed(layer_xf);
+            if b.is_empty() { xf.translation() } else { b.center() }
+        }
+    };
+    let proj = t3.projector(pivot, doc.stage.width as f32, doc.stage.height as f32);
+    for item in items {
+        if item.guide {
+            continue;
+        }
+        let item_xf = item.transform;
+        let path_bounds = item.path.bounds();
+        let center_stage = item_xf.apply(if path_bounds.is_empty() { Vec2::ZERO } else { path_bounds.center() });
+        let p_scale = (item_xf.mean_scale() * proj.scale_at(center_stage)).clamp(1e-3, 1000.0);
+
+        if matches!(item.fill, Some(Paint::Bitmap { .. })) {
+            if let Some(existing) = item.warp.as_deref() {
+                let shown: Vec<Vec2> = existing.shown.iter().map(|&v| proj.project(item_xf.apply(v))).collect();
+                item.warp = Some(Arc::new(crate::warp::WarpMesh {
+                    rest: existing.rest.clone(),
+                    shown,
+                    tris: existing.tris.clone(),
+                }));
+            } else if let Some((rest, shown, tris)) =
+                proj.project_grid(&path_bounds, &item_xf, anicraft_geom::perspective3d::BITMAP_MESH_CELLS)
+            {
+                item.warp = Some(Arc::new(crate::warp::WarpMesh { rest, shown, tris }));
+            }
+        }
+
+        item.path = Arc::new(proj.project_path(&item.path, &item_xf, 0.15));
+
+        if let Some(fill) = &mut item.fill {
+            match fill {
+                Paint::Linear { start, end, .. } => {
+                    *start = proj.project(item_xf.apply(*start));
+                    *end = proj.project(item_xf.apply(*end));
+                }
+                Paint::Radial { center, radius, matrix, .. } => {
+                    let mapped_c = proj.project(item_xf.apply(matrix.apply(*center)));
+                    *center = mapped_c;
+                    *matrix = Affine::IDENTITY;
+                    *radius = (*radius * p_scale).max(0.0);
+                }
+                Paint::Solid(_) | Paint::Bitmap { .. } => {}
+            }
+        }
+
+        if let Some(st) = &mut item.stroke {
+            *st = st.scaled(p_scale);
+        }
+
+        item.transform = Affine::IDENTITY;
     }
 }
 

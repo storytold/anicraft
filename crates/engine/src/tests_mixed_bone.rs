@@ -45,15 +45,15 @@ pub(crate) fn parts() -> Session {
     let mut inner = Layer::new(LayerId(2), "head");
     inner.keyframes[0] = Arc::new({
         let mut k = Keyframe::new(0, 1);
-        k.elements.push(Arc::new(Element { id: ElementId(3), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(-20.0, -20.0, 40.0, 40.0), Paint::Solid(Rgba::hex(0xff0000)))) }));
+        k.elements.push(Arc::new(Element { id: ElementId(3), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(-20.0, -20.0, 40.0, 40.0), Paint::Solid(Rgba::hex(0xff0000)))) }));
         k
     });
     d.library.push(Arc::new(Symbol { id: head, name: "Head".into(), kind: SymbolKind::Graphic, linkage: None, scale_grid_kept: None, scale_grid: None, timeline: Timeline { layers: vec![Arc::new(inner)] } }));
     let shape = |id: u64, path: Path, color: u32, x: f32, y: f32| {
         let shape = Shape { merge: true, ..Shape::filled(path, Paint::Solid(Rgba::hex(color))) };
-        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, y), color: ColorEffect::default(), kind: ElementKind::Shape(shape) })
+        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, y), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) })
     };
-    let inst = Arc::new(Element { id: ElementId(HEAD), name: String::new(), transform: Affine::translate(200.0, 110.0), color: ColorEffect::default(), kind: ElementKind::Symbol { symbol: head, loop_mode: LoopMode::Loop, first_frame: 0, blend: BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None } });
+    let inst = Arc::new(Element { id: ElementId(HEAD), name: String::new(), transform: Affine::translate(200.0, 110.0), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Symbol { symbol: head, loop_mode: LoopMode::Loop, first_frame: 0, blend: BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None } });
     let l = Arc::make_mut(&mut d.timeline_mut(0).layers[0]);
     l.keyframes = vec![Arc::new({
         let mut k = Keyframe::new(0, 20);

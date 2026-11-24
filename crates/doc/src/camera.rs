@@ -85,7 +85,7 @@ impl Camera {
 
     /// The camera element holding this camera (for commands).
     pub fn to_element(&self, id: ElementId) -> Element {
-        Element { id, name: String::new(), transform: self.transform(), color: camera_effect(&self.color), kind: ElementKind::Camera }
+        Element { id, name: String::new(), transform: self.transform(), color: camera_effect(&self.color), transform_3d: None, kind: ElementKind::Camera }
     }
 
     /// The camera on the stage: `T(centre) · R(rotation) · S(zoom)`.

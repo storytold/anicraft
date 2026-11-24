@@ -44,6 +44,7 @@ fn svg_export_reimport_preserves_viewbox_gradients_clips_and_links() {
             name: "lin".into(),
             transform: Affine::IDENTITY,
             color: Default::default(),
+            transform_3d: None,
             kind: ElementKind::Shape(Shape::filled(Path::rect(10.0, 10.0, 60.0, 80.0), linear)),
         }));
         kf.elements.push(Arc::new(Element {
@@ -51,6 +52,7 @@ fn svg_export_reimport_preserves_viewbox_gradients_clips_and_links() {
             name: "rad".into(),
             transform: Affine::IDENTITY,
             color: Default::default(),
+            transform_3d: None,
             kind: ElementKind::Shape(Shape::filled(Path::rect(80.0, 20.0, 70.0, 60.0), radial)),
         }));
     }
@@ -111,6 +113,7 @@ fn svg_bitmap_fill_exports_embedded_image_and_import_reports_unsupported_pattern
             name: "bmp".into(),
             transform: Affine::IDENTITY,
             color: Default::default(),
+            transform_3d: None,
             kind: ElementKind::Shape(Shape::filled(
                 Path::rect(4.0, 4.0, 20.0, 20.0),
                 Paint::Bitmap { bitmap: bid, repeat: false, matrix: Affine::scale(10.0, 10.0) },

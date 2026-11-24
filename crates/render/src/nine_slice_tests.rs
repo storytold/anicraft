@@ -12,7 +12,7 @@ fn panel(sx: f32, sy: f32, guides: bool) -> Document {
     let mut shape = Shape::filled(Path::rounded_rect(0.0, 0.0, 100.0, 40.0, 10.0), Paint::Solid(Rgba::hex(0x2A9D8F)));
     shape.stroke = Some(Stroke::new(Rgba::hex(0x264653), 2.0));
     let mut k = Keyframe::new(0, 1);
-    k.elements.push(Arc::new(Element { id: ElementId(2), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(shape) }));
+    k.elements.push(Arc::new(Element { id: ElementId(2), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) }));
     let mut l = Layer::new(LayerId(3), "art");
     l.keyframes = vec![Arc::new(k)];
     let grid = guides.then_some(ScaleGrid { left: 10.0, right: 90.0, top: 10.0, bottom: 30.0 });
@@ -22,6 +22,7 @@ fn panel(sx: f32, sy: f32, guides: bool) -> Document {
         name: String::new(),
         transform: Affine::translate(20.0, 20.0).mul(&Affine::scale(sx, sy)),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: SymbolId(4), loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
     };
     let mut k = Keyframe::new(0, 1);

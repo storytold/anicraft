@@ -31,10 +31,10 @@ const MAX_ELEMENTS: usize = 10_000;
 /// a namespace this list doesn't know is refused until someone decides (a test checks that
 /// every registered namespace is known).
 pub fn plugin_may_call(id: &str) -> std::result::Result<(), &'static str> {
-    const DOCUMENT: &[&str] = &["draw", "edit", "element", "symbol", "arrange", "modify", "library", "text", "scene", "path", "paint", "timeline", "layer", "align", "doc", "motion", "sound", "stroke", "tween", "actions", "instance", "camera", "bone", "warp", "script", "raw", "frames", "find", "explorer", "ease"];
+    const DOCUMENT: &[&str] = &["draw", "edit", "element", "symbol", "arrange", "modify", "library", "text", "scene", "path", "paint", "timeline", "layer", "align", "doc", "motion", "sound", "stroke", "tween", "actions", "instance", "camera", "bone", "warp", "script", "raw", "frames", "frame_picker", "find", "explorer", "ease"];
     match id {
         "edit.undo" | "edit.redo" => Err("a plug-in run is one undo step; it can't undo or redo"),
-        "edit.cut" | "edit.copy" | "edit.paste" | "edit.paste_in_place" | "timeline.cut_frames" | "timeline.copy_frames" | "timeline.paste_frames" | "frames.cut" | "frames.copy" | "frames.paste" | "ease.copy" | "ease.paste" => {
+        "edit.cut" | "edit.copy" | "edit.paste" | "edit.paste_in_place" | "timeline.cut_frames" | "timeline.copy_frames" | "timeline.paste_frames" | "timeline.copy_motion" | "timeline.paste_motion" | "frames.cut" | "frames.copy" | "frames.paste" | "ease.copy" | "ease.paste" => {
             Err("plug-ins don't use your clipboard")
         }
         // A reference video is a file on this computer, read by a program AniCraft starts.
@@ -60,6 +60,9 @@ pub fn plugin_may_call(id: &str) -> std::result::Result<(), &'static str> {
             // Data tables and bindings are the document's (ADR 0118); a table file is a file.
             "data" if id == "data.import_table" => Err("plug-ins can't read files: pass the values to data.set_table"),
             "data" => Ok(()),
+            "rig" if matches!(id, "rig.save_preset" | "rig.load_preset") => Err("plug-ins can't read or write rig preset files"),
+            "rig" if id == "rig.auto_detect" => Err("plug-ins can't run external vision models or read files"),
+            "rig" => Ok(()),
             "plugin" => Err("plug-ins can't install, run or remove plug-ins"),
             // Saved commands are files in your preferences (ADR 0097), and running one from a
             // plug-in would let the two call each other.

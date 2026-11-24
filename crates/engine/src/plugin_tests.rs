@@ -191,6 +191,8 @@ fn every_command_namespace_has_a_plugin_policy() {
             "swatch" => assert_eq!(verdict.is_ok(), !matches!(c.id, "swatch.import" | "swatch.export"), "{}", c.id),
             // Data tables (ADR 0118): the document's tables and bindings yes, reading a file no.
             "data" => assert_eq!(verdict.is_ok(), c.id != "data.import_table", "{}", c.id),
+            // Hybrid Auto-Rig Studio: posing, editing and querying document rigs yes; external vision subprocess & preset files no.
+            "rig" => assert_eq!(verdict.is_ok(), !matches!(c.id, "rig.auto_detect" | "rig.save_preset" | "rig.load_preset"), "{}", c.id),
             // Rulers, grid and guides (ADR 0076): a scene's guides yes, how you see and snap no.
             // A reference video (ADR 0116) is a file read by a program AniCraft starts.
             "layer" if c.id == "layer.set_video" => assert!(verdict.is_err(), "{} must be refused", c.id),

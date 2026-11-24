@@ -116,7 +116,7 @@ mod tests {
     use super::*;
 
     /// Stage and screen coordinates coincide.
-    const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+    const XF: Xf = Xf::flat(Pos2::ZERO, 1.0);
 
     /// The `nineslicedit` screenshot state: the Panel symbol open in place, its guides at
     /// x = ±70 and y = ±14 in its space.

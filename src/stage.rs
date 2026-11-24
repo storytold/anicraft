@@ -230,6 +230,89 @@ fn to_v(p: Pos2) -> Vec2 {
     Vec2::new(p.x, p.y)
 }
 
+/// Rotates screen point `p` around `center` by `rotation` radians (exact identity when `0.0`).
+pub(crate) fn rot_screen(p: Pos2, center: Pos2, rotation: f32) -> Pos2 {
+    if rotation == 0.0 {
+        p
+    } else {
+        let (s, c) = rotation.sin_cos();
+        let d = p - center;
+        pos2(center.x + d.x * c - d.y * s, center.y + d.x * s + d.y * c)
+    }
+}
+
+/// Inverse of [`rot_screen`]: unrotates screen point `p` around `center` by `-rotation`.
+pub(crate) fn unrot_screen(p: Pos2, center: Pos2, rotation: f32) -> Pos2 {
+    if rotation == 0.0 {
+        p
+    } else {
+        let (s, c) = rotation.sin_cos();
+        let d = p - center;
+        pos2(center.x + d.x * c + d.y * s, center.y - d.x * s + d.y * c)
+    }
+}
+
+/// Maps a screen-space pan/scroll delta into unrotated view `pan` space.
+fn unrot_delta(d: egui::Vec2, rotation: f32) -> egui::Vec2 {
+    if rotation == 0.0 {
+        d
+    } else {
+        let (s, c) = rotation.sin_cos();
+        vec2(d.x * c + d.y * s, -d.x * s + d.y * c)
+    }
+}
+
+fn view_affine(origin: Pos2, zoom: f32, center: Pos2, rotation: f32) -> Affine {
+    let base = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
+    if rotation == 0.0 {
+        base
+    } else {
+        Affine::translate(center.x, center.y)
+            .mul(&Affine::rotate(rotation))
+            .mul(&Affine::translate(-center.x, -center.y))
+            .mul(&base)
+    }
+}
+
+fn paint_rotated_tile(painter: &egui::Painter, tex_id: egui::TextureId, corners: [Pos2; 4]) {
+    let mut mesh = egui::Mesh::with_texture(tex_id);
+    let uvs = [pos2(0.0, 0.0), pos2(1.0, 0.0), pos2(1.0, 1.0), pos2(0.0, 1.0)];
+    for (pos, uv) in corners.into_iter().zip(uvs) {
+        mesh.vertices.push(egui::epaint::Vertex { pos, uv, color: Color32::WHITE });
+    }
+    mesh.indices.extend_from_slice(&[0, 1, 2, 0, 2, 3]);
+    painter.add(egui::Shape::mesh(mesh));
+}
+
+fn commit_lasso(app: &mut App, add: bool) {
+    let pts: Vec<[f32; 2]> = std::mem::take(&mut app.lasso_points).into_iter().map(|p| [p.x, p.y]).collect();
+    if pts.len() >= 3 {
+        app.run("raw.select_lasso", json!({"points": pts, "add": add}));
+    }
+}
+
+/// Consumes Enter / Escape / Backspace while building a Polygon Lasso (`Tool::PolyLasso`).
+pub fn consume_lasso_keys(app: &mut App, ctx: &egui::Context) {
+    if app.tool != Tool::PolyLasso || app.lasso_points.is_empty() {
+        return;
+    }
+    let mut finish = false;
+    let mut shift = false;
+    ctx.input_mut(|i| {
+        shift = i.modifiers.shift;
+        if i.consume_key(Modifiers::NONE, Key::Enter) || i.consume_key(Modifiers::SHIFT, Key::Enter) {
+            finish = true;
+        } else if i.consume_key(Modifiers::NONE, Key::Escape) {
+            app.lasso_points.clear();
+        } else if i.consume_key(Modifiers::NONE, Key::Backspace) || i.consume_key(Modifiers::NONE, Key::Delete) {
+            app.lasso_points.pop();
+        }
+    });
+    if finish {
+        commit_lasso(app, shift);
+    }
+}
+
 /// Says in the status bar, once each time it starts, that the frame shown is not all there: its
 /// artwork took more than a frame's allowance of work, so the rest was left out (ADR 0128). A
 /// picture with parts missing and nothing said would read as lost work. Not asked while
@@ -297,7 +380,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // With the Camera tool the wheel zooms the camera, not the view.
                 crate::camera_tool::wheel(app, scroll.y, now);
             } else if scroll != egui::Vec2::ZERO {
-                app.view.pan += scroll;
+                app.view.pan += unrot_delta(scroll, app.view.rotation);
             }
         }
     }
@@ -328,11 +411,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     let st_zoom = app.view.zoom;
+    let view_rot = app.view.rotation;
+    let canvas_center = canvas.center();
     // Snap the stage origin to whole device pixels: tile edges then land exactly on screen
     // pixels, so texture filtering can't show seams between tiles.
-    let raw = canvas.center() + app.view.pan - size * st_zoom * 0.5;
+    let raw = canvas_center + app.view.pan - size * st_zoom * 0.5;
     let st_origin = pos2((raw.x * ppp).round() / ppp, (raw.y * ppp).round() / ppp);
-    let st_screen = |p: Vec2| pos2(st_origin.x + p.x * st_zoom, st_origin.y + p.y * st_zoom);
+    let st_screen = |p: Vec2| rot_screen(pos2(st_origin.x + p.x * st_zoom, st_origin.y + p.y * st_zoom), canvas_center, view_rot);
     let stage_rect = Rect::from_min_size(st_origin, size * st_zoom);
     // Rulers, grid and guides are the stage's, in stage pixels (ADR 0076).
     let geo = crate::rulers::Geo { canvas, origin: st_origin, zoom: st_zoom };
@@ -343,8 +428,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         Some(v) => (st_origin + vec2(v.origin.x, v.origin.y) * st_zoom, st_zoom * v.scale),
         None => (st_origin, st_zoom),
     };
-    let to_screen = |p: Vec2| pos2(origin.x + p.x * zoom, origin.y + p.y * zoom);
-    let to_stage = |p: Pos2| pos2((p.x - origin.x) / zoom, (p.y - origin.y) / zoom);
+    let to_screen = |p: Vec2| rot_screen(pos2(origin.x + p.x * zoom, origin.y + p.y * zoom), canvas_center, view_rot);
+    let to_stage = |p: Pos2| {
+        let u = unrot_screen(p, canvas_center, view_rot);
+        pos2((u.x - origin.x) / zoom, (u.y - origin.y) / zoom)
+    };
     let painter = ui.painter_at(canvas);
     // View > Preview Through Camera: the stage shows the movie's picture (ADR 0027). The
     // Selection tool picks and moves artwork there, the pointer mapped back through the camera
@@ -363,7 +451,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let pointer = resp.hover_pos().or_else(|| resp.interact_pointer_pos());
     app.cursor_stage = pointer.filter(|p| canvas.contains(*p)).map(to_stage);
     let panning = app.tool == Tool::Hand || space || resp.dragged_by(egui::PointerButton::Middle);
-    let paused = preview && !panning && !matches!(app.tool, Tool::Camera | Tool::Hand | Tool::Zoom | Tool::Select);
+    let paused = preview && !panning && !matches!(app.tool, Tool::Camera | Tool::Hand | Tool::RotateView | Tool::Zoom | Tool::Select);
     // The Selection tool on the movie's picture: points there are the picture's (ADR 0082).
     let through = preview && !panning && app.tool == Tool::Select;
     // A drag from a ruler makes a guide (ADR 0076).
@@ -381,14 +469,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::xform::sync(app);
     let xf_frame = if app.tool == Tool::Transform && !multi && !preview { crate::xform::frame(app) } else { None };
     let sel_bounds = if multi { crate::onion::selection_bounds(app) } else { bounds_arr(app.s.selection_bounds()) };
-    let sel_rect = sel_bounds.map(|b| Rect::from_min_max(to_screen(Vec2::new(b[0], b[1])), to_screen(Vec2::new(b[2], b[3]))));
+    let sel_rect = sel_bounds.map(|b| {
+        if view_rot == 0.0 {
+            Rect::from_min_max(to_screen(Vec2::new(b[0], b[1])), to_screen(Vec2::new(b[2], b[3])))
+        } else {
+            let pts = [Vec2::new(b[0], b[1]), Vec2::new(b[2], b[1]), Vec2::new(b[2], b[3]), Vec2::new(b[0], b[3])].map(to_screen);
+            Rect::from_points(&pts)
+        }
+    });
     // Shape hint markers take the pointer first with the selection tools (ADR 0023).
     let hint_tools = matches!(app.tool, Tool::Select | Tool::Transform | Tool::Subselect) && !panning && !preview;
     let hint_marks = if hint_tools { crate::shape_hints::markers(app) } else { Vec::new() };
     let hint_at = |p: Pos2| crate::shape_hints::hit(&hint_marks, p, to_screen);
     let hint_hot = pointer.and_then(hint_at);
 
-    let xf = crate::pathtools::Xf { origin, zoom };
+    let xf = crate::pathtools::Xf { origin, zoom, center: canvas_center, rotation: view_rot };
     // Pen pressure, when a tablet reports it (the Brush tool's width follows it).
     let pressure = crate::brushtool::frame_pressure(ui.ctx());
     // Tilt, where the toolkit reports it: the brushes' Tilt options show once it has (ADR 0093).
@@ -416,8 +511,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             _ if let Some(i) = guide_hot => crate::rulers::cursor(app, i),
             _ if let Drag::SliceGuide { guide } = app.drag => guide.cursor(),
             _ if let Some(guide) = slice_hot => guide.cursor(),
-            _ if matches!(app.drag, Drag::Hint { .. } | Drag::CameraPan { .. } | Drag::BonePose { .. } | Drag::WarpPin { .. }) => CursorIcon::Grabbing,
+            _ if matches!(app.drag, Drag::Hint { .. } | Drag::CameraPan { .. } | Drag::BonePose { .. } | Drag::WarpPin { .. } | Drag::AutoRigJoint { .. } | Drag::RotateView { .. }) => CursorIcon::Grabbing,
             _ if matches!(app.drag, Drag::ArmatureMove { .. }) => CursorIcon::Move,
+            Tool::Select if app.drag == Drag::None && pointer.is_some_and(|p| crate::autorig_panel::hit_joint(app, xf, p).is_some()) => CursorIcon::Grab,
             Tool::Select if app.drag == Drag::None && pointer.is_some_and(|p| crate::bone_tool::hit(app, xf, p).is_some()) => CursorIcon::Grab,
             _ if paused => CursorIcon::NotAllowed,
             Tool::Camera if app.drag == Drag::None && pointer.is_some_and(|p| crate::camera_tool::on_knob(app, &cam_geo, p)) => CursorIcon::Alias,
@@ -454,7 +550,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     None => CursorIcon::Default,
                 }
             }
-            Tool::Rect | Tool::Oval | Tool::Star | Tool::Line | Tool::Pen | Tool::Pencil | Tool::Brush | Tool::PaintBrush | Tool::Eraser | Tool::PaintBucket | Tool::InkBottle | Tool::Eyedropper | Tool::Bone | Tool::Bind | Tool::Warp => CursorIcon::Crosshair,
+            Tool::Rect | Tool::Oval | Tool::Star | Tool::Line | Tool::Pen | Tool::Pencil | Tool::Brush | Tool::PaintBrush | Tool::Eraser | Tool::PaintBucket | Tool::InkBottle | Tool::Eyedropper | Tool::Bone | Tool::Bind | Tool::Warp | Tool::Lasso | Tool::PolyLasso | Tool::MagicWand | Tool::Transform3D => CursorIcon::Crosshair,
+            Tool::RotateView => CursorIcon::Grab,
             Tool::Text => CursorIcon::Text,
             Tool::Zoom => {
                 if alt {
@@ -522,6 +619,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     Drag::MultiTransform { kind, start: sp, bounds, applied: Affine::IDENTITY }
                 }
                 Tool::Select | Tool::Transform if multi => crate::onion::drag_start(app, sp, shift, zoom),
+                // Auto Rig Studio: dragging joint dots on the Stage when `edit_joints` is active.
+                Tool::Select if let Some(d) = crate::autorig_panel::drag_start(app, xf, press) => d,
                 // On an armature, a drag poses it (ADR 0043).
                 Tool::Select if let Some(d) = crate::bone_tool::select_drag_start(app, xf, press) => d,
                 Tool::Select => select_press(app, sp, shift, command, alt, zoom),
@@ -560,16 +659,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 Tool::Bone => crate::bone_tool::drag_start(app, xf, press),
                 Tool::Bind => crate::bind_tool::drag_start(app, xf, press),
                 Tool::Warp => crate::warp_tool::drag_start(app, xf, press),
+                Tool::Transform3D => crate::transform3d_tool::drag_start(app, press, sp, shift, zoom),
                 Tool::Width => crate::widthtool::drag_start(app, press, xf),
                 Tool::GradientTransform => crate::gradient_tool::drag_start(app, press, xf),
                 Tool::Pencil => {
                     app.pencil = vec![to_v(sp)];
                     Drag::Pencil
                 }
+                Tool::Lasso => {
+                    app.lasso_points = vec![to_v(sp)];
+                    Drag::Lasso
+                }
                 Tool::Brush | Tool::PaintBrush => crate::brushtool::start(app, to_v(sp), pressure, now),
                 // With the Faucet on, the eraser deletes on a click instead.
                 Tool::Eraser if !app.eraser.faucet => crate::erasertool::start(app, to_v(sp)),
-                Tool::Pen | Tool::Text | Tool::PaintBucket | Tool::InkBottle | Tool::Eyedropper | Tool::Eraser => Drag::None,
+                Tool::Pen | Tool::Text | Tool::PaintBucket | Tool::InkBottle | Tool::Eyedropper | Tool::Eraser | Tool::PolyLasso | Tool::MagicWand => Drag::None,
                 // The press snaps to points, lines and fill edges (ADR 0045).
                 Tool::Rect | Tool::Oval | Tool::Star | Tool::Line => {
                     let start = snap_draw(app, sp, zoom);
@@ -577,6 +681,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
                 Tool::Camera => crate::camera_tool::drag_start(app, &cam_geo, press),
                 Tool::Hand => Drag::Pan,
+                Tool::RotateView => Drag::RotateView { start_angle: (press - canvas_center).angle(), base_rotation: app.view.rotation },
                 Tool::Zoom => Drag::None,
             }
         };
@@ -610,7 +715,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             });
         }
         match (&mut app.drag, cur) {
-            (Drag::Pan, _) => app.view.pan += resp.drag_delta(),
+            (Drag::Pan, _) => app.view.pan += unrot_delta(resp.drag_delta(), view_rot),
+            (Drag::RotateView { start_angle, base_rotation }, _) => {
+                if let Some(p) = resp.interact_pointer_pos() {
+                    let d = p - canvas_center;
+                    if d.length_sq() > 4.0 {
+                        let mut rot = (*base_rotation + (d.angle() - *start_angle) + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+                        if shift {
+                            let step = 15.0_f32.to_radians();
+                            rot = (rot / step).round() * step;
+                        }
+                        app.view.rotation = if rot.abs() < 1e-4 { 0.0 } else { rot };
+                    }
+                }
+            }
             (Drag::CameraMove { last }, Some(c)) => {
                 let mut l = *last;
                 crate::camera_tool::move_to(app, &mut l, to_v(c));
@@ -742,6 +860,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let (element, pin) = (*element, *pin);
                 crate::warp_tool::drag_to(app, element, pin, c);
             }
+            (Drag::Transform3D { press, rx, ry, rz, tz }, _) => {
+                if let Some(p) = resp.interact_pointer_pos() {
+                    let (press, rx, ry, rz, tz) = (*press, *rx, *ry, *rz, *tz);
+                    crate::transform3d_tool::drag_to(app, press, rx, ry, rz, tz, p, shift, alt);
+                }
+            }
+            (Drag::AutoRigJoint { layer, joint_idx }, Some(c)) => {
+                let (layer, joint_idx) = (*layer, *joint_idx);
+                crate::autorig_panel::drag_to(app, layer, joint_idx, c);
+            }
             (d @ Drag::Width { .. }, Some(c)) => {
                 let d = *d;
                 crate::widthtool::drag_to(app, d, to_v(c), alt, zoom);
@@ -755,6 +883,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 crate::shape_envelope::drag_to(app, d, to_v(c));
             }
             (Drag::Pencil, Some(c)) => crate::pathtools::pencil_sample(app, to_v(c), xf),
+            (Drag::Lasso, Some(c)) => {
+                let pt = to_v(c);
+                if app.lasso_points.len() < 4096 && app.lasso_points.last().is_none_or(|q| q.distance(pt) >= 2.0 / zoom.max(1e-3)) {
+                    app.lasso_points.push(pt);
+                }
+            }
             (Drag::Brush, Some(c)) => crate::brushtool::sample(app, to_v(c), pressure, xf, now),
             (Drag::Eraser, Some(c)) => crate::brushtool::sample(app, to_v(c), None, xf, now),
             (Drag::Marquee { cur: m, .. }, Some(c)) => *m = c,
@@ -770,7 +904,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.s.end_gesture();
             }
             Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. } => end_raw_drag(app),
-            Drag::Transform { .. } | Drag::SliceGuide { .. } | Drag::Points { .. } | Drag::Hint { .. } | Drag::MotionMove { .. } | Drag::CameraPan { .. } | Drag::CameraRotate { .. } | Drag::BonePose { .. } | Drag::ArmatureMove { .. } | Drag::WarpPin { .. } => app.s.end_gesture(),
+            Drag::Transform { .. } | Drag::SliceGuide { .. } | Drag::Points { .. } | Drag::Hint { .. } | Drag::MotionMove { .. } | Drag::CameraPan { .. } | Drag::CameraRotate { .. } | Drag::BonePose { .. } | Drag::ArmatureMove { .. } | Drag::WarpPin { .. } | Drag::Transform3D { .. } | Drag::AutoRigJoint { .. } => app.s.end_gesture(),
             Drag::Bone { from, parent, head, cur } => crate::bone_tool::drag_end(app, xf, from, parent, head, cur),
             Drag::Guide { index, .. } => crate::rulers::drag_end(app, index, geo, ui.input(|i| i.pointer.latest_pos())),
             Drag::Width { .. } => crate::widthtool::drag_end(app),
@@ -781,6 +915,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             Drag::BindMarquee { start, cur } => crate::bind_tool::drag_end(app, start, cur, shift, command),
             Drag::BindPaint { .. } => crate::bind_tool::paint_end(app),
             Drag::Pencil => crate::pathtools::commit_pencil(app, xf),
+            Drag::Lasso => commit_lasso(app, shift),
             Drag::Brush => crate::brushtool::commit(app, ui.ctx(), xf),
             Drag::Eraser => crate::erasertool::commit(app, xf),
             // Raw shapes merge where they landed, in the drag's step (ADR 0051).
@@ -792,7 +927,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.run("raw.select_rect", json!({"x0": start.x, "y0": start.y, "x1": cur.x, "y1": cur.y, "add": shift}));
             }
             Drag::Shape { start, cur } => create_shape(app, start, cur),
-            Drag::Pan | Drag::None | Drag::CameraWheel { .. } => {}
+            Drag::Pan | Drag::RotateView { .. } | Drag::None | Drag::CameraWheel { .. } => {}
         }
         app.drag = Drag::None;
         app.snap_ring = None;
@@ -860,6 +995,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 Tool::Bone if !panning => crate::bone_tool::click(app, xf, p),
                 Tool::Bind if !panning => crate::bind_tool::click(app, xf, p, shift, command),
                 Tool::Warp if !panning => crate::warp_tool::click(app, xf, p),
+                Tool::PolyLasso if !panning => {
+                    let pt = to_v(sp);
+                    if app.lasso_points.len() >= 3 && app.lasso_points.first().is_some_and(|&f| p.distance(to_screen(f)) <= 8.0) {
+                        commit_lasso(app, shift);
+                    } else if app.lasso_points.len() < 4096 {
+                        app.lasso_points.push(pt);
+                    }
+                }
+                Tool::MagicWand if !panning => {
+                    app.run("raw.magic_wand", json!({"x": sp.x, "y": sp.y, "tolerance": app.wand_tolerance, "all_layers": app.wand_all_layers, "add": shift}));
+                }
+                Tool::Transform3D if !panning => crate::transform3d_tool::click(app, sp, shift),
                 Tool::Select | Tool::Transform if !panning && multi => crate::onion::click(app, sp, shift, zoom),
                 // A click on a bone picks it (ADR 0043).
                 Tool::Select if !panning && let Some((layer, bone, _)) = crate::bone_tool::hit(app, xf, p) => crate::bone_tool::select(app, layer, Some(bone)),
@@ -941,6 +1088,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     {
         crate::pathtools::subselect_double_click(app, p, xf);
     }
+    if app.tool == Tool::PolyLasso && !panning && !paused && resp.double_clicked() && app.lasso_points.len() >= 3 {
+        commit_lasso(app, shift);
+    }
+    if app.tool == Tool::RotateView && !panning && resp.double_clicked() {
+        app.view.rotation = 0.0;
+    }
 
     resp.context_menu(|ui| {
         ui.set_min_width(220.0);
@@ -997,16 +1150,39 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     });
 
     // ---- render the frame -----------------------------------------------------------------
-    painter.rect_filled(stage_rect.translate(vec2(3.0, 4.0)), 0.0, T.stage_shadow);
-    // Stage colour first, so a picture still rendering never shows as a hole.
-    painter.rect_filled(stage_rect, 0.0, crate::theme::to_color32(app.s.doc.stage.background));
-    if !preview && crate::rulers::grid_under(app) {
+    let stage_quad = [
+        rot_screen(stage_rect.left_top(), canvas_center, view_rot),
+        rot_screen(stage_rect.right_top(), canvas_center, view_rot),
+        rot_screen(stage_rect.right_bottom(), canvas_center, view_rot),
+        rot_screen(stage_rect.left_bottom(), canvas_center, view_rot),
+    ];
+    if view_rot == 0.0 {
+        painter.rect_filled(stage_rect.translate(vec2(3.0, 4.0)), 0.0, T.stage_shadow);
+        // Stage colour first, so a picture still rendering never shows as a hole.
+        painter.rect_filled(stage_rect, 0.0, crate::theme::to_color32(app.s.doc.stage.background));
+    } else {
+        let shadow_quad = stage_quad.map(|q| q + vec2(3.0, 4.0));
+        painter.add(egui::Shape::convex_polygon(shadow_quad.to_vec(), T.stage_shadow, Stroke::NONE));
+        painter.add(egui::Shape::convex_polygon(stage_quad.to_vec(), crate::theme::to_color32(app.s.doc.stage.background), Stroke::NONE));
+    }
+    if !preview && view_rot == 0.0 && crate::rulers::grid_under(app) {
         crate::rulers::paint_grid(app, &painter, geo, stage_rect, ppp);
     }
     // What gets rendered: the stage, and the pasteboard around it unless View › Clip Content
     // Outside the Stage is on (#251). Previewing through the camera shows what the movie shows.
     let pasteboard = !app.view.clip_to_stage && !preview;
-    let vis = if pasteboard { canvas } else { stage_rect.intersect(canvas) };
+    let unrot_canvas = if view_rot == 0.0 {
+        canvas
+    } else {
+        let cpts = [
+            unrot_screen(canvas.left_top(), canvas_center, view_rot),
+            unrot_screen(canvas.right_top(), canvas_center, view_rot),
+            unrot_screen(canvas.right_bottom(), canvas_center, view_rot),
+            unrot_screen(canvas.left_bottom(), canvas_center, view_rot),
+        ];
+        Rect::from_points(&cpts)
+    };
+    let vis = if pasteboard { unrot_canvas } else { stage_rect.intersect(unrot_canvas) };
     if vis.width() >= 1.0 && vis.height() >= 1.0 {
         if app.stage_cache.service.is_none() {
             let ctx = ui.ctx().clone();
@@ -1030,7 +1206,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         let z = st_zoom * ppp;
         // The grid under the artwork (ADR 0076): the stage colour is painted under it, and the
         // tiles come without it.
-        let grid_under = crate::rulers::grid_under(app) && !preview;
+        let grid_under = crate::rulers::grid_under(app) && !preview && view_rot == 0.0;
         let bg = (!grid_under).then_some(app.s.doc.stage.background);
         let stage_px = ((size.x * z).ceil().max(1.0) as u32, (size.y * z).ceil().max(1.0) as u32);
         let px = [(vis.min.x - st_origin.x) * ppp, (vis.min.y - st_origin.y) * ppp, (vis.max.x - st_origin.x) * ppp, (vis.max.y - st_origin.y) * ppp];
@@ -1132,19 +1308,37 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if ready < keys.len() {
             stale.sort_by_key(|t| t.used);
             for t in stale.iter().rev().take(96).rev() {
-                let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
-                painter.image(t.tex.id(), r, uv, Color32::WHITE);
+                if view_rot == 0.0 {
+                    let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
+                    painter.image(t.tex.id(), r, uv, Color32::WHITE);
+                } else {
+                    paint_rotated_tile(&painter, t.tex.id(), [
+                        st_screen(Vec2::new(t.rect[0], t.rect[1])),
+                        st_screen(Vec2::new(t.rect[2], t.rect[1])),
+                        st_screen(Vec2::new(t.rect[2], t.rect[3])),
+                        st_screen(Vec2::new(t.rect[0], t.rect[3])),
+                    ]);
+                }
             }
         }
         for t in app.stage_cache.tiles.iter().filter(|t| keys.contains(&t.key)) {
-            let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
-            painter.image(t.tex.id(), r, uv, Color32::WHITE);
+            if view_rot == 0.0 {
+                let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
+                painter.image(t.tex.id(), r, uv, Color32::WHITE);
+            } else {
+                paint_rotated_tile(&painter, t.tex.id(), [
+                    st_screen(Vec2::new(t.rect[0], t.rect[1])),
+                    st_screen(Vec2::new(t.rect[2], t.rect[1])),
+                    st_screen(Vec2::new(t.rect[2], t.rect[3])),
+                    st_screen(Vec2::new(t.rect[0], t.rect[3])),
+                ]);
+            }
         }
 
         // While a background render catches up with a drag, outline where the selection is now,
         // so the artwork never seems to lag the pointer.
         if ready < keys.len() && !preview && matches!(app.drag, Drag::Move { .. } | Drag::SnapMove { .. } | Drag::Transform { .. } | Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. }) {
-            let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
+            let to_px = view_affine(origin, zoom, canvas_center, view_rot);
             let dl = app.s.display_list();
             let stroke = Stroke::new(1.5, T.selection);
             for item in dl.items.iter().filter(|i| app.s.selection.contains(i.layer, i.element)).take(2_000) {
@@ -1155,9 +1349,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
         }
     }
-    painter.rect_stroke(stage_rect, 0.0, Stroke::new(1.0, T.stage_edge), StrokeKind::Outside);
+    if view_rot == 0.0 {
+        painter.rect_stroke(stage_rect, 0.0, Stroke::new(1.0, T.stage_edge), StrokeKind::Outside);
+    } else {
+        painter.add(egui::Shape::closed_line(stage_quad.to_vec(), Stroke::new(1.0, T.stage_edge)));
+    }
     // The grid over the artwork, and the guides (ADR 0076): the stage's, not the camera's.
-    if !preview {
+    if !preview && view_rot == 0.0 {
         if !crate::rulers::grid_under(app) {
             crate::rulers::paint_grid(app, &painter, geo, stage_rect, ppp);
         }
@@ -1181,7 +1379,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Guide artwork never renders either: it always shows here, as a line in the guide's layer
     // colour, so the path a tween follows is visible while animating.
     {
-        let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
+        let to_px = view_affine(origin, zoom, canvas_center, view_rot);
         let dl = app.s.display_list();
         for item in dl.items.iter().filter(|i| i.masks.is_some() || i.guide).take(2_000) {
             let Some(layer) = app.s.timeline().layer(item.layer).filter(|l| item.guide || !l.locked) else { continue };
@@ -1196,6 +1394,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::bone_tool::draw(app, &painter, xf);
     crate::bind_tool::draw(app, &painter, xf);
     crate::warp_tool::draw(app, &painter, xf);
+    crate::transform3d_tool::draw(app, &painter, xf);
+    crate::autorig_panel::draw_stage_overlay(app, &painter, xf);
     let sel_stroke = Stroke::new(1.0, T.selection);
     let raw = raw_ids(app);
     if app.tool == Tool::Select && app.drag == Drag::None
@@ -1219,8 +1419,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // Animate-style stipple overlay instead of a bounding box.
     if app.tool == Tool::Select && !preview {
         let gap = dot_gap_points(ppp);
-        let to_px = Affine::translate(origin.x, origin.y)
-            .mul(&Affine::scale(zoom, zoom));
+        let to_px = view_affine(origin, zoom, canvas_center, view_rot);
 
         let mut pattern = egui::Mesh::default();
         let mut backing = egui::Mesh::default();
@@ -1354,13 +1553,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         // A plain box, as Animate's Selection tool shows: handles are Free Transform's (Q),
         // where they work. Handles drawn here could not be dragged (#205).
-        painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
+        if view_rot == 0.0 {
+            painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
+        } else {
+            let q = [b.min, Vec2::new(b.max.x, b.min.y), b.max, Vec2::new(b.min.x, b.max.y)].map(to_screen);
+            painter.add(egui::Shape::closed_line(q.to_vec(), sel_stroke));
+        }
         // Text on a path shows the path it follows (ADR 0070).
         if let anicraft_engine::doc::ElementKind::Text(t) = &e.kind
             && let Some(on) = &t.on_path
             && let Some(item) = app.s.display_list().items.iter().find(|i| i.element == id)
         {
-            let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom)).mul(&item.transform);
+            let to_px = view_affine(origin, zoom, canvas_center, view_rot).mul(&item.transform);
             for pl in on.path.flatten(&to_px, 0.5) {
                 let pts: Vec<Pos2> = pl.points.iter().map(|p| pos2(p.x, p.y)).collect();
                 painter.add(if pl.closed { egui::Shape::closed_line(pts, sel_stroke) } else { egui::Shape::line(pts, sel_stroke) });
@@ -1425,7 +1629,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
         }
         Drag::Shape { start, cur } => draw_preview(app, &painter, to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)), zoom),
+        Drag::Lasso if app.lasso_points.len() >= 2 => {
+            let pts: Vec<Pos2> = app.lasso_points.iter().copied().map(to_screen).collect();
+            painter.add(egui::Shape::closed_line(pts, Stroke::new(1.25, T.selection)));
+        }
         _ => {}
+    }
+    if app.tool == Tool::PolyLasso && !app.lasso_points.is_empty() {
+        let mut pts: Vec<Pos2> = app.lasso_points.iter().copied().map(to_screen).collect();
+        let first = pts.first().copied();
+        if let Some(p) = pointer.filter(|p| canvas.contains(*p)) {
+            pts.push(p);
+        }
+        if pts.len() >= 2 {
+            painter.add(egui::Shape::line(pts, Stroke::new(1.25, T.selection)));
+        }
+        if let Some(f) = first {
+            let closing = app.lasso_points.len() >= 3 && pointer.is_some_and(|p| p.distance(f) <= 8.0);
+            painter.circle(f, if closing { 5.0 } else { 3.5 }, if closing { T.selection } else { Color32::WHITE }, Stroke::new(1.25, T.selection));
+        }
+    }
+    if app.tool == Tool::RotateView || matches!(app.drag, Drag::RotateView { .. }) {
+        painter.circle_stroke(canvas_center, 10.0, Stroke::new(1.25, T.selection.gamma_multiply(0.75)));
+        painter.line_segment([canvas_center - vec2(14.0, 0.0), canvas_center + vec2(14.0, 0.0)], Stroke::new(1.0, T.selection.gamma_multiply(0.75)));
+        painter.line_segment([canvas_center - vec2(0.0, 14.0), canvas_center + vec2(0.0, 14.0)], Stroke::new(1.0, T.selection.gamma_multiply(0.75)));
     }
     // The drawing tools show where a press would start, snapped (ADR 0045).
     let draws = matches!(app.tool, Tool::Line | Tool::Rect | Tool::Oval | Tool::Star | Tool::Pen) && !panning && !paused && app.pen.as_ref().is_none_or(|p| !p.dragging);
@@ -5007,7 +5234,7 @@ mod draw_tests {
                 assert!(app.s.selection.is_empty(), "{tool:?}, object {object}: nothing selected");
             }
             app.pencil = (0..20).map(|i| Vec2::new(100.0 + i as f32 * 4.0, 100.0 + (i % 3) as f32)).collect();
-            crate::pathtools::commit_pencil(&mut app, crate::pathtools::Xf { origin: Pos2::ZERO, zoom: 1.0 });
+            crate::pathtools::commit_pencil(&mut app, crate::pathtools::Xf::flat(Pos2::ZERO, 1.0));
             assert!(app.s.selection.is_empty(), "Pencil, object {object}");
             let n = app.s.visible_elements().len();
             app.s.undo().expect("undo");
@@ -5516,5 +5743,47 @@ mod pointer_tests {
         }
         // Two separate clicks stay two clicks: the fill alone.
         assert_eq!(double_click(0.7).s.selection.len(), 1);
+    }
+
+    #[test]
+    fn rotate_view_maps_stage_and_screen_exactly_and_zoom_about_pins_cursor() {
+        let canvas = Rect::from_min_size(pos2(40.0, 30.0), vec2(800.0, 600.0));
+        let center = canvas.center();
+        for deg in [0.0_f32, 15.0, -37.5, 90.0, -135.0, 180.0] {
+            let rot = deg.to_radians();
+            let xf = crate::pathtools::Xf {
+                origin: pos2(120.0, 90.0),
+                zoom: 1.75,
+                center,
+                rotation: rot,
+            };
+            let pt = Vec2::new(240.0, 180.0);
+            let scr = xf.to_screen(pt);
+            let back = xf.to_stage(scr);
+            assert!(back.distance(pt) < 1e-3, "deg={deg}: {back:?} vs {pt:?}");
+        }
+
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(
+            &ctx,
+            anicraft_engine::Session::new(anicraft_engine::doc::Document::default()),
+            Some(std::path::PathBuf::from("unused.png")),
+        );
+        app.view.fit = false;
+        app.view.zoom = 1.25;
+        app.view.pan = vec2(30.0, -20.0);
+        app.view.rotation = 30.0_f32.to_radians();
+
+        let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
+        let stage_at = |a: &App, screen: Pos2| -> Pos2 {
+            let u = unrot_screen(screen, center, a.view.rotation);
+            let origin = center + a.view.pan - size * a.view.zoom * 0.5;
+            pos2((u.x - origin.x) / a.view.zoom, (u.y - origin.y) / a.view.zoom)
+        };
+        let probe = pos2(520.0, 290.0);
+        let before = stage_at(&app, probe);
+        app.zoom_about(canvas, probe, 2.5);
+        let after = stage_at(&app, probe);
+        assert!(before.distance(after) < 1e-2, "zoom_about under rotation moved stage point: {before:?} -> {after:?}");
     }
 }

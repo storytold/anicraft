@@ -34,7 +34,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import to Stage…",
             menu: "File/Import",
             shortcut: Some("Ctrl+R"),
-            params: "{path (.svg, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead)}",
+            params: "{path (.svg, .psd, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead)}",
             mutates: true,
             run: import_to_stage,
         },
@@ -230,6 +230,9 @@ pub(crate) fn open(s: &mut Session, p: &Value) -> Result<Value> {
         info["merged_keyframes"] = json!(merged);
         return Ok(info);
     }
+    if crate::psd_import::is_psd(&path) {
+        return crate::psd_import::open_psd(s, &path);
+    }
     let doc = format::load(&path)?;
     s.replace_document(doc, (!untitled).then(|| path.clone()));
     if unsaved {
@@ -294,6 +297,9 @@ pub(crate) fn import_to_stage(s: &mut Session, p: &Value) -> Result<Value> {
     if crate::cmds_sound::is_sound(&path) {
         return crate::cmds_sound::import_to_stage(s, &path);
     }
+    if crate::psd_import::is_psd(&path) {
+        return crate::psd_import::import_psd_cmd(s, p);
+    }
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     if !matches!(ext.as_deref(), Some("svg" | "png" | "jpg" | "jpeg")) {
         return Err(EngineError::Param("Import to Stage reads SVG drawings, PNG or JPEG images, and WAV, Ogg Vorbis or MP3 sounds".into()));
@@ -338,7 +344,7 @@ pub(crate) fn import_to_stage(s: &mut Session, p: &Value) -> Result<Value> {
         list.into_iter()
             .map(|e| {
                 let id = anicraft_doc::ElementId(s.doc.alloc_id());
-                Arc::new(anicraft_doc::Element { id, name: e.name, transform: place.mul(&e.transform), color: anicraft_doc::ColorEffect::opacity(e.alpha), kind: e.kind })
+                Arc::new(anicraft_doc::Element { id, name: e.name, transform: place.mul(&e.transform), color: anicraft_doc::ColorEffect::opacity(e.alpha), transform_3d: None, kind: e.kind })
             })
             .collect()
     };
@@ -472,7 +478,7 @@ pub(crate) fn import_svg_symbol(s: &mut Session, path: &std::path::Path, name: O
     let place = anicraft_geom::Affine::translate(-drawing.width * 0.5, -drawing.height * 0.5);
     let elements = |s: &mut Session, list: Vec<anicraft_svg::ImportedElement>| -> Vec<Arc<anicraft_doc::Element>> {
         list.into_iter()
-            .map(|e| Arc::new(anicraft_doc::Element { id: anicraft_doc::ElementId(s.doc.alloc_id()), name: e.name, transform: place.mul(&e.transform), color: anicraft_doc::ColorEffect::opacity(e.alpha), kind: e.kind }))
+            .map(|e| Arc::new(anicraft_doc::Element { id: anicraft_doc::ElementId(s.doc.alloc_id()), name: e.name, transform: place.mul(&e.transform), color: anicraft_doc::ColorEffect::opacity(e.alpha), transform_3d: None, kind: e.kind }))
             .collect()
     };
     let one_key = |els: Vec<Arc<anicraft_doc::Element>>| {
@@ -527,6 +533,8 @@ fn import_image(s: &mut Session, path: &std::path::Path, bytes: Vec<u8>) -> Resu
         fill_rule: anicraft_geom::FillRule::NonZero,
         merge: false,
         warp: None,
+        fill_tag: None,
+        stroke_tag: None,
     };
     Ok(anicraft_svg::SvgImport::single(w, h, vec![anicraft_svg::ImportedElement { name, transform: anicraft_geom::Affine::IDENTITY, alpha: 1.0, kind: anicraft_doc::ElementKind::Shape(shape) }]))
 }

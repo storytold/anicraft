@@ -44,19 +44,19 @@ fn blank(width: u32, height: u32, fps: f32) -> Document {
 }
 
 fn element(d: &mut Document, name: &str, transform: Affine, shape: Shape) -> Arc<Element> {
-    Arc::new(Element { id: ElementId(d.alloc_id()), name: name.into(), transform, color: ColorEffect::default(), kind: ElementKind::Shape(shape) })
+    Arc::new(Element { id: ElementId(d.alloc_id()), name: name.into(), transform, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) })
 }
 
 /// A stroked line from `a` to `b`.
 fn line(d: &mut Document, name: &str, a: (f32, f32), b: (f32, f32), color: u32, width: f32) -> Arc<Element> {
     let mut p = Path::new();
     p.move_to(Vec2::new(a.0, a.1)).line_to(Vec2::new(b.0, b.1));
-    element(d, name, Affine::IDENTITY, Shape { path: Arc::new(p), fill: None, stroke: Some(Stroke::new(Rgba::hex(color), width)), fill_rule: Default::default(), merge: false, warp: None })
+    element(d, name, Affine::IDENTITY, Shape { path: Arc::new(p), fill: None, stroke: Some(Stroke::new(Rgba::hex(color), width)), fill_rule: Default::default(), merge: false, warp: None, fill_tag: None, stroke_tag: None })
 }
 
 /// A stroked rectangle outline, `(x, y, w, h)`.
 fn outline(d: &mut Document, name: &str, (x, y, w, h): (f32, f32, f32, f32), color: u32, width: f32) -> Arc<Element> {
-    element(d, name, Affine::IDENTITY, Shape { path: Arc::new(Path::rect(x, y, w, h)), fill: None, stroke: Some(Stroke::new(Rgba::hex(color), width)), fill_rule: Default::default(), merge: false, warp: None })
+    element(d, name, Affine::IDENTITY, Shape { path: Arc::new(Path::rect(x, y, w, h)), fill: None, stroke: Some(Stroke::new(Rgba::hex(color), width)), fill_rule: Default::default(), merge: false, warp: None, fill_tag: None, stroke_tag: None })
 }
 
 /// A layer holding `elements` in one keyframe `frames` long.
@@ -221,7 +221,7 @@ fn lip_sync() -> Document {
     inner.keyframes = keys;
     d.library.push(Arc::new(Symbol { id: sym_id, name: "Mouth".into(), kind: SymbolKind::Graphic, linkage: None, scale_grid: None, scale_grid_kept: None, timeline: Timeline { layers: vec![Arc::new(inner)] } }));
     let (cx, cy) = (640.0, 340.0);
-    let face = element(&mut d, "Head", Affine::IDENTITY, Shape { path: Arc::new(Path::ellipse(cx, cy, 200.0, 250.0)), fill: None, stroke: Some(Stroke::new(Rgba::hex(GUIDE), 2.0)), fill_rule: Default::default(), merge: false, warp: None });
+    let face = element(&mut d, "Head", Affine::IDENTITY, Shape { path: Arc::new(Path::ellipse(cx, cy, 200.0, 250.0)), fill: None, stroke: Some(Stroke::new(Rgba::hex(GUIDE), 2.0)), fill_rule: Default::default(), merge: false, warp: None, fill_tag: None, stroke_tag: None });
     let guides = vec![
         face,
         line(&mut d, "Eye line", (cx - 200.0, cy), (cx + 200.0, cy), GUIDE_SOFT, 1.0),
@@ -233,6 +233,7 @@ fn lip_sync() -> Document {
         name: "mouth".into(),
         transform: Affine::translate(cx, cy + 130.0),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: sym_id, loop_mode: LoopMode::SingleFrame, first_frame: 0, blend: crate::BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None },
     });
     let layers = vec![

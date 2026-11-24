@@ -39,14 +39,14 @@ impl Build {
     }
     pub fn text(&mut self, t: &str, color: Rgba) -> Element {
         let block = TextBlock { text: t.into(), font: "Test Sans".into(), size: 20.0, bold: false, italic: false, color, align: TextAlign::Left, letter_spacing: 0.0, line_spacing: 0.0, width: None, outline: Arc::new(Path::new()), box_width: 10.0, box_height: 10.0, field: None, on_path: None, ..Default::default() };
-        Element { id: ElementId(self.id()), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Text(Arc::new(block)) }
+        Element { id: ElementId(self.id()), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Text(Arc::new(block)) }
     }
     pub fn rect(&mut self, fill: Paint, stroke: Option<Rgba>) -> Element {
         let mut sh = Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), fill);
         if let Some(c) = stroke {
             sh = sh.with_stroke(c, 2.0);
         }
-        Element { id: ElementId(self.id()), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(sh) }
+        Element { id: ElementId(self.id()), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(sh) }
     }
     pub fn instance(&mut self, symbol: SymbolId, name: &str) -> Element {
         Element {
@@ -54,6 +54,7 @@ impl Build {
             name: name.into(),
             transform: Affine::translate(100.0, 50.0),
             color: ColorEffect::default(),
+            transform_3d: None,
             kind: ElementKind::Symbol { symbol, loop_mode: LoopMode::Loop, first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
         }
     }

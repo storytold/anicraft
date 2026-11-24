@@ -446,9 +446,11 @@ fn enabled(app: &App, id: &str) -> bool {
         "edit.undo" => app.s.can_undo(),
         "edit.redo" => app.s.can_redo(),
         "edit.delete" | "edit.duplicate" | "modify.convert_to_symbol" | "modify.convert_to_bitmap" | "modify.break_apart" | "arrange.bring_to_front" | "arrange.send_to_back" => !app.s.selection.is_empty(),
+        "modify.reset_3d_transform" => app.s.selected_elements().iter().any(|(_, e)| e.transform_3d.is_some()),
         // Modify › Shape (ADR 0109): what the selection has for them.
         "modify.trace_bitmap" => crate::trace_dialog::has_bitmap(app),
         "modify.lines_to_fills" => selected_shape(app, |sh| sh.stroke.is_some()),
+        "modify.smooth_shape" | "modify.straighten_shape" | "modify.optimize_shape" | "modify.distort" => selected_shape(app, |_| true),
         "modify.expand_fill" => selected_shape(app, |sh| sh.fill.is_some()),
         "modify.soften_fill_edges" => selected_shape(app, |sh| sh.fill.as_ref().is_some_and(|f| !matches!(f, anicraft_engine::doc::Paint::Bitmap { .. }))),
         // Convert Audio to Keyframes and Auto Lip-Sync read a sound on this timeline (ADR 0114).
@@ -474,6 +476,7 @@ fn enabled(app: &App, id: &str) -> bool {
             None => app.s.timeline().layers.iter().any(|l| l.keyframe_starting_at(app.s.frame).is_some()),
         },
         "timeline.paste_frames" => !app.s.frame_clipboard.is_empty(),
+        "timeline.paste_motion" => app.s.motion_clipboard.is_some(),
         "tween.add_hint" => app.s.active_layer().and_then(|l| l.hint_tween_at(app.s.frame)).is_some(),
         "tween.clear_hints" => app.s.active_layer().and_then(|l| l.hint_tween_at(app.s.frame).and_then(|(i, _)| l.keyframes.get(i))).is_some_and(|k| !k.hints.is_empty()),
         // With no frame selection it removes the frame at the playhead on every layer.

@@ -978,8 +978,9 @@ pub fn filters(cmd: &str) -> (&'static str, &'static [&'static str]) {
         "file.export_svg" => (tr_noop!("SVG image"), &["svg"]),
         "file.export_lottie" => (tr_noop!("Lottie animation"), &["json"]),
         "file.export_html" => (tr_noop!("Web page"), &["html", "htm"]),
-        "file.import" => (tr_noop!("Drawing, image or sound"), &["svg", "png", "jpg", "jpeg", "wav", "ogg", "mp3"]),
-        "file.import_to_library" => (tr_noop!("Sound, image or drawing"), &["wav", "ogg", "mp3", "png", "jpg", "jpeg", "svg"]),
+        "file.import" => (tr_noop!("Drawing, image or sound"), &["svg", "png", "jpg", "jpeg", "psd", "wav", "ogg", "mp3"]),
+        "file.import_to_library" => (tr_noop!("Sound, image or drawing"), &["wav", "ogg", "mp3", "png", "jpg", "jpeg", "psd", "svg"]),
+        "file.import_psd" => (tr_noop!("Photoshop document"), &["psd"]),
         "file.export_audio" => (tr_noop!("WAV sound"), &["wav"]),
         "file.export_sprite_sheet" => (tr_noop!("PNG sprite sheet"), &["png"]),
         "file.export_video" => (tr_noop!("Video (WebM or MP4)"), &["webm", "mp4"]),
@@ -994,13 +995,15 @@ pub fn filters(cmd: &str) -> (&'static str, &'static [&'static str]) {
         "swatch.export" => (tr_noop!("Swatch file"), &["json"]),
         "swatch.import" => (tr_noop!("Swatch file or GIMP palette"), &["json", "gpl"]),
         "data.import_table" => (tr_noop!("Data table (CSV, TSV or JSON)"), &["csv", "tsv", "tab", "txt", "json"]),
+        "rig.auto_detect" => (tr_noop!("Character image or SVG"), &["png", "svg", "jpg", "jpeg"]),
+        "rig.save_preset" | "rig.load_preset" => (tr_noop!("Character rig preset"), &["json"]),
         _ => (tr_noop!("AniCraft document"), &["anicraft"]),
     }
 }
 
 /// Commands that read a file the user picks (the others write one, or a folder of them).
 pub fn reads_file(cmd: &str) -> bool {
-    matches!(cmd, "file.open" | "plugin.install" | "file.import" | "file.import_video" | "layer.set_video" | "file.import_to_library" | "brush.preset_import" | "filter.preset_import" | "swatch.import" | "data.import_table" | "macro.run" | "macro.import")
+    matches!(cmd, "file.open" | "plugin.install" | "file.import" | "file.import_psd" | "file.import_video" | "layer.set_video" | "file.import_to_library" | "brush.preset_import" | "filter.preset_import" | "swatch.import" | "data.import_table" | "macro.run" | "macro.import" | "rig.auto_detect" | "rig.load_preset")
 }
 
 /// Shows the platform's own dialog (Windows common dialog, macOS panel, Linux XDG portal), with

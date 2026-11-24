@@ -20,7 +20,7 @@ fn doc() -> Document {
         .map(|f| {
             let mut k = Keyframe::new(f, 1);
             let side = 10.0 * (f + 1) as f32;
-            k.elements.push(Arc::new(Element { id: ElementId(42 + u64::from(f)), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, side, side), Paint::Solid(Rgba::BLACK))) }));
+            k.elements.push(Arc::new(Element { id: ElementId(42 + u64::from(f)), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, side, side), Paint::Solid(Rgba::BLACK))) }));
             Arc::new(k)
         })
         .collect();
@@ -38,6 +38,7 @@ fn instance(id: u64, sid: SymbolId, x: f32, y: f32) -> Element {
         name: String::new(),
         transform: Affine::translate(x, y),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: sid, loop_mode: LoopMode::SingleFrame, first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
     }
 }

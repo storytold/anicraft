@@ -46,7 +46,8 @@ fn drops_route_by_file_type_and_target() {
     assert_eq!(k("f.mp3"), DropKind::Sound);
     assert_eq!(k("g.ogg"), DropKind::Sound);
     assert_eq!(k("h.wav"), DropKind::Sound);
-    assert_eq!(k("i.psd"), DropKind::Unsupported);
+    assert_eq!(k("i.psd"), DropKind::Drawing);
+    assert_eq!(k("i.zip"), DropKind::Unsupported);
     assert_eq!(k("no extension"), DropKind::Unsupported);
     // An XFL package is a folder with a DOMDocument.xml.
     let dir = temp_dir("xfl").join("Movie");

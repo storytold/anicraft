@@ -197,7 +197,7 @@ fn bent(e: &Element, sh: &Shape, mesh: &Mesh, rest: &Rect, tol: f32) -> Option<E
         stroke: sh.stroke.as_ref().map(|st| st.scaled(k)),
         ..sh.clone()
     };
-    Some(Element { id: e.id, name: e.name.clone(), transform: Affine::translate(c.x, c.y), color: e.color, kind: ElementKind::Shape(shape) })
+    Some(Element { id: e.id, name: e.name.clone(), transform: Affine::translate(c.x, c.y), color: e.color, transform_3d: None, kind: ElementKind::Shape(shape) })
 }
 
 fn move_points(s: &mut Session, p: &Value) -> Result<Value> {

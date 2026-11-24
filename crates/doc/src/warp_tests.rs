@@ -186,7 +186,7 @@ fn warped_layer(at_end: (f32, f32), easing: Easing) -> (Layer, Warp) {
     let mut w = Warp::new(shape.path.clone(), 8);
     w.pins = vec![pin(1, (10.0, 50.0), (10.0, 50.0)), pin(2, (190.0, 50.0), (190.0, 50.0))];
     shape.set_warp(w.clone());
-    let el = |s: Shape| Arc::new(Element { id: ElementId(5), name: String::new(), transform: Affine::IDENTITY, color: Default::default(), kind: ElementKind::Shape(s) });
+    let el = |s: Shape| Arc::new(Element { id: ElementId(5), name: String::new(), transform: Affine::IDENTITY, color: Default::default(), transform_3d: None, kind: ElementKind::Shape(s) });
     let mut end = shape.clone();
     let mut w2 = w.clone();
     if let Some(p) = w2.pins.get_mut(1) {

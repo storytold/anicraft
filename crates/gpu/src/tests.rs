@@ -573,7 +573,7 @@ fn nine_slice_sample() -> anicraft_doc::Document {
     let mut d = anicraft_doc::Document { stage: anicraft_doc::Stage { width: 320, height: 200, ..Default::default() }, ..Default::default() };
     let mut shape = Shape::filled(Path::rounded_rect(0.0, 0.0, 60.0, 30.0, 8.0), Paint::Solid(Rgba::hex(0x2a9d8f)));
     shape.stroke = Some(Stroke::new(Rgba::hex(0x264653), 2.0));
-    let el = |id, transform, kind| std::sync::Arc::new(Element { id: ElementId(id), name: String::new(), transform, color: ColorEffect::default(), kind });
+    let el = |id, transform, kind| std::sync::Arc::new(Element { id: ElementId(id), name: String::new(), transform, color: ColorEffect::default(), transform_3d: None, kind });
     let mut k = Keyframe::new(0, 1);
     k.elements.push(el(2, Affine::IDENTITY, ElementKind::Shape(shape)));
     let mut l = Layer::new(LayerId(3), "art");
@@ -1166,8 +1166,8 @@ fn filtered_sample() -> anicraft_doc::Document {
             }
         }
     }
-    let shape = anicraft_doc::Shape { path: Arc::new(Path::rect(0.0, 0.0, 1280.0, 300.0)), merge: false, fill: Some(Paint::Bitmap { bitmap: anicraft_doc::BitmapId(77), repeat: true, matrix: Affine::scale(5.0, 5.0) }), stroke: None, fill_rule: FillRule::NonZero, warp: None };
-    let sky = anicraft_doc::Element { id: ElementId(9_100), name: "sky".into(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(shape) };
+    let shape = anicraft_doc::Shape { path: Arc::new(Path::rect(0.0, 0.0, 1280.0, 300.0)), merge: false, fill: Some(Paint::Bitmap { bitmap: anicraft_doc::BitmapId(77), repeat: true, matrix: Affine::scale(5.0, 5.0) }), stroke: None, fill_rule: FillRule::NonZero, warp: None, fill_tag: None, stroke_tag: None };
+    let sky = anicraft_doc::Element { id: ElementId(9_100), name: "sky".into(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) };
     let frames = doc.frame_count();
     let mut k = anicraft_doc::Keyframe::new(0, frames);
     k.elements.push(Arc::new(sky));
@@ -1230,7 +1230,7 @@ fn gpu_matches_the_oracle_on_filtered_text() {
     let glow = F::Glow { blur_x: 10.0, blur_y: 10.0, strength: 1.5, quality: 2, color: Rgba::new(1.0, 0.3, 0.1, 1.0), inner: false, knockout: false };
     let bevel = F::Bevel { blur_x: 4.0, blur_y: 4.0, strength: 1.2, quality: 2, angle: 45.0, distance: 3.0, shadow_color: Rgba::BLACK, highlight_color: Rgba::WHITE, side: FilterSide::Inner, knockout: false };
     let mut doc = anicraft_doc::Document { stage: anicraft_doc::Stage { width: 220, height: 160, fps: 24.0, background: Rgba::new(0.9, 0.95, 1.0, 1.0) }, ..Default::default() };
-    let text = |id: u64, at: (f32, f32), color: ColorEffect, block: TextBlock| Arc::new(anicraft_doc::Element { id: ElementId(id), name: String::new(), transform: Affine::translate(at.0, at.1).mul(&Affine::rotate(0.08)), color, kind: ElementKind::Text(Arc::new(block)) });
+    let text = |id: u64, at: (f32, f32), color: ColorEffect, block: TextBlock| Arc::new(anicraft_doc::Element { id: ElementId(id), name: String::new(), transform: Affine::translate(at.0, at.1).mul(&Affine::rotate(0.08)), color, transform_3d: None, kind: ElementKind::Text(Arc::new(block)) });
     let els = vec![text(1, (20.0, 12.0), ColorEffect::default(), block(None, vec![bevel])), text(2, (40.0, 84.0), ColorEffect::Alpha(0.5), block(Some(field), vec![shadow, glow]))];
     if let Some(k) = Arc::make_mut(&mut doc.timeline_mut(0).layers[0]).keyframe_mut(0) {
         k.elements = els;

@@ -463,7 +463,7 @@ fn volume(app: &mut App, ui: &mut egui::Ui) {
 }
 
 /// The header's volume slider, in points: short, as the header is full.
-const VOLUME_W: f32 = 56.0;
+const VOLUME_W: f32 = 48.0;
 
 /// The timeline header's tools, beside the dock's tabs (ADR 0075): transport, readouts, frame
 /// and tween buttons, `width` wide at most. What doesn't fit scrolls sideways (Shift+wheel) in
@@ -1909,10 +1909,13 @@ fn frame_nodes(app: &mut App, ui: &mut egui::Ui, grid: &egui::Response, layer: &
 fn waveform(p: &egui::Painter, doc: &anicraft_engine::doc::Document, fs: &anicraft_engine::doc::FrameSound, k: &anicraft_engine::doc::Keyframe, span: Rect, x0: f32, cell_w: f32, color: Color32) -> bool {
     let Some(snd) = doc.sound(fs.sound) else { return true };
     let Some(dec) = snd.decoded_if_ready() else { return false };
-    let len = dec.peaks.frames() as u64;
+    let full_len = dec.peaks.frames() as u64;
+    let (trim_start, trim_end) = fs.trim_range(full_len);
+    let len = trim_end.saturating_sub(trim_start);
     if len == 0 || cell_w <= 0.0 {
         return true;
     }
+    let (t0, t1) = (trim_start as usize, trim_end as usize);
     let env = (!fs.effect.is_none()).then(|| fs.effect.points(fs.heard_seconds(snd, k.duration, doc.frame_count().saturating_sub(k.start), doc.stage.fps)));
     let rate = f64::from(dec.pcm.rate.max(1));
     let total = if fs.looping { u64::MAX } else { len.saturating_mul(u64::from(fs.repeat.max(1))) };
@@ -1928,12 +1931,12 @@ fn waveform(p: &egui::Painter, doc: &anicraft_engine::doc::Document, fs: &anicra
             break;
         }
         let b = b.min(total);
-        // The source frames under this column, within one play of the sound.
-        let (s, n) = ((a % len) as usize, (b - a).min(len) as usize);
-        let range = if s + n <= len as usize {
+        // The source frames under this column, within one trimmed play of the sound.
+        let (s, n) = (t0 + (a % len) as usize, (b - a).min(len) as usize);
+        let range = if s + n <= t1 {
             dec.peaks.range(s, s + n)
         } else {
-            let (p1, p2) = (dec.peaks.range(s, len as usize), dec.peaks.range(0, s + n - len as usize));
+            let (p1, p2) = (dec.peaks.range(s, t1), dec.peaks.range(t0, t0 + (s + n - t1)));
             match (p1, p2) {
                 (Some((l1, h1)), Some((l2, h2))) => Some((l1.min(l2), h1.max(h2))),
                 (one, other) => one.or(other),

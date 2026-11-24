@@ -18,6 +18,8 @@ use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Panel {
     Properties,
+    AutoRig,
+    FramePicker,
     Align,
     Colour,
     Library,
@@ -35,12 +37,14 @@ pub enum Panel {
 
 impl Panel {
     /// In the Window menu's order.
-    pub const ALL: [Panel; 13] = [Panel::Actions, Panel::Align, Panel::Colour, Panel::History, Panel::LayerDepth, Panel::Library, Panel::MotionEditor, Panel::MovieExplorer, Panel::Output, Panel::Properties, Panel::Swatches, Panel::Timeline, Panel::Tools];
+    pub const ALL: [Panel; 15] = [Panel::Actions, Panel::Align, Panel::AutoRig, Panel::Colour, Panel::FramePicker, Panel::History, Panel::LayerDepth, Panel::Library, Panel::MotionEditor, Panel::MovieExplorer, Panel::Output, Panel::Properties, Panel::Swatches, Panel::Timeline, Panel::Tools];
 
     /// Its machine name, in the preferences (English, never translated).
     pub fn id(self) -> &'static str {
         match self {
             Panel::Properties => "properties",
+            Panel::AutoRig => "auto_rig",
+            Panel::FramePicker => "frame_picker",
             Panel::Align => "align",
             Panel::Colour => "colour",
             Panel::Library => "library",
@@ -61,6 +65,8 @@ impl Panel {
     pub fn action(self) -> &'static str {
         match self {
             Panel::Properties => "view.panel.properties",
+            Panel::AutoRig => "view.panel.auto_rig",
+            Panel::FramePicker => "view.panel.frame_picker",
             Panel::Align => "view.panel.align",
             Panel::Colour => "view.panel.colour",
             Panel::Library => "view.panel.library",
@@ -88,6 +94,8 @@ impl Panel {
     pub fn label(self) -> &'static str {
         match self {
             Panel::Properties => tr_noop!("Properties"),
+            Panel::AutoRig => tr_noop!("Auto Rig Studio"),
+            Panel::FramePicker => tr_noop!("Frame Picker"),
             Panel::Align => tr_noop!("Align"),
             Panel::Colour => tr_noop!("Colour"),
             Panel::Library => tr_noop!("Library"),
@@ -709,6 +717,8 @@ impl Layout {
 fn default_home(p: Panel) -> Home {
     let (side, near) = match p {
         Panel::Properties => (Side::Right, Some(Panel::Align)),
+        Panel::AutoRig => (Side::Right, Some(Panel::Properties)),
+        Panel::FramePicker => (Side::Right, Some(Panel::Properties)),
         Panel::Align | Panel::Colour => (Side::Right, Some(Panel::Align)),
         // Beside the Colour panel when it is open, as Animate tabs them together.
         Panel::Swatches => (Side::Right, Some(Panel::Colour)),

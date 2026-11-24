@@ -34,7 +34,7 @@ fn doc_with(k: &[(u32, u32, Option<FrameSound>)], sounds: Vec<Sound>) -> Documen
 }
 
 fn with(sync: SoundSync, repeat: u32, looping: bool) -> Option<FrameSound> {
-    Some(FrameSound { sound: SoundId(7), sync, repeat, looping, effect: SoundEffect::None })
+    Some(FrameSound { sound: SoundId(7), sync, repeat, looping, effect: SoundEffect::None, in_frames: 0, out_frames: None })
 }
 
 fn effect(sync: SoundSync, effect: SoundEffect) -> Option<FrameSound> {
@@ -67,7 +67,7 @@ fn sounds_decode_once_and_survive_a_save() {
     let fs = FrameSound::new(SoundId(3));
     assert_eq!(serde_json::to_string(&fs).unwrap(), r#"{"sound":3,"sync":"event"}"#);
     let full: FrameSound = serde_json::from_str(r#"{"sound":3,"sync":"stream","repeat":4,"loop":true}"#).unwrap();
-    assert_eq!(full, FrameSound { sound: SoundId(3), sync: SoundSync::Stream, repeat: 4, looping: true, effect: SoundEffect::None });
+    assert_eq!(full, FrameSound { sound: SoundId(3), sync: SoundSync::Stream, repeat: 4, looping: true, effect: SoundEffect::None, in_frames: 0, out_frames: None });
 }
 
 #[test]
@@ -205,6 +205,7 @@ fn nested(kind: SymbolKind, len: u32, inner: &[(u32, u32, Option<FrameSound>)], 
                 name: String::new(),
                 transform: Default::default(),
                 color: Default::default(),
+                transform_3d: None,
                 kind: ElementKind::Symbol { symbol: SymbolId(50), loop_mode, first_frame, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
             }));
             Arc::new(k)
@@ -369,4 +370,46 @@ fn frame_times_follow_the_frame_rate_exactly() {
     assert_eq!(frame_start(1, 29.97, 48_000), 1602);
     assert_eq!(frame_start(30_000, 30.0, 48_000), 48_000_000, "computed from the frame number: no drift");
     assert_eq!(frame_start(5, f32::NAN, 24), 5);
+}
+
+#[test]
+fn in_and_out_trim_points_slice_playback_loops_and_resampling() {
+    // 8 kHz ramp: sample i has value i / 1000.0 for i in 0..4000 (0.5 s = 4 frames at 8 fps).
+    let snd = ramp_sound(7, 4000);
+    let mut fs = FrameSound::new(SoundId(7));
+    fs.in_frames = 1000;
+    fs.out_frames = Some(2500);
+    assert_eq!(fs.trim_range(4000), (1000, 2500));
+    assert_eq!(fs.trimmed_frames(4000), 1500);
+    assert_eq!(fs.heard(4000, 4000, 8000), 1500);
+
+    // JSON skips defaults when untrimmed and preserves in_frames / out_frames when trimmed.
+    let json = serde_json::to_string(&fs).unwrap();
+    assert!(json.contains("\"in_frames\":1000") && json.contains("\"out_frames\":2500"), "{json}");
+    let back: FrameSound = serde_json::from_str(&json).unwrap();
+    assert_eq!(back, fs);
+
+    // Event playback starts at sample 1000 (value 1.0) and stops after 1500 samples (sample 2499 = 2.499).
+    let d = doc_with(&[(0, 4, Some(fs.clone()))], vec![snd.clone()]);
+    let v = voices(&d, 8000);
+    assert_eq!(spans(&v), vec![(VoiceKind::Event, 0, 1500)]);
+    let out = heard(&v, 2000);
+    assert_eq!(out[0], (1.0, 1.0));
+    assert_eq!(out[1499], (2.499, 2.499));
+    assert_eq!(out[1500], (0.0, 0.0), "stopped cleanly at out_frames");
+
+    // Repeating 2 times loops [1000..2500) twice = 3000 output frames!
+    let mut rep = fs.clone();
+    rep.repeat = 2;
+    let d_rep = doc_with(&[(0, 4, Some(rep))], vec![snd.clone()]);
+    let v_rep = voices(&d_rep, 8000);
+    assert_eq!(spans(&v_rep), vec![(VoiceKind::Event, 0, 3000)]);
+    let out_rep = heard(&v_rep, 3100);
+    assert_eq!(out_rep[0], (1.0, 1.0));
+    assert_eq!(out_rep[1500], (1.0, 1.0), "second repeat wraps back to in_frames");
+    assert_eq!(out_rep[2999], (2.499, 2.499));
+    assert_eq!(out_rep[3000], (0.0, 0.0));
+
+    // Resampled to 16 kHz: 1500 frames at 8 kHz -> 3000 frames at 16 kHz.
+    assert_eq!(spans(&voices(&d, 16_000)), vec![(VoiceKind::Event, 0, 3000)]);
 }

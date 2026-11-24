@@ -2505,8 +2505,9 @@ fn blend_modes_apply_to_movie_clips_and_survive_a_save() {
     run(&mut s, "layer.new", json!({}));
     run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 100, "fill": "#ff0000"}));
     run(&mut s, "modify.convert_to_symbol", json!({"name": "Red"}));
-    // A graphic can't blend; a movie clip can.
-    assert!(s.execute("element.set_blend", &json!({"mode": "multiply"})).unwrap_err().to_string().contains("movie clip"));
+    // Graphics and movie clips both blend (P-027); plain shapes still don't.
+    assert_eq!(run(&mut s, "element.set_blend", json!({"mode": "multiply"}))["mode"], "multiply");
+    run(&mut s, "element.set_blend", json!({"mode": "normal"}));
     run(&mut s, "symbol.set_kind", json!({"kind": "movie_clip"}));
     assert!(s.execute("element.set_blend", &json!({"mode": "sparkle"})).is_err());
     let v = run(&mut s, "element.set_blend", json!({"mode": "Multiply"}));
@@ -2533,7 +2534,8 @@ fn filters_render_on_movie_clips_clip_after_masks_and_save() {
     run(&mut s, "draw.rect", json!({"x": 100, "y": 100, "w": 100, "h": 100, "fill": "#ff0000", "stroke": null}));
     run(&mut s, "modify.convert_to_symbol", json!({"name": "Box"}));
     let shadow = json!({"filters": [{"type": "drop_shadow", "blur_x": 0, "blur_y": 0, "distance": 20, "angle": 0, "color": "#000000"}]});
-    assert!(s.execute("element.set_filters", &shadow).unwrap_err().to_string().contains("movie clip"), "graphics can't");
+    assert_eq!(run(&mut s, "element.set_filters", shadow.clone())["filters"], 1, "graphics take filters too (P-027)");
+    run(&mut s, "element.set_filters", json!({"filters": []}));
     run(&mut s, "symbol.set_kind", json!({"kind": "movie_clip"}));
     assert!(s.execute("element.set_filters", &json!({"filters": [{"type": "sparkle"}]})).is_err());
     run(&mut s, "element.set_filters", shadow);

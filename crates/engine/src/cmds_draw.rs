@@ -32,8 +32,8 @@ pub fn specs() -> Vec<CommandSpec> {
         c("element.set_stroke", "Stroke", "", None, "{on?: true | false (false removes the stroke like color: null; true puts back the stroke each shape had before, else the tool's), color?: \"#rrggbb\" | \"#rrggbbaa\" | null, width?, profile?: uniform|taper_both|taper_start|taper_end|bulge|pinch | [[t, left, right], ..], cap?, join?, miter?, style?, dash?, dash_offset?, dot_spacing? (as stroke.set_style)}", true, |s, p| s.each_layer(false, |s| set_stroke(s, p))),
         c("element.set_alpha", "Alpha", "", None, "{alpha: 0..1} sets the alpha multiplier and keeps the rest of the colour effect (None becomes Alpha; Brightness and Tint become Advanced below 1)", true, |s, p| s.each_layer(true, |s| set_alpha(s, p))),
         c("element.set_color_effect", "Colour Effect", "", None, "{style?: none|brightness|tint|advanced|alpha (default: the style the values belong to, else each element's own), alpha? (%, 0..100), brightness? (%, -100..100), tint? (#rrggbb), tint_amount? (%, 0..100), red_multiplier?, green_multiplier?, blue_multiplier?, alpha_multiplier? (%, -100..100), red_offset?, green_offset?, blue_offset?, alpha_offset? (-255..255)} on every selected element (ADR 0056); values not given keep each element's own. A new style starts from the look it can keep: Advanced is exactly the effect before, Alpha keeps the opacity, Brightness and Tint start at 0 %. The camera has no opacity (no Alpha style, alpha multiplier or offset)", true, |s, p| s.each_layer(true, |s| set_color_effect(s, p))),
-        c("element.set_blend", "Blending", "", None, "{mode: normal|layer|darken|multiply|lighten|screen|overlay|hardlight|add|subtract|difference|invert|alpha|erase} on the selected movie clip and button instances", true, |s, p| s.each_layer(false, |s| set_blend(s, p))),
-        c("element.set_filters", "Filters", "", None, "{filters: [{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool (default true; false switches it off, keeping its settings)}]} replaces the selected movie clip and button instances' filters (in order; [] removes them). Bevel: shadow_color, highlight_color, side: inner|outer|full, knockout; gradient filters: stops: [{offset 0..1, color \"#rrggbbaa\"}] (Gradient Glow's start and Gradient Bevel's middle stay transparent)", true, |s, p| s.each_layer(false, |s| crate::cmds_filter::set_filters(s, p))),
+        c("element.set_blend", "Blending", "", None, "{mode: normal|layer|darken|multiply|lighten|screen|overlay|hardlight|add|subtract|difference|invert|alpha|erase} on the selected symbol instances", true, |s, p| s.each_layer(false, |s| set_blend(s, p))),
+        c("element.set_filters", "Filters", "", None, "{filters: [{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool (default true; false switches it off, keeping its settings)}]} replaces the selected symbol instances' and text's filters (in order; [] removes them). Bevel: shadow_color, highlight_color, side: inner|outer|full, knockout; gradient filters: stops: [{offset 0..1, color \"#rrggbbaa\"}] (Gradient Glow's start and Gradient Bevel's middle stay transparent)", true, |s, p| s.each_layer(false, |s| crate::cmds_filter::set_filters(s, p))),
         c("element.set_loop", "Looping", "", None, "{loop?: loop|play_once|single_frame, first_frame?}", true, |s, p| s.each_layer(false, |s| set_loop(s, p))),
         c("symbol.set_kind", "Symbol Type", "", None, "{kind: graphic|movie_clip|button, symbol?: id (default: the symbols of every selected instance)}", true, set_symbol_kind),
         c(
@@ -127,6 +127,26 @@ fn rect_params(p: &Value) -> Result<(f32, f32, f32, f32)> {
 /// (Object Drawing), it merges with the raw shapes it touches (ADR 0031), and the pieces of it
 /// that come out are selected.
 pub(crate) fn add_shape(s: &mut Session, name: &str, local: Path, origin: Vec2, fill: Option<Paint>, stroke: Option<Stroke>, object: bool) -> Result<Value> {
+    add_shape_tagged(s, name, local, origin, fill, stroke, (None, None), object)
+}
+
+fn style_tags(s: &Session, p: &Value, fill: &Option<Paint>, stroke: &Option<Stroke>) -> (Option<u64>, Option<u64>) {
+    let ft = if fill.is_some() && p.get("fill").is_none() { s.style.fill_tag } else { None };
+    let st = if stroke.is_some() && p.get("stroke").is_none() { s.style.stroke_tag } else { None };
+    (ft, st)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn add_shape_tagged(
+    s: &mut Session,
+    name: &str,
+    local: Path,
+    origin: Vec2,
+    fill: Option<Paint>,
+    stroke: Option<Stroke>,
+    (fill_tag, stroke_tag): (Option<u64>, Option<u64>),
+    object: bool,
+) -> Result<Value> {
     // A gradient or bitmap from the fill swatch is in stage space: with Lock Fill it stays where
     // it is on the stage, else it is fitted to the new shape (ADR 0074).
     let fill = fill.map(|f| if s.style.lock_fill || matches!(f, Paint::Solid(_)) { f.transformed(&Affine::translate(-origin.x, -origin.y)) } else { f.fitted(&local.bounds()) });
@@ -137,7 +157,8 @@ pub(crate) fn add_shape(s: &mut Session, name: &str, local: Path, origin: Vec2, 
         name: String::new(),
         transform: Affine::translate(origin.x, origin.y),
         color: ColorEffect::default(),
-        kind: ElementKind::Shape(Shape { path: Arc::new(local), fill, stroke, fill_rule: Default::default(), merge, warp: None }),
+        transform_3d: None,
+        kind: ElementKind::Shape(Shape { path: Arc::new(local), fill, stroke, fill_rule: Default::default(), merge, warp: None, fill_tag, stroke_tag }),
     };
     if merge {
         let merged = crate::merge::merge_in(s, vec![el])?;
@@ -163,13 +184,15 @@ fn draw_rect(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y, w, h) = rect_params(p)?;
     let r = opt_f32(p, "radius")?.unwrap_or(0.0).max(0.0);
     let (fill, stroke) = style(s, p, true)?;
-    add_shape(s, "rect", Path::rounded_rect(-w / 2.0, -h / 2.0, w, h, r), Vec2::new(x + w / 2.0, y + h / 2.0), fill, stroke, object_param(s, p)?)
+    let tags = style_tags(s, p, &fill, &stroke);
+    add_shape_tagged(s, "rect", Path::rounded_rect(-w / 2.0, -h / 2.0, w, h, r), Vec2::new(x + w / 2.0, y + h / 2.0), fill, stroke, tags, object_param(s, p)?)
 }
 
 fn draw_ellipse(s: &mut Session, p: &Value) -> Result<Value> {
     let (x, y, w, h) = rect_params(p)?;
     let (fill, stroke) = style(s, p, true)?;
-    add_shape(s, "ellipse", Path::ellipse8(0.0, 0.0, w / 2.0, h / 2.0), Vec2::new(x + w / 2.0, y + h / 2.0), fill, stroke, object_param(s, p)?)
+    let tags = style_tags(s, p, &fill, &stroke);
+    add_shape_tagged(s, "ellipse", Path::ellipse8(0.0, 0.0, w / 2.0, h / 2.0), Vec2::new(x + w / 2.0, y + h / 2.0), fill, stroke, tags, object_param(s, p)?)
 }
 
 fn draw_star(s: &mut Session, p: &Value) -> Result<Value> {
@@ -197,16 +220,17 @@ fn draw_star(s: &mut Session, p: &Value) -> Result<Value> {
         Some(_) => return Err(EngineError::Param("param 'point_size' must be between 0 and 1".into())),
     };
     let (fill, stroke) = style(s, p, true)?;
+    let tags = style_tags(s, p, &fill, &stroke);
     let object = object_param(s, p)?;
     if polygon {
-        return add_shape(s, "polygon", Path::polystar(0.0, 0.0, outer, points, false, point_size), Vec2::new(cx, cy), fill, stroke, object);
+        return add_shape_tagged(s, "polygon", Path::polystar(0.0, 0.0, outer, points, false, point_size), Vec2::new(cx, cy), fill, stroke, tags, object);
     }
     // An explicit inner radius (scripts written before the point size) still wins.
     let path = match opt_f32(p, "inner")? {
         Some(inner) => Path::star(0.0, 0.0, outer, inner.clamp(0.0, MAX_EXTENT), points),
         None => Path::polystar(0.0, 0.0, outer, points, true, point_size),
     };
-    add_shape(s, "star", path, Vec2::new(cx, cy), fill, stroke, object)
+    add_shape_tagged(s, "star", path, Vec2::new(cx, cy), fill, stroke, tags, object)
 }
 
 fn draw_line(s: &mut Session, p: &Value) -> Result<Value> {
@@ -216,8 +240,9 @@ fn draw_line(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Param("line is too short".into()));
     }
     let (_, stroke) = style(s, p, false)?;
+    let tags = style_tags(s, p, &None, &stroke);
     let c = (a + b) * 0.5;
-    add_shape(s, "line", Path::line(a - c, b - c), c, None, stroke, object_param(s, p)?)
+    add_shape_tagged(s, "line", Path::line(a - c, b - c), c, None, stroke, tags, object_param(s, p)?)
 }
 
 fn snap_to_objects(s: &mut Session, p: &Value) -> Result<Value> {
@@ -484,6 +509,7 @@ fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
 fn set_fill_with(s: &mut Session, fill: &Switch, memory: &mut crate::PaintMemory) -> Result<()> {
     let sel = s.selection.on(s.layer);
     let tool = Paint::Solid(s.style.fill);
+    let tool_tag = s.style.fill_tag;
     // A raw outline's pieces are lines: a fill on each would have no area (#291). The fill
     // belongs to what they surround.
     let is_line = |sh: &Shape| sh.merge && sh.stroke.is_some() && sh.fill.is_none();
@@ -498,15 +524,19 @@ fn set_fill_with(s: &mut Session, fill: &Switch, memory: &mut crate::PaintMemory
                 if let Some(was) = sh.fill.take() {
                     memory.remember_fill(id, was);
                 }
+                sh.fill_tag = None;
                 filled += 1;
             }
             _ if is_line(sh) => lines = lines.union(&crate::merge::reach(sh, &m)),
             Switch::On => {
-                sh.fill = Some(memory.fills.get(&id).cloned().unwrap_or_else(|| tool.clone()));
+                let remembered = memory.fills.get(&id).cloned();
+                sh.fill_tag = if remembered.is_some() { None } else { tool_tag };
+                sh.fill = Some(remembered.unwrap_or_else(|| tool.clone()));
                 filled += 1;
             }
             Switch::Set(paint) => {
                 sh.fill = Some(paint.clone());
+                sh.fill_tag = None;
                 filled += 1;
             }
         }
@@ -528,12 +558,16 @@ fn set_fill_with(s: &mut Session, fill: &Switch, memory: &mut crate::PaintMemory
         if !inside {
             continue;
         }
-        let paint = match fill {
-            Switch::Set(paint) => paint.clone(),
-            _ => memory.fills.get(&e.id).cloned().unwrap_or_else(|| tool.clone()),
+        let (paint, ftag) = match fill {
+            Switch::Set(paint) => (paint.clone(), None),
+            _ => match memory.fills.get(&e.id).cloned() {
+                Some(p) => (p, None),
+                None => (tool.clone(), tool_tag),
+            },
         };
         if let ElementKind::Shape(sh) = &mut Arc::make_mut(e).kind {
             sh.fill = Some(paint);
+            sh.fill_tag = ftag;
             back.push(e.id);
         }
     }
@@ -541,17 +575,21 @@ fn set_fill_with(s: &mut Session, fill: &Switch, memory: &mut crate::PaintMemory
         return crate::cmds_raw::remerge_in_place(s, &back);
     }
     // …else the area they close off is filled, as the Paint Bucket fills it.
-    let paint = match fill {
-        Switch::Set(paint) => paint.clone(),
-        _ => tool,
+    let (paint, ftag) = match fill {
+        Switch::Set(paint) => (paint.clone(), None),
+        _ => (tool, tool_tag),
     };
-    if crate::cmds_paint::fill_enclosed(s, lines.center(), paint)? {
+    if crate::cmds_paint::fill_enclosed_tagged(s, lines.center(), paint, ftag)? {
         return Ok(());
     }
     Err(EngineError::State("the selected lines don't close off an area to fill; close the outline, or click inside it with the Paint Bucket".into()))
 }
 
 pub(crate) fn set_stroke(s: &mut Session, p: &Value) -> Result<Value> {
+    set_stroke_tagged(s, p, None)
+}
+
+pub(crate) fn set_stroke_tagged(s: &mut Session, p: &Value, explicit_tag: Option<u64>) -> Result<Value> {
     let on = opt_bool(p, "on")?;
     let remove = on == Some(false) || (on.is_none() && p.get("color").is_some_and(Value::is_null));
     let restore = on == Some(true);
@@ -565,14 +603,22 @@ pub(crate) fn set_stroke(s: &mut Session, p: &Value) -> Result<Value> {
     // Checked once up front, so a bad style param changes nothing.
     opt_stroke_style(p, &default.line, default.stroke_width)?;
     let mut memory = std::mem::take(&mut s.paint_memory);
-    let result = set_stroke_with(s, p, (remove, restore), (color, width, profile), &default, &mut memory);
+    let result = set_stroke_with(s, p, (remove, restore), (color, width, profile), explicit_tag, &default, &mut memory);
     s.paint_memory = memory;
     result
 }
 
 type StrokeEdit = (Option<anicraft_doc::Rgba>, Option<f32>, Option<Option<anicraft_doc::WidthProfile>>);
 
-fn set_stroke_with(s: &mut Session, p: &Value, (remove, restore): (bool, bool), (color, width, profile): StrokeEdit, default: &crate::ToolStyle, memory: &mut crate::PaintMemory) -> Result<Value> {
+fn set_stroke_with(
+    s: &mut Session,
+    p: &Value,
+    (remove, restore): (bool, bool),
+    (color, width, profile): StrokeEdit,
+    explicit_tag: Option<u64>,
+    default: &crate::ToolStyle,
+    memory: &mut crate::PaintMemory,
+) -> Result<Value> {
     let mut shapes = Vec::new();
     for e in s.selected_elements_mut()? {
         if let ElementKind::Shape(sh) = &mut e.kind {
@@ -594,15 +640,22 @@ fn set_stroke_with(s: &mut Session, p: &Value, (remove, restore): (bool, bool), 
             if let Some(was) = sh.stroke.take() {
                 memory.remember_stroke(id, was);
             }
+            sh.stroke_tag = None;
             continue;
         }
+        let had_stroke = sh.stroke.is_some();
         let remembered = if restore { memory.strokes.get(&id).cloned() } else { None };
-        if strokes_selected && sh.merge && sh.stroke.is_none() && remembered.is_none() {
+        let had_remembered = remembered.is_some();
+        if strokes_selected && sh.merge && !had_stroke && !had_remembered {
             continue;
         }
         let mut st = sh.stroke.take().or(remembered).unwrap_or_else(|| default.new_stroke(default.stroke, default.stroke_width));
         if let Some(c) = color {
             st.color = c;
+            st.paint = None;
+            sh.stroke_tag = explicit_tag;
+        } else if !had_stroke && !had_remembered {
+            sh.stroke_tag = default.stroke_tag;
         }
         if let Some(w) = width {
             st.width = w;
@@ -613,7 +666,12 @@ fn set_stroke_with(s: &mut Session, p: &Value, (remove, restore): (bool, bool), 
         if let Some(line) = opt_stroke_style(p, &st.style, st.width)? {
             st = st.with_style(line);
         }
-        sh.stroke = (st.width > 0.0).then_some(st);
+        if st.width > 0.0 {
+            sh.stroke = Some(st);
+        } else {
+            sh.stroke = None;
+            sh.stroke_tag = None;
+        }
     }
     Ok(json!({"ok": true}))
 }
@@ -733,32 +791,22 @@ fn set_color_effect(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(first.map_or(Value::Null, |fx| crate::color_effect_json(&fx)))
 }
 
-/// Blending for the selected movie clip and button instances (Animate offers it on those only).
+/// Blending for the selected symbol instances (movie clips, buttons and graphics; P-027).
 fn set_blend(s: &mut Session, p: &Value) -> Result<Value> {
     let key = str_req(p, "mode")?;
     let mode = anicraft_doc::BlendMode::from_key(key).ok_or_else(|| {
         let all: Vec<&str> = anicraft_doc::BlendMode::ALL.iter().map(|m| m.key()).collect();
         EngineError::Param(format!("unknown blend mode '{key}' ({})", all.join(", ")))
     })?;
-    let kinds: std::collections::HashMap<SymbolId, SymbolKind> = s.doc.library.iter().map(|x| (x.id, x.kind)).collect();
     let mut set = 0;
-    let mut graphics = 0;
     for e in s.selected_props_mut()? {
-        if let ElementKind::Symbol { symbol, blend, .. } = &mut e.kind {
-            if kinds.get(symbol) == Some(&SymbolKind::Graphic) {
-                graphics += 1;
-                continue;
-            }
+        if let ElementKind::Symbol { blend, .. } = &mut e.kind {
             *blend = mode;
             set += 1;
         }
     }
     if set == 0 {
-        return Err(EngineError::State(if graphics > 0 {
-            "blending applies to movie clip and button instances; set the symbol's Type to Movie Clip first".into()
-        } else {
-            "select a movie clip or button instance".into()
-        }));
+        return Err(EngineError::State("select a symbol instance".into()));
     }
     Ok(json!({"mode": mode.key(), "set": set}))
 }
@@ -1001,6 +1049,7 @@ pub(crate) fn convert_to_symbol(s: &mut Session, p: &Value) -> Result<Value> {
         name: String::new(),
         transform: Affine::translate(center.x, center.y),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: sym_id, loop_mode: LoopMode::Loop, first_frame: 0, blend: anicraft_doc::BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None },
     };
     // Children are stored relative to the registration point (the selection centre).
@@ -1107,6 +1156,7 @@ fn convert_to_bitmap(s: &mut Session, _: &Value) -> Result<Value> {
         name: name.clone(),
         transform: Affine::translate(x0, y0),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Shape(Shape {
             path: Arc::new(Path::rect(0.0, 0.0, w as f32, h as f32)),
             fill: Some(Paint::Bitmap { bitmap: id, repeat: false, matrix: Affine::IDENTITY }),
@@ -1114,6 +1164,8 @@ fn convert_to_bitmap(s: &mut Session, _: &Value) -> Result<Value> {
             fill_rule: anicraft_geom::FillRule::NonZero,
             merge: false,
             warp: None,
+            fill_tag: None,
+            stroke_tag: None,
         }),
     });
     for l in layers {
@@ -1207,6 +1259,7 @@ fn trace_bitmap(s: &mut Session, p: &Value) -> Result<Value> {
                     name: String::new(),
                     transform: Affine::translate(c.x, c.y),
                     color,
+                    transform_3d: None,
                     kind: ElementKind::Shape(Shape {
                         path: Arc::new(path.transformed(&Affine::translate(-c.x, -c.y))),
                         fill: Some(Paint::Solid(t.color)),
@@ -1214,6 +1267,8 @@ fn trace_bitmap(s: &mut Session, p: &Value) -> Result<Value> {
                         fill_rule: anicraft_geom::FillRule::NonZero,
                         merge: true,
                         warp: None,
+                        fill_tag: None,
+                        stroke_tag: None,
                     }),
                 }
             })
@@ -1429,6 +1484,7 @@ fn place_symbol(s: &mut Session, sym: SymbolId, x: f32, y: f32) -> Result<Elemen
         name: String::new(),
         transform: Affine::translate(x, y),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: sym, loop_mode: LoopMode::Loop, first_frame: 0, blend: anicraft_doc::BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None },
     };
     s.editable_keyframe()?.elements.push(Arc::new(el));
@@ -1446,6 +1502,7 @@ fn place_bitmap(s: &mut Session, bitmap: anicraft_doc::BitmapId, x: f32, y: f32)
         name,
         transform: Affine::translate(x - w / 2.0, y - h / 2.0),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Shape(Shape {
             path: Arc::new(Path::rect(0.0, 0.0, w, h)),
             fill: Some(Paint::Bitmap { bitmap, repeat: false, matrix: Affine::IDENTITY }),
@@ -1453,6 +1510,8 @@ fn place_bitmap(s: &mut Session, bitmap: anicraft_doc::BitmapId, x: f32, y: f32)
             fill_rule: anicraft_geom::FillRule::NonZero,
             merge: false,
             warp: None,
+            fill_tag: None,
+            stroke_tag: None,
         }),
     };
     s.editable_keyframe()?.elements.push(Arc::new(el));

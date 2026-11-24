@@ -376,13 +376,15 @@ fn draw_brush(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // Opaque ink joins the drawing. A wash stays its own shape and composites (ADR 0102).
     let own = object || paint_stacks(&fill);
+    let fill_tag = if p.get("color").is_none_or(Value::is_null) && color.a >= 1.0 { s.style.fill_tag } else { None };
     let id = ElementId(s.doc.alloc_id());
     let el = Element {
         id,
         name: String::new(),
         transform: Affine::translate(c.x, c.y),
         color: ColorEffect::default(),
-        kind: ElementKind::Shape(Shape { path: Arc::new(local), fill: Some(fill), stroke: None, fill_rule: FillRule::EvenOdd, merge: !own, warp: None }),
+        transform_3d: None,
+        kind: ElementKind::Shape(Shape { path: Arc::new(local), fill: Some(fill), stroke: None, fill_rule: FillRule::EvenOdd, merge: !own, warp: None, fill_tag, stroke_tag: None }),
     };
     if s.editable_keyframe()?.elements.len() >= 100_000 {
         return Err(EngineError::State("too many elements on this keyframe".into()));

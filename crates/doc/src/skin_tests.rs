@@ -40,7 +40,7 @@ fn rig() -> (Armature, Vec<Arc<Element>>) {
     };
     rebind(&mut arm);
     let shape = Shape { path, ..Shape::filled(Path::new(), Paint::Solid(Rgba::BLACK)) }.with_stroke(Rgba::BLACK, 3.0);
-    let el = Arc::new(Element { id: TAIL, name: String::new(), transform: Affine::translate(100.0, 100.0), color: ColorEffect::default(), kind: ElementKind::Shape(shape) });
+    let el = Arc::new(Element { id: TAIL, name: String::new(), transform: Affine::translate(100.0, 100.0), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) });
     (arm, vec![el])
 }
 

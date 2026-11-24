@@ -94,7 +94,7 @@ pub(crate) fn finish_edit(s: &mut Session, e: MotionEdit) {
     // The values the curves give here (rotation unwrapped: a key may hold 540°).
     let was = m.props_at(&base_props, e.offset as f32);
     let mut new_base = base_props;
-    let (mut base_xf, mut base_color) = (false, false);
+    let (mut base_xf, mut base_color, mut base_3d) = (false, false, false);
     // On a motion path, moving the object reshapes the path (ADR 0030); X/Y keep the timing.
     let on_path = m.path.is_some();
     if on_path {
@@ -108,7 +108,7 @@ pub(crate) fn finish_edit(s: &mut Session, e: MotionEdit) {
             continue;
         }
         let mut d = now_dec.get(p) - was_dec.get(p);
-        if p == Property::Rotation {
+        if matches!(p, Property::Rotation | Property::RotationX | Property::RotationY) {
             // The turn the edit made, the short way round.
             d = (d + 180.0).rem_euclid(360.0) - 180.0;
         }
@@ -126,6 +126,8 @@ pub(crate) fn finish_edit(s: &mut Session, e: MotionEdit) {
             new_base.set(p, v);
             if p.style().is_some() {
                 base_color = true;
+            } else if p.is_3d() {
+                base_3d = true;
             } else {
                 base_xf = true;
             }
@@ -135,6 +137,7 @@ pub(crate) fn finish_edit(s: &mut Session, e: MotionEdit) {
     }
     let tracks_xf = m.tracks.iter().any(|t| t.property.is_transform());
     let tracks_color = m.tracks.iter().any(|t| t.property.style().is_some());
+    let tracks_3d = m.tracks.iter().any(|t| t.property.is_3d());
     let filters = key_filters(m, &e, &after);
     let mut base = after;
     if let (Some(f), Some(slot)) = (filters, base.kind.filters_mut()) {
@@ -151,6 +154,31 @@ pub(crate) fn finish_edit(s: &mut Session, e: MotionEdit) {
         // The edit's style, from the new values (ADR 0056).
         (true, false) => new_base.color_effect(&[base.color.style()]),
         (false, _) => e.base.color,
+    };
+    base.transform_3d = match (base_3d || (e.offset == 0 && !tracks_3d && base.transform_3d != e.before.transform_3d), e.offset == 0 && !tracks_3d) {
+        (true, true) => base.transform_3d,
+        (true, false) => {
+            let mut t3 = base.transform_3d.or(e.base.transform_3d).unwrap_or_default().sanitized();
+            t3.rx_deg = new_base.get(Property::RotationX);
+            t3.ry_deg = new_base.get(Property::RotationY);
+            t3.tz = new_base.get(Property::Z);
+            let t3 = t3.sanitized();
+            (!t3.is_identity()).then_some(t3)
+        }
+        (false, _) => {
+            // Preserve non-trackable fov/vanishing edits even when keying at offset > 0.
+            match (base.transform_3d, e.base.transform_3d) {
+                (Some(after_3d), base_opt)
+                    if Some((after_3d.fov_deg, after_3d.vanishing)) != e.before.transform_3d.map(|b| (b.fov_deg, b.vanishing)) =>
+                {
+                    let mut keep = base_opt.unwrap_or_default().sanitized();
+                    keep.fov_deg = after_3d.fov_deg;
+                    keep.vanishing = after_3d.vanishing;
+                    (!keep.is_identity()).then_some(keep)
+                }
+                (_, base_opt) => base_opt,
+            }
+        }
     };
     if let Some(slot) = kf.elements.get_mut(idx) {
         *slot = Arc::new(base);
@@ -771,7 +799,7 @@ fn key_value(s: &mut Session, p: &Value, prop: Property, value: f32) -> Result<V
                 Some(e) => format!("filter {} of the tween's object is a {}, which has no {}", f.slot, e.filter.label(), f.param.key()),
                 None => format!("the tween's object has no filter {} (it has {}; 0 is the first)", f.slot, filters.len()),
             },
-            None => "filters apply to movie clip and button instances and to text: the tween's object has none".into(),
+            None => "filters apply to symbol instances and text: the tween's object has none".into(),
         }),
         None => EngineError::State("the motion tween's object has no such property".into()),
     })?;

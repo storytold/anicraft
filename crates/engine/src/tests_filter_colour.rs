@@ -362,11 +362,11 @@ fn text_takes_filters_and_keeps_them() {
     run(&mut s, "timeline.create_motion_tween", json!({}));
     run(&mut s, "motion.set_key", json!({"property": "filter.0.blur_x", "frame": 10, "value": 20}));
     assert!(matches!(drawn(&s, 5).first(), Some(Filter::Blur { blur_x, .. }) if *blur_x == 10.0));
-    // Shapes and graphics take none, and say so.
+    // Shapes take no filters, while graphic symbols do (P-027).
     let mut s = Session::default();
     run(&mut s, "draw.rect", json!({"x": 10, "y": 10, "w": 50, "h": 50, "fill": "#ff0000"}));
-    assert!(refused(&mut s, "element.set_filters", json!({"filters": [{"type": "blur"}]})).contains("select a movie clip or button instance, or text"));
+    assert!(refused(&mut s, "element.set_filters", json!({"filters": [{"type": "blur"}]})).contains("select a symbol instance or text"));
     run(&mut s, "modify.convert_to_symbol", json!({"name": "G"}));
     run(&mut s, "symbol.set_kind", json!({"kind": "graphic"}));
-    assert!(refused(&mut s, "element.set_filters", json!({"filters": [{"type": "blur"}]})).contains("and to text"));
+    assert_eq!(run(&mut s, "element.set_filters", json!({"filters": [{"type": "blur"}]}))["filters"], 1);
 }

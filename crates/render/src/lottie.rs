@@ -1122,6 +1122,7 @@ mod tests {
                 name: String::new(),
                 transform: Affine::IDENTITY,
                 color: ColorEffect::default(),
+                transform_3d: None,
                 kind: ElementKind::Shape(shape),
             }));
             d.timeline_mut(0).layers.push(Arc::new(l));
@@ -1340,6 +1341,7 @@ mod tests {
                 name: String::new(),
                 transform: m,
                 color: ColorEffect::default(),
+                transform_3d: None,
                 kind: ElementKind::Shape(shape.clone()),
             })
         };
@@ -1479,7 +1481,7 @@ mod tests {
         let mut doc = Document::default();
         let fx = ColorEffect::Advanced(ColorTransform { mul: [-1.0, 0.5, 1.0, 1.0], add: [1.0, 0.0, 0.0, 0.0] });
         let shape = Shape::filled(Path::rect(0.0, 0.0, 20.0, 20.0), Paint::Solid(Rgba::new(0.2, 0.4, 0.6, 1.0)));
-        let el = Element { id: ElementId(77), name: String::new(), transform: Affine::IDENTITY, color: fx, kind: ElementKind::Shape(shape) };
+        let el = Element { id: ElementId(77), name: String::new(), transform: Affine::IDENTITY, color: fx, transform_3d: None, kind: ElementKind::Shape(shape) };
         let layer = std::sync::Arc::make_mut(&mut doc.timeline_mut(0).layers[0]);
         layer.keyframe_mut(0).unwrap().elements.push(std::sync::Arc::new(el));
         let e = to_lottie(&doc, "fx", 0, 0, false);
@@ -1502,12 +1504,15 @@ mod tests {
             fill_rule: FillRule::NonZero,
             merge: false,
             warp: None,
+            fill_tag: None,
+            stroke_tag: None,
         };
         let el = Element {
             id: ElementId(77),
             name: String::new(),
             transform: Affine::IDENTITY,
             color: Default::default(),
+            transform_3d: None,
             kind: ElementKind::Shape(shape),
         };
         let layer = std::sync::Arc::make_mut(&mut doc.timeline_mut(0).layers[0]);
@@ -1532,12 +1537,15 @@ mod tests {
                 fill_rule: FillRule::NonZero,
                 merge: false,
                 warp: None,
+                fill_tag: None,
+                stroke_tag: None,
             };
             let el = Element {
                 id: ElementId(77),
                 name: String::new(),
                 transform: Affine::scale(2.0, 2.0),
                 color: Default::default(),
+                transform_3d: None,
                 kind: ElementKind::Shape(shape),
             };
             let layer = std::sync::Arc::make_mut(&mut doc.timeline_mut(0).layers[0]);

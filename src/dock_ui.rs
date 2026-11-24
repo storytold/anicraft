@@ -174,6 +174,8 @@ pub(crate) fn region(p: Panel) -> Region {
 pub fn panel_icon(p: Panel) -> Icon {
     match p {
         Panel::Properties => Icon::PanelProperties,
+        Panel::AutoRig => Icon::Bone,
+        Panel::FramePicker => Icon::Image,
         Panel::Align => Icon::AlignLeft,
         Panel::Colour => Icon::Ink,
         Panel::Swatches => Icon::PanelSwatches,
@@ -953,6 +955,18 @@ pub fn panel_body(app: &mut App, ui: &mut egui::Ui, p: Panel) {
             scroll("props").show(ui, |ui| {
                 held(ui);
                 pad(12, 8).show(ui, |ui| crate::panels::properties(app, ui))
+            });
+        }
+        Panel::AutoRig => {
+            scroll("auto_rig").show(ui, |ui| {
+                held(ui);
+                pad(12, 8).show(ui, |ui| crate::autorig_panel::panel(app, ui))
+            });
+        }
+        Panel::FramePicker => {
+            scroll("frame_picker").show(ui, |ui| {
+                held(ui);
+                pad(12, 8).show(ui, |ui| crate::frame_picker_panel::panel(app, ui))
             });
         }
         Panel::Align => {

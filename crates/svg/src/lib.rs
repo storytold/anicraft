@@ -166,6 +166,11 @@ pub fn import(bytes: &[u8]) -> Result<SvgImport, SvgError> {
     import_from(bytes, None)
 }
 
+/// Reads an SVG string, laying any text out with this computer's fonts.
+pub fn import_svg_str(svg: &str) -> Result<SvgImport, SvgError> {
+    import_from(svg.as_bytes(), None)
+}
+
 /// Reads an SVG document, laying text out with `fonts` (tests, and hosts with their own font
 /// library).
 pub fn import_with_fonts(bytes: &[u8], fonts: &Fonts) -> Result<SvgImport, SvgError> {
@@ -808,7 +813,7 @@ impl<'a> Builder<'a> {
                 if fill.is_none() && stroke.is_none() {
                     return;
                 }
-                let shape = Shape { path: Arc::new(path), fill, stroke, fill_rule: style.fill_rule, merge: false, warp: None };
+                let shape = Shape { path: Arc::new(path), fill, stroke, fill_rule: style.fill_rule, merge: false, warp: None, fill_tag: None, stroke_tag: None };
                 self.items.push(Item {
                     el: ImportedElement { name: name_of(el), transform: *m, alpha, kind: ElementKind::Shape(shape) },
                     clips: Vec::new(),

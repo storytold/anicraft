@@ -14,9 +14,9 @@ use crate::dock::Panel;
 /// The guide's place for a tool.
 pub fn tool_topic(t: Tool) -> &'static str {
     match t {
-        Tool::Select => "drawing.md#the-tools",
+        Tool::Select | Tool::Lasso | Tool::PolyLasso | Tool::MagicWand => "drawing.md#the-tools",
         Tool::Subselect => "drawing.md#editing-points-with-subselection",
-        Tool::Transform => "drawing.md#transforming-artwork",
+        Tool::Transform | Tool::Transform3D => "drawing.md#transforming-artwork",
         Tool::Warp => "masks-guides-camera-bones.md#asset-warp",
         Tool::GradientTransform => "drawing.md#gradients-and-bitmap-fills",
         Tool::Width => "drawing.md#variable-width-lines",
@@ -29,7 +29,7 @@ pub fn tool_topic(t: Tool) -> &'static str {
         Tool::Eraser => "drawing.md#eraser",
         Tool::PaintBucket | Tool::InkBottle | Tool::Eyedropper => "drawing.md#paint-bucket-ink-bottle-and-eyedropper",
         Tool::Camera => "masks-guides-camera-bones.md#moving-the-camera",
-        Tool::Hand => "workspace.md#panning",
+        Tool::Hand | Tool::RotateView => "workspace.md#panning",
         Tool::Zoom => "workspace.md#zooming",
     }
 }
@@ -38,6 +38,8 @@ pub fn tool_topic(t: Tool) -> &'static str {
 pub fn panel_topic(p: Panel) -> &'static str {
     match p {
         Panel::Properties => "workspace.md#properties",
+        Panel::AutoRig => "masks-guides-camera-bones.md#bones-and-inverse-kinematics",
+        Panel::FramePicker => "symbols-and-library.md#instance-properties",
         Panel::Align => "drawing.md#align-and-distribute",
         Panel::Colour => "drawing.md#choosing-colours",
         Panel::Library => "symbols-and-library.md#the-library-panel",
@@ -227,6 +229,7 @@ pub const COMMAND_TOPICS: &[(&str, &str)] = &[
     ("file.recovery", "getting-started.md#autosave-and-crash-recovery"),
     ("filter.", "drawing.md#filters-and-blend-modes"),
     ("find.", "workspace.md#find-and-replace"),
+    ("frame_picker.", "symbols-and-library.md#instance-properties"),
     ("frames.", "timeline.md#frames-and-keyframes"),
     ("instance.", "symbols-and-library.md#instance-properties"),
     ("layer.", "timeline.md#layers"),
@@ -246,6 +249,7 @@ pub const COMMAND_TOPICS: &[(&str, &str)] = &[
     ("prefs.", "preferences-shortcuts-accessibility.md#preferences"),
     ("publish.", "exporting-and-publish.md#publish-settings"),
     ("raw.", "drawing.md#merge-drawing-and-drawing-objects"),
+    ("rig.", "masks-guides-camera-bones.md#bones-and-inverse-kinematics"),
     ("scene.", "timeline.md#scenes"),
     ("script.", "interactivity.md#frame-scripts-in-actionscript-30"),
     ("sound.", "images-and-sound.md#sounds-on-keyframes"),

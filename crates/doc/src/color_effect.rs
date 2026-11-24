@@ -192,6 +192,11 @@ impl ColorEffect {
         }
     }
 
+    /// Whether this effect leaves colours unchanged (`None`), for `skip_serializing_if`.
+    pub fn is_none(&self) -> bool {
+        matches!(self, ColorEffect::None)
+    }
+
     /// What it does to colour (its values clamped into the style's range first).
     pub fn transform(&self) -> ColorTransform {
         match self.sanitized() {

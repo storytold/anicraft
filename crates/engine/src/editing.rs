@@ -32,6 +32,7 @@ pub fn specs() -> Vec<CommandSpec> {
             edit as crate::RunFn,
         ),
         c("symbol.exit", "Edit Document", "Edit", None, "{all?: bool} closes the open symbol (default: one level; all: back to the scene), selecting the instance it was opened from", false, exit),
+        c("edit.paste_svg", "Paste SVG", "", None, "{svg, x?, y?, float?: bool} parses an SVG snippet and places its editable vector shapes onto the active layer centred at (x, y) or the stage centre, in one undo step", true, paste_svg),
     ]
 }
 
@@ -384,6 +385,7 @@ fn placed(doc: &mut Document, timeline: Timeline, transform: Affine, frame: u32,
         name: String::new(),
         transform,
         color,
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol, loop_mode: LoopMode::SingleFrame, first_frame: frame, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
     }));
     let mut layer = Layer::new(LayerId(doc.alloc_id()), "");
@@ -406,8 +408,8 @@ impl Session {
         let at = kf.elements.iter().position(|e| e.id == id).ok_or_else(|| EngineError::State("that drawing object is not on this keyframe".into()))?;
         let Some(el) = kf.elements.get(at).cloned() else { return Err(EngineError::State("that drawing object is not on this keyframe".into())) };
         let ElementKind::Shape(sh) = &el.kind else { return Err(EngineError::State("that is not a drawing object".into())) };
-        let shape = Element { id: inner, name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, kind: ElementKind::Shape(anicraft_doc::Shape { merge: true, ..sh.clone() }) };
-        let group = Element { id, name: el.name.clone(), transform: el.transform, color: el.color, kind: ElementKind::group(inner_layer, vec![Arc::new(shape)]) };
+        let shape = Element { id: inner, name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, transform_3d: None, kind: ElementKind::Shape(anicraft_doc::Shape { merge: true, ..sh.clone() }) };
+        let group = Element { id, name: el.name.clone(), transform: el.transform, color: el.color, transform_3d: None, kind: ElementKind::group(inner_layer, vec![Arc::new(shape)]) };
         if let Some(slot) = kf.elements.get_mut(at) {
             *slot = Arc::new(group);
         }
@@ -453,7 +455,7 @@ impl Session {
                     _ => None,
                 };
                 if let (ElementKind::Shape(sh), Some(color)) = (&only.kind, color) {
-                    let object = Element { id, name: group.name.clone(), transform: group.transform.mul(&only.transform), color, kind: ElementKind::Shape(anicraft_doc::Shape { merge: false, ..sh.clone() }) };
+                    let object = Element { id, name: group.name.clone(), transform: group.transform.mul(&only.transform), color, transform_3d: None, kind: ElementKind::Shape(anicraft_doc::Shape { merge: false, ..sh.clone() }) };
                     if let Some(slot) = kf.elements.get_mut(at) {
                         *slot = Arc::new(object);
                     }
@@ -627,4 +629,226 @@ pub(crate) fn editing_json(s: &Session) -> Value {
 /// Animate's Advanced effect calls multipliers 0 % and offsets of the tint, alpha at `alpha`.
 fn hit_tint(tint: anicraft_doc::Rgba, alpha: f32) -> anicraft_doc::ColorTransform {
     anicraft_doc::ColorTransform { mul: [0.0, 0.0, 0.0, alpha], add: [tint.r, tint.g, tint.b, 0.0] }
+}
+
+/// Largest SVG clipboard snippet accepted by `edit.paste_svg` (64 MiB).
+const MAX_SVG_PASTE_BYTES: usize = 64 * 1024 * 1024;
+
+/// `edit.paste_svg`: parses an SVG string and places its editable vector shapes (or a masked
+/// Graphic symbol when clip paths / masks are present) onto the active layer centred at `(x, y)`
+/// (default: stage centre), selected, in one undo step (`P-038`).
+fn paste_svg(s: &mut Session, p: &Value) -> Result<Value> {
+    let svg = str_req(p, "svg")?;
+    if svg.trim().is_empty() {
+        return Err(EngineError::Param("param 'svg' must not be empty".into()));
+    }
+    if svg.len() > MAX_SVG_PASTE_BYTES {
+        return Err(EngineError::Format("SVG snippet is too large to paste".into()));
+    }
+    let stage = s.doc.stage;
+    let cx = opt_f32(p, "x")?.unwrap_or(stage.width as f32 * 0.5);
+    let cy = opt_f32(p, "y")?.unwrap_or(stage.height as f32 * 0.5);
+    if !(cx.is_finite() && cy.is_finite()) || cx.abs() > 1.0e6 || cy.abs() > 1.0e6 {
+        return Err(EngineError::Param("'x' and 'y' must be finite numbers within ±1000000".into()));
+    }
+    let float = opt_bool(p, "float")?.unwrap_or(false);
+
+    // Ensure the active layer and frame can accept pasted artwork before mutating the Library.
+    let _ = s.editable_keyframe()?;
+
+    let drawing = anicraft_svg::import_svg_str(svg).map_err(|e| EngineError::Format(format!("invalid SVG: {e}")))?;
+    if drawing.is_empty() {
+        return Err(EngineError::State(format!(
+            "SVG has no shapes AniCraft can paste yet. {}",
+            drawing.report.summary()
+        )));
+    }
+
+    let (width, height, report) = (drawing.width, drawing.height, drawing.report);
+    let has_masks = drawing.layers.iter().any(|l| l.mask.is_some());
+
+    if has_masks {
+        let sym_name = s.doc.unique_name(None, "Pasted SVG");
+        let reg_place = Affine::translate(-width * 0.5, -height * 0.5);
+        let runs = drawing.layers.len();
+        let mut layers: Vec<Arc<Layer>> = Vec::new();
+        for (n, l) in drawing.layers.into_iter().enumerate().rev() {
+            let mut parent = None;
+            if let Some(mask) = l.mask {
+                let mut ml = Layer::new(
+                    LayerId(s.doc.alloc_id()),
+                    if mask.name.is_empty() { "Mask".to_string() } else { mask.name },
+                );
+                ml.kind = LayerKind::Mask;
+                ml.locked = true;
+                ml.mask_mode = mask.mode;
+                let mut mk = Keyframe::new(0, 1);
+                mk.elements = mask
+                    .elements
+                    .into_iter()
+                    .map(|e| {
+                        Arc::new(Element {
+                            id: ElementId(s.doc.alloc_id()),
+                            name: e.name,
+                            transform: reg_place.mul(&e.transform),
+                            color: ColorEffect::opacity(e.alpha),
+                            transform_3d: None,
+                            kind: e.kind,
+                        })
+                    })
+                    .collect();
+                ml.keyframes = vec![Arc::new(mk)];
+                parent = Some(ml.id);
+                layers.push(Arc::new(ml));
+            }
+            let mut cl = Layer::new(
+                LayerId(s.doc.alloc_id()),
+                if runs == 1 { "Layer 1".to_string() } else { format!("Layer {}", n + 1) },
+            );
+            cl.parent = parent;
+            let mut ck = Keyframe::new(0, 1);
+            ck.elements = l
+                .elements
+                .into_iter()
+                .map(|e| {
+                    Arc::new(Element {
+                        id: ElementId(s.doc.alloc_id()),
+                        name: e.name,
+                        transform: reg_place.mul(&e.transform),
+                        color: ColorEffect::opacity(e.alpha),
+                        transform_3d: None,
+                        kind: e.kind,
+                    })
+                })
+                .collect();
+            cl.keyframes = vec![Arc::new(ck)];
+            layers.push(Arc::new(cl));
+        }
+        let mut timeline = Timeline { layers };
+        timeline.repair_masks();
+        let sym_id = SymbolId(s.doc.alloc_id());
+        s.doc.library.push(Arc::new(Symbol {
+            id: sym_id,
+            name: sym_name,
+            kind: SymbolKind::Graphic,
+            linkage: None,
+            scale_grid: None,
+            scale_grid_kept: None,
+            timeline,
+        }));
+        let inst_id = ElementId(s.doc.alloc_id());
+        let inst = Arc::new(Element {
+            id: inst_id,
+            name: String::new(),
+            transform: Affine::translate(cx, cy),
+            color: ColorEffect::None,
+            transform_3d: None,
+            kind: ElementKind::Symbol {
+                symbol: sym_id,
+                loop_mode: LoopMode::Loop,
+                first_frame: 0,
+                blend: anicraft_doc::BlendMode::Normal,
+                filters: Vec::new(),
+                events: Vec::new(),
+                pivot: None,
+            },
+        });
+        s.editable_keyframe()?.elements.push(inst);
+        s.select_only([inst_id]);
+        return Ok(json!({
+            "pasted": [inst_id.0],
+            "elements": 1,
+            "symbol": sym_id.0,
+            "width": width,
+            "height": height,
+            "report": report.summary(),
+        }));
+    }
+
+    let place = Affine::translate(cx - width * 0.5, cy - height * 0.5);
+    let els: Vec<Element> = drawing
+        .layers
+        .into_iter()
+        .flat_map(|l| l.elements)
+        .map(|e| Element {
+            id: ElementId(0),
+            name: e.name,
+            transform: place.mul(&e.transform),
+            color: ColorEffect::opacity(e.alpha),
+            transform_3d: None,
+            kind: e.kind,
+        })
+        .collect();
+
+    let (fresh, merged) = crate::cmds_modify::paste_layer(
+        s,
+        &els,
+        Vec2::ZERO,
+        float,
+        &crate::transfer::IdMap::default(),
+    )?;
+    if float {
+        let floating: Vec<(LayerId, ElementId)> = els
+            .iter()
+            .zip(&fresh)
+            .filter(|(e, _)| crate::merge::mergeable(e).is_some())
+            .map(|(_, &id)| (s.layer, id))
+            .collect();
+        s.floating = (!floating.is_empty()).then_some(crate::Floating { items: floating, frame: s.frame });
+    } else {
+        s.floating = None;
+    }
+    s.select_only(fresh.iter().copied());
+    let ids: Vec<u64> = fresh.iter().map(|id| id.0).collect();
+    Ok(json!({
+        "pasted": ids,
+        "elements": fresh.len(),
+        "merged": merged,
+        "width": width,
+        "height": height,
+        "report": report.summary(),
+    }))
+}
+
+#[cfg(test)]
+mod svg_paste_tests {
+    use super::*;
+
+    #[test]
+    fn paste_svg_places_centered_vectors_and_undoes_in_one_step() {
+        let mut s = Session::default();
+        let before = s.doc.clone();
+        let svg = r##"<?xml version="1.0" encoding="UTF-8"?>
+            <svg xmlns="http://www.w3.org/2000/svg" width="100" height="60" viewBox="0 0 100 60">
+                <rect x="0" y="0" width="100" height="60" fill="#ff5533"/>
+                <circle cx="50" cy="30" r="20" fill="#2288ff"/>
+            </svg>"##;
+
+        let res = s
+            .execute("edit.paste_svg", &json!({"svg": svg, "x": 400.0, "y": 300.0, "float": true}))
+            .expect("paste svg");
+        assert_eq!(res["elements"], 2);
+        assert_eq!(s.selection.len(), 2);
+        let b = s.selection_bounds();
+        assert!((b.center().x - 400.0).abs() < 1.0 && (b.center().y - 300.0).abs() < 1.0, "{b:?}");
+
+        s.execute("edit.undo", &json!({})).expect("undo");
+        assert_eq!(s.doc, before, "single undo step restores document");
+    }
+
+    #[test]
+    fn paste_svg_wraps_clipped_artwork_as_symbol_and_rejects_bad_input() {
+        let mut s = Session::default();
+        let clipped_svg = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 80 80">
+            <defs><clipPath id="c"><circle cx="40" cy="40" r="30"/></clipPath></defs>
+            <g clip-path="url(#c)"><rect x="0" y="0" width="80" height="80" fill="#33cc77"/></g>
+        </svg>"##;
+        let v = s.execute("edit.paste_svg", &json!({"svg": clipped_svg})).expect("paste clipped svg");
+        assert_eq!(v["elements"], 1);
+        assert!(v.get("symbol").is_some(), "masked SVG becomes a graphic symbol");
+
+        assert!(s.execute("edit.paste_svg", &json!({"svg": "   "})).is_err());
+        assert!(s.execute("edit.paste_svg", &json!({"svg": "not xml at all"})).is_err());
+        assert!(s.execute("edit.paste_svg", &json!({"svg": "<svg xmlns='http://www.w3.org/2000/svg'/>"})).is_err());
+    }
 }

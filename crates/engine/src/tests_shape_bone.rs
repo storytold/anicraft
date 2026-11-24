@@ -31,7 +31,7 @@ fn tail() -> Session {
     }
     p.close();
     let shape = Shape { merge: true, ..Shape::filled(p, Paint::Solid(Rgba::BLACK)) };
-    let el = Arc::new(Element { id: ElementId(TAIL), name: String::new(), transform: Affine::translate(100.0, 150.0), color: ColorEffect::default(), kind: ElementKind::Shape(shape) });
+    let el = Arc::new(Element { id: ElementId(TAIL), name: String::new(), transform: Affine::translate(100.0, 150.0), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) });
     let l = Arc::make_mut(&mut d.timeline_mut(0).layers[0]);
     l.keyframes = vec![Arc::new({
         let mut k = Keyframe::new(0, 20);

@@ -115,7 +115,7 @@ fn add_params(app: &App) -> Option<serde_json::Value> {
         ColourTarget::Fill => {
             let (paint, _) = crate::colour_panel::current(app);
             let sw = SwatchPaint::from_paint(&paint)?;
-            let mut v = anicraft_engine::cmds_swatch::swatch_json(&anicraft_engine::doc::Swatch { name: String::new(), paint: sw });
+            let mut v = anicraft_engine::cmds_swatch::swatch_json(&anicraft_engine::doc::Swatch::new("", sw));
             if let Some(o) = v.as_object_mut() {
                 o.remove("name");
             }
@@ -266,6 +266,11 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         a11y::control(ui, &resp, WidgetType::Button, &tr!("Swatch {n}: {name}", n = i + 1, name = name.as_str()), Some(selected));
         let p = ui.painter();
         preview(p, r, &sw.paint);
+        if sw.tag_id.is_some() {
+            let sz = 6.5;
+            let tri = vec![pos2(r.right(), r.bottom() - sz), pos2(r.right(), r.bottom()), pos2(r.right() - sz, r.bottom())];
+            p.add(egui::Shape::convex_polygon(tri, egui::Color32::WHITE, Stroke::new(1.0, T.border)));
+        }
         let edge = if selected {
             Stroke::new(2.0, T.accent)
         } else if resp.hovered() {
@@ -311,6 +316,9 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
         };
         let resp = resp.on_hover_ui(|ui| {
             ui.label(text(if sw.name.is_empty() { Type::Data } else { Type::Body }, name.clone()));
+            if sw.tag_id.is_some() {
+                ui.label(text(Type::Caption, tr!("Tagged Swatch (live-updates linked shapes)")));
+            }
             ui.label(text(Type::Caption, tip_target));
         });
         resp.context_menu(|ui| {
@@ -325,6 +333,15 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
                 app.run("swatch.apply", json!({"index": i, "target": "stroke"}));
                 ui.close();
             }
+            ui.separator();
+            let mut tagged = sw.tag_id.is_some();
+            if crate::theme::checkbox(ui, &mut tagged, tr!("Tagged Swatch"))
+                .on_hover_text(tr!("Link shapes using this swatch so editing it updates them across scenes and symbols"))
+                .changed()
+            {
+                app.run("swatch.set_tagged", json!({"index": i, "tagged": tagged, "link_existing": tagged}));
+            }
+            swatch_colour_editor(app, ui, i, &sw.paint);
             ui.separator();
             if ui.button(tr!("Duplicate Swatch")).clicked() {
                 act = Some(Act::Duplicate(i));
@@ -375,6 +392,49 @@ fn grid(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
+fn rgba_bytes(c: Rgba) -> [u8; 4] {
+    let cl = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+    [cl(c.r), cl(c.g), cl(c.b), cl(c.a)]
+}
+
+/// Live colour / gradient-stop editor inside a swatch's context menu (`swatch.edit`).
+fn swatch_colour_editor(app: &mut App, ui: &mut egui::Ui, i: usize, paint: &SwatchPaint) {
+    match paint {
+        SwatchPaint::Solid { color } => {
+            let mut c = rgba_bytes(*color);
+            ui.horizontal(|ui| {
+                ui.label(tr!("Colour"));
+                if crate::colour::button_alpha(ui, &mut c).named(tr!("Swatch colour")).changed() {
+                    crate::panels::live(app, tr_noop!("Edit Swatch"), "swatch.edit", json!({"index": i, "color": crate::colour::to_hex(c, true)}));
+                }
+            });
+        }
+        SwatchPaint::Linear { stops, .. } | SwatchPaint::Radial { stops, .. } => {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(tr!("Stops"));
+                let mut changed_idx: Option<(usize, String)> = None;
+                for (si, st) in stops.iter().enumerate() {
+                    let mut c = rgba_bytes(st.color);
+                    if crate::colour::button_alpha(ui, &mut c).named(tr!("Gradient stop")).changed() {
+                        changed_idx = Some((si, crate::colour::to_hex(c, true)));
+                    }
+                }
+                if let Some((si, hex_col)) = changed_idx {
+                    let new_stops: Vec<serde_json::Value> = stops
+                        .iter()
+                        .enumerate()
+                        .map(|(k, st)| {
+                            let col = if k == si { hex_col.clone() } else { anicraft_engine::cmds_swatch::hex(st.color) };
+                            json!({"offset": st.offset, "color": col})
+                        })
+                        .collect();
+                    crate::panels::live(app, tr_noop!("Edit Swatch"), "swatch.edit", json!({"index": i, "stops": new_stops}));
+                }
+            });
+        }
+    }
+}
+
 /// The swatch's name, typed in its right-click menu (Enter or leaving the field renames it).
 fn name_field(app: &mut App, ui: &mut egui::Ui, i: usize, current: &str) {
     let buf_id = Id::new(("anicraft.swatch.name", i));
@@ -406,7 +466,7 @@ pub fn for_pickers(ctx: &egui::Context) -> std::sync::Arc<Vec<anicraft_engine::d
 
 /// The fill a gradient swatch makes, as `paint.set_fill` params.
 pub fn fill_params(sw: &SwatchPaint) -> serde_json::Value {
-    let mut v = anicraft_engine::cmds_swatch::swatch_json(&anicraft_engine::doc::Swatch { name: String::new(), paint: sw.clone() });
+    let mut v = anicraft_engine::cmds_swatch::swatch_json(&anicraft_engine::doc::Swatch::new("", sw.clone()));
     if let Some(o) = v.as_object_mut() {
         o.remove("name");
     }
@@ -476,5 +536,9 @@ mod tests {
         app.dock.move_to(crate::dock::Panel::Swatches, crate::dock::Target::Float(None));
         frames(&ctx, &mut app);
         assert_eq!(for_pickers(&ctx).len(), app.s.doc.swatches.len(), "the pickers see the document's swatches");
+        // Tagging a swatch draws its corner triangle badge without error.
+        app.run("swatch.set_tagged", json!({"index": 1, "tagged": true, "link_existing": true}));
+        assert!(app.s.doc.swatches[1].tag_id.is_some());
+        frames(&ctx, &mut app);
     }
 }

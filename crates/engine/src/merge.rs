@@ -181,9 +181,9 @@ pub(crate) fn remerge_with(s: &mut Session, parts: &[Part], cutter: Option<&Path
 
 /// [`remerge_with`] for any document (new pieces take ids from `doc`).
 fn remerge_doc(doc: &mut Document, parts: &[Part], cutter: Option<&Path>) -> Option<Remerged> {
-    // Style tables: equal entries are one style to the merge.
-    let mut fills: Vec<(Paint, ColorEffect)> = Vec::new();
-    let mut strokes: Vec<(Stroke, ColorEffect)> = Vec::new();
+    // Style tables: equal entries are one style to the merge (including Tagged Swatch links).
+    let mut fills: Vec<(Paint, ColorEffect, Option<u64>)> = Vec::new();
+    let mut strokes: Vec<(Stroke, ColorEffect, Option<u64>)> = Vec::new();
     // A stroke with a width profile is a style of its own (its pieces never chain into another
     // stroke's), with the path its profile runs along (an index into `paths`).
     let mut profiled: Vec<(u32, usize)> = Vec::new();
@@ -197,16 +197,18 @@ fn remerge_doc(doc: &mut Document, parts: &[Part], cutter: Option<&Path>) -> Opt
                 paths.push(sh.path.transformed(&e.transform));
                 // Gradients and bitmaps are placed in keyframe space, so every piece shows its
                 // part of the paint where it was.
-                let fill = sh.fill.as_ref().map(|f| fill_index(&mut fills, (f.transformed(&e.transform), e.color)));
+                let fill = sh.fill.as_ref().map(|f| fill_index(&mut fills, (f.transformed(&e.transform), e.color, sh.fill_tag)));
                 let stroke = sh.stroke.clone().map(|st| {
-                    let st = (st.scaled(e.transform.mean_scale()), e.color);
+                    let mut scaled = st.scaled(e.transform.mean_scale());
+                    scaled.paint = scaled.paint.map(|p| p.transformed(&e.transform));
+                    let st = (scaled, e.color, sh.stroke_tag);
                     if st.0.profile.is_some() {
                         strokes.push(st);
                         let i = (strokes.len() - 1) as u32;
                         profiled.push((i, paths.len() - 1));
                         i
                     } else {
-                        index_of(&mut strokes, st)
+                        stroke_index(&mut strokes, st)
                     }
                 });
                 styles.push((fill, stroke, sh.fill_rule));
@@ -229,21 +231,25 @@ fn remerge_doc(doc: &mut Document, parts: &[Part], cutter: Option<&Path>) -> Opt
     let mut out: Vec<Arc<Element>> = Vec::with_capacity(merged.fills.len() + merged.strokes.len());
     let (mut picked, mut inside, mut from) = (Vec::new(), Vec::new(), Vec::new());
     for (piece, is_fill) in merged.fills.iter().map(|p| (p, true)).chain(merged.strokes.iter().map(|p| (p, false))) {
-        let (fill, stroke, color) = if is_fill {
+        let (fill, stroke, color, fill_tag, stroke_tag) = if is_fill {
             // Erased regions (and anything without a style) are left out.
-            let Some((f, c)) = fills.get(piece.style as usize).filter(|_| piece.style != ERASED) else { continue };
-            (Some(f.clone()), None, *c)
+            let Some((f, c, ft)) = fills.get(piece.style as usize).filter(|_| piece.style != ERASED) else { continue };
+            (Some(f.clone()), None, *c, *ft, None)
         } else {
-            let Some((st, c)) = strokes.get(piece.style as usize) else { continue };
+            let Some((st, c, st_tag)) = strokes.get(piece.style as usize) else { continue };
             let mut st = st.clone();
             // Each piece of a variable-width stroke keeps the widths it had (ADR 0093).
             if let (Some(profile), Some(path)) = (&st.profile, profiled.iter().find(|(i, _)| *i == piece.style).and_then(|(_, p)| paths.get(*p))) {
                 st.profile = profile.along(path, &piece.spans);
             }
-            (None, Some(st), *c)
+            (None, Some(st), *c, None, *st_tag)
         };
         // Local origin at the centre of the piece, as the drawing tools place shapes.
         let c = piece.path.bounds().center();
+        let stroke = stroke.map(|mut st| {
+            st.paint = st.paint.map(|p| p.transformed(&Affine::translate(-c.x, -c.y)));
+            st
+        });
         let id = ElementId(doc.alloc_id());
         if marked.get(piece.item).copied().unwrap_or(false) {
             picked.push(id);
@@ -259,7 +265,8 @@ fn remerge_doc(doc: &mut Document, parts: &[Part], cutter: Option<&Path>) -> Opt
             name: String::new(),
             transform: Affine::translate(c.x, c.y),
             color,
-            kind: ElementKind::Shape(Shape { path: Arc::new(piece.path.transformed(&Affine::translate(-c.x, -c.y))), fill: fill.map(|f| f.transformed(&Affine::translate(-c.x, -c.y))), stroke, fill_rule: Default::default(), merge: true, warp: None }),
+            transform_3d: None,
+            kind: ElementKind::Shape(Shape { path: Arc::new(piece.path.transformed(&Affine::translate(-c.x, -c.y))), fill: fill.map(|f| f.transformed(&Affine::translate(-c.x, -c.y))), stroke, fill_rule: Default::default(), merge: true, warp: None, fill_tag, stroke_tag }),
         }));
     }
     Some(Remerged { out, picked, inside, from })
@@ -296,8 +303,8 @@ fn add_whole(kf: &mut anicraft_doc::Keyframe, els: Vec<Element>, order: Order) {
 
 /// The fill table's entry for `v`: paints that differ only by rounding (a gradient carried into a
 /// piece and back) are one style, so pieces of one fill join again.
-fn fill_index(table: &mut Vec<(Paint, ColorEffect)>, v: (Paint, ColorEffect)) -> u32 {
-    match table.iter().position(|x| x.1 == v.1 && same_paint(&x.0, &v.0)) {
+fn fill_index(table: &mut Vec<(Paint, ColorEffect, Option<u64>)>, v: (Paint, ColorEffect, Option<u64>)) -> u32 {
+    match table.iter().position(|x| x.1 == v.1 && x.2 == v.2 && same_paint(&x.0, &v.0)) {
         Some(i) => i as u32,
         None => {
             table.push(v);
@@ -328,8 +335,21 @@ pub(crate) fn same_paint(x: &Paint, y: &Paint) -> bool {
     }
 }
 
-fn index_of<T: PartialEq>(table: &mut Vec<T>, v: T) -> u32 {
-    match table.iter().position(|x| *x == v) {
+/// The stroke table's entry for `v`: strokes whose optional gradient/bitmap paints differ only by
+/// rounding join again as one style.
+fn stroke_index(table: &mut Vec<(Stroke, ColorEffect, Option<u64>)>, v: (Stroke, ColorEffect, Option<u64>)) -> u32 {
+    let same_stroke = |a: &Stroke, b: &Stroke| -> bool {
+        a.color == b.color
+            && (a.width - b.width).abs() <= 1e-4
+            && a.profile == b.profile
+            && a.style == b.style
+            && match (&a.paint, &b.paint) {
+                (None, None) => true,
+                (Some(pa), Some(pb)) => same_paint(pa, pb),
+                _ => false,
+            }
+    };
+    match table.iter().position(|x| x.1 == v.1 && x.2 == v.2 && same_stroke(&x.0, &v.0)) {
         Some(i) => i as u32,
         None => {
             table.push(v);

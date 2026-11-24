@@ -7,7 +7,7 @@
 use crate::a11y::Named;
 use crate::app::App;
 use crate::theme::{FORM_LABEL_DIALOG, T, Type, form_row, text, to_color32};
-use anicraft_engine::doc::{LayerId, LayerKind, MAX_LAYER_HEIGHT, Rgba};
+use anicraft_engine::doc::{BlendMode, Filter, FilterEntry, LayerId, LayerKind, MAX_LAYER_HEIGHT, Rgba};
 use egui::Key;
 use serde_json::{Value, json};
 
@@ -29,8 +29,14 @@ pub struct LayerPropsDialog {
     pub height: u8,
     /// Opacity in percent, 0 to 100 (ADR 0111).
     pub opacity: f64,
+    /// Layer blend mode (P-027).
+    pub blend: BlendMode,
+    /// Layer bitmap filters (P-027).
+    pub filters: Vec<FilterEntry>,
     /// What the layer had when the dialog opened: OK sends only what changed.
     was: Value,
+    was_blend: BlendMode,
+    was_filters: Vec<FilterEntry>,
     focus: bool,
 }
 
@@ -58,7 +64,11 @@ pub fn open(app: &mut App, layer: Option<LayerId>) {
         onion: l.onion,
         height: l.height(),
         opacity: p.get("opacity").and_then(Value::as_f64).unwrap_or(100.0),
+        blend: l.blend,
+        filters: l.filters.clone(),
         was: p,
+        was_blend: l.blend,
+        was_filters: l.filters.clone(),
         focus: true,
     });
 }
@@ -178,6 +188,48 @@ pub fn window(app: &mut App, ctx: &egui::Context) {
                 ui.add(egui::DragValue::new(&mut d.opacity).range(0.0..=100.0).suffix(" %").speed(1.0).max_decimals(0)).on_hover_text(tip).set_name(tr!("Layer opacity (percent)"));
             });
         }
+        if kind != LayerKind::Camera && kind != LayerKind::Folder && d.ty != "mask" && d.ty != "guide" {
+            form_row(ui, FORM_LABEL_DIALOG, tr!("Blending"), |ui| {
+                egui::ComboBox::from_id_salt("layer_props_blend")
+                    .width(140.0)
+                    .selected_text(crate::i18n::t(d.blend.label()))
+                    .show_ui(ui, |ui| {
+                        for mode in BlendMode::ALL {
+                            if ui.selectable_label(d.blend == mode, crate::i18n::t(mode.label())).clicked() {
+                                d.blend = mode;
+                            }
+                        }
+                    })
+                    .response
+                    .set_name(tr!("Layer blend mode"));
+            });
+            form_row(ui, FORM_LABEL_DIALOG, tr!("Filters"), |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        for (label, key) in [
+                            (tr!("+ Blur"), "blur"),
+                            (tr!("+ Glow"), "glow"),
+                            (tr!("+ Shadow"), "drop_shadow"),
+                            (tr!("+ Adjust"), "adjust_color"),
+                        ] {
+                            let can_add = d.filters.len() < usize::from(anicraft_engine::doc::MAX_FILTER_SLOTS);
+                            if ui.add_enabled(can_add, egui::Button::new(label)).clicked()
+                                && let Some(sample) = Filter::new(key)
+                            {
+                                d.filters.push(FilterEntry::from(sample));
+                            }
+                        }
+                        if !d.filters.is_empty() && ui.button(tr!("Clear")).clicked() {
+                            d.filters.clear();
+                        }
+                    });
+                    if !d.filters.is_empty() {
+                        let summary: Vec<&str> = d.filters.iter().map(|f| crate::i18n::t(f.filter.label())).collect();
+                        ui.label(text(Type::Caption, summary.join(", ")));
+                    }
+                });
+            });
+        }
         if let Some((path, missing)) = &video {
             form_row(ui, FORM_LABEL_DIALOG, tr!("Reference video"), |ui| {
                 ui.vertical(|ui| {
@@ -269,12 +321,44 @@ pub fn changes(d: &LayerPropsDialog) -> Value {
     out
 }
 
-/// OK: one `layer.set_properties` with what changed (nothing changed: nothing sent).
+/// Layer blend/filter changes (`layer.set_effects`), when modified on an effect-capable layer.
+pub fn effect_changes(d: &LayerPropsDialog) -> Option<Value> {
+    if matches!(d.ty.as_str(), "folder" | "camera" | "mask" | "guide") {
+        return None;
+    }
+    let blend_changed = d.blend != d.was_blend;
+    let filters_changed = d.filters != d.was_filters;
+    if !blend_changed && !filters_changed {
+        return None;
+    }
+    let mut out = json!({"layer": d.layer.0});
+    if let Some(o) = out.as_object_mut() {
+        if blend_changed {
+            o.insert("blend".into(), json!(d.blend.key()));
+        }
+        if filters_changed {
+            o.insert("filters".into(), serde_json::to_value(&d.filters).unwrap_or_else(|_| json!([])));
+        }
+    }
+    Some(out)
+}
+
+/// OK: one undo step with what changed (`layer.set_properties` and/or `layer.set_effects`).
 fn accept(app: &mut App) {
     let Some(d) = app.layer_props.take() else { return };
     let p = changes(&d);
-    if p.as_object().is_some_and(|o| o.len() > 1) {
-        app.request("layer.set_properties", p);
+    let has_props = p.as_object().is_some_and(|o| o.len() > 1);
+    let fx = effect_changes(&d);
+    match (has_props, fx) {
+        (true, Some(fx)) => {
+            app.s.begin_gesture(tr_noop!("Layer Properties"));
+            app.run("layer.set_properties", p);
+            app.run("layer.set_effects", fx);
+            app.s.end_gesture();
+        }
+        (true, None) => app.request("layer.set_properties", p),
+        (false, Some(fx)) => app.request("layer.set_effects", fx),
+        (false, None) => {}
     }
 }
 
@@ -319,6 +403,25 @@ mod tests {
         // The menu command opens it too.
         app.invoke("layer.set_properties");
         assert!(app.layer_props.is_some());
+    }
+
+    #[test]
+    fn layer_blend_and_quick_filters_apply_as_one_undo_step() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, Session::new(sample::demo()), Some(std::path::PathBuf::from("unused.png")));
+        let id = app.s.layer;
+        let steps = app.s.history().undo_len();
+        open(&mut app, Some(id));
+        let d = app.layer_props.as_mut().expect("dialog open");
+        assert!(effect_changes(d).is_none());
+        d.name = "FX Layer".into();
+        d.blend = BlendMode::Multiply;
+        d.filters.push(FilterEntry::from(Filter::new("glow").expect("glow")));
+        assert!(effect_changes(d).is_some());
+        accept(&mut app);
+        assert_eq!(app.s.history().undo_len(), steps + 1, "combined name + effects in one undo step");
+        let l = app.s.timeline().layer(id).expect("layer");
+        assert_eq!((l.name.as_str(), l.blend, l.filters.len()), ("FX Layer", BlendMode::Multiply, 1));
     }
 
     #[test]

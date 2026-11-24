@@ -144,7 +144,7 @@ fn edit_shape<T>(s: &mut Session, p: &Value, edit: impl FnOnce(&mut Shape, Affin
     if let ElementKind::Text(t) = &el.kind
         && let Some(on) = &t.on_path
     {
-        let mut sh = Shape { path: Arc::new(on.path.clone()), fill: None, stroke: None, fill_rule: anicraft_geom::FillRule::NonZero, merge: false, warp: None };
+        let mut sh = Shape { path: Arc::new(on.path.clone()), fill: None, stroke: None, fill_rule: anicraft_geom::FillRule::NonZero, merge: false, warp: None, fill_tag: None, stroke_tag: None };
         let out = edit(&mut sh, m)?;
         let block = anicraft_doc::TextBlock { on_path: Some(anicraft_doc::TextPath { path: Path::clone(&sh.path), ..on.clone() }), ..(**t).clone() };
         let (block, _, shift) = crate::cmds_text::lay_out_block(&block)?;

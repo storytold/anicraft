@@ -131,7 +131,7 @@ fn group(s: &mut Session, _: &Value) -> Result<Value> {
     let top = kf.elements.iter().rposition(|e| sel.contains(&e.id)).unwrap_or(0);
     let below = kf.elements.iter().take(top).filter(|e| !sel.contains(&e.id)).count();
     kf.elements.retain(|e| !sel.contains(&e.id));
-    let g = Element { id, name: String::new(), transform, color: ColorEffect::None, kind: ElementKind::group(layer_id, picked) };
+    let g = Element { id, name: String::new(), transform, color: ColorEffect::None, transform_3d: None, kind: ElementKind::group(layer_id, picked) };
     let at = below.min(kf.elements.len());
     kf.elements.insert(at, Arc::new(g));
     s.select_only([id]);
@@ -257,7 +257,8 @@ fn object(doc: &mut anicraft_doc::Document, path: &Path, fill: Option<anicraft_d
         name: String::new(),
         transform: Affine::translate(c.x, c.y),
         color,
-        kind: ElementKind::Shape(Shape { path: Arc::new(path.transformed(&to_local)), fill: fill.map(|f| f.transformed(&to_local)), stroke, fill_rule: FillRule::NonZero, merge: false, warp: None }),
+        transform_3d: None,
+        kind: ElementKind::Shape(Shape { path: Arc::new(path.transformed(&to_local)), fill: fill.map(|f| f.transformed(&to_local)), stroke, fill_rule: FillRule::NonZero, merge: false, warp: None, fill_tag: None, stroke_tag: None }),
     }
 }
 
@@ -292,7 +293,7 @@ fn result_of(s: &mut Session, pieces: Vec<Arc<Element>>) -> Option<Element> {
             let layer = LayerId(s.doc.alloc_id());
             let center = members_center(&s.doc, &pieces);
             let (transform, pieces) = recenter(center, pieces);
-            Some(Element { id: ElementId(s.doc.alloc_id()), name: String::new(), transform, color: ColorEffect::None, kind: ElementKind::group(layer, pieces) })
+            Some(Element { id: ElementId(s.doc.alloc_id()), name: String::new(), transform, color: ColorEffect::None, transform_3d: None, kind: ElementKind::group(layer, pieces) })
         }
     }
 }

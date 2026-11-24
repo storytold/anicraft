@@ -15,6 +15,9 @@ fn tool_icon(tool: Tool) -> Icon {
     match tool {
         Tool::Select => Icon::Select,
         Tool::Subselect => Icon::Subselect,
+        Tool::Lasso => Icon::Lasso,
+        Tool::PolyLasso => Icon::PolyLasso,
+        Tool::MagicWand => Icon::MagicWand,
         Tool::Transform => Icon::Transform,
         Tool::GradientTransform => Icon::GradientTransform,
         Tool::Width => Icon::Width,
@@ -35,7 +38,9 @@ fn tool_icon(tool: Tool) -> Icon {
         Tool::Bone => Icon::Bone,
         Tool::Bind => Icon::Bind,
         Tool::Warp => Icon::Warp,
+        Tool::Transform3D => Icon::Transform3D,
         Tool::Hand => Icon::Hand,
+        Tool::RotateView => Icon::RotateView,
         Tool::Zoom => Icon::Zoom,
     }
 }
@@ -137,6 +142,10 @@ fn tool_items(app: &mut App, ui: &mut egui::Ui, area: Rect, flow: ToolFlow) {
         // #457: the Hand tool's double-click uses the same fit as View > Fit in Window.
         if tool == Tool::Hand && resp.double_clicked() {
             app.view.fit = true;
+        }
+        // Double-clicking Rotate View resets canvas rotation to 0°.
+        if tool == Tool::RotateView && resp.double_clicked() {
+            app.view.rotation = 0.0;
         }
         // Animate: double-clicking the Eraser erases everything on the stage (it asks first).
         if tool == Tool::Eraser && resp.double_clicked() {
@@ -258,6 +267,7 @@ fn tool_swatches(app: &mut App, ui: &mut egui::Ui) {
                 style.use_stroke = !none;
                 if !none {
                     style.stroke = pick;
+                    style.stroke_tag = None;
                 }
             }
             // Selected shapes take it too (one undo step for a drag in the mixer).
@@ -456,6 +466,13 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
             let clip = app.view.clip_to_stage;
             if crate::timeline::icon_button(ui, tr!("Clip content outside the stage"), Some(clip), Icon::ClipStage).clicked() {
                 app.view.clip_to_stage = !clip;
+            }
+            if app.view.rotation.abs() > 1e-4 {
+                if ui.button(tr!("Reset 0°")).on_hover_text(tr!("Reset canvas view rotation to 0°")).clicked() {
+                    app.view.rotation = 0.0;
+                }
+                ui.label(text(Type::Data, format!("{:+.0}°", app.view.rotation.to_degrees())).color(T.text_dim))
+                    .on_hover_text(tr!("Canvas view rotation angle"));
             }
             if ui.selectable_label(app.onion.ghosts, tr!("Onion skin")).clicked() {
                 crate::onion::toggle_ghosts(app);
@@ -813,6 +830,40 @@ pub(crate) fn properties(app: &mut App, ui: &mut egui::Ui) {
             }
         });
     }
+    if app.tool == Tool::MagicWand {
+        let title = tr!("{tool} tool", tool = crate::i18n::t(app.tool.label()));
+        section(ui, "prop_tool", Section::Rule, &title, None, |ui| {
+            row(ui, tr!("Tolerance"), |ui| {
+                a11y::slider(
+                    ui,
+                    &mut app.wand_tolerance,
+                    0.0..=255.0,
+                    tr!("Magic Wand tolerance"),
+                    a11y::SliderLook { max_decimals: Some(0), ..Default::default() },
+                )
+                .on_hover_text(tr!("Colour tolerance (0 matches exact fill colour; higher selects broader shades)"));
+            });
+            row_prose(ui, tr!("Layers"), |ui| {
+                crate::theme::checkbox(ui, &mut app.wand_all_layers, tr!("All visible layers"))
+                    .on_hover_text(tr!("Select matching fills across all visible unlocked layers instead of only the active layer"));
+            });
+        });
+    }
+    if app.tool == Tool::RotateView {
+        let title = tr!("{tool} tool", tool = crate::i18n::t(app.tool.label()));
+        section(ui, "prop_tool", Section::Rule, &title, None, |ui| {
+            let mut deg = app.view.rotation.to_degrees();
+            row(ui, tr!("Angle"), |ui| {
+                if ui.add(egui::DragValue::new(&mut deg).suffix("°").speed(0.5).range(-180.0..=180.0).max_decimals(1)).named(tr!("Canvas rotation angle")).changed() {
+                    let r = deg.to_radians();
+                    app.view.rotation = if r.abs() < 1e-4 { 0.0 } else { r };
+                }
+                if ui.add_enabled(app.view.rotation.abs() > 1e-4, egui::Button::new(tr!("Reset 0°"))).clicked() {
+                    app.view.rotation = 0.0;
+                }
+            });
+        });
+    }
     // ---- the camera, with the Camera tool or its layer active (ADR 0027) ----
     let camera_layer = app.s.timeline().camera_layer().map(|l| l.id);
     if camera_layer.is_some() && (app.tool == Tool::Camera || camera_layer == Some(app.s.layer)) {
@@ -833,6 +884,25 @@ pub(crate) fn properties(app: &mut App, ui: &mut egui::Ui) {
     });
     if app.tool == Tool::Warp || warp_target.is_some() {
         section(ui, "prop_warp", Section::Rule, tr!("Asset Warp"), None, |ui| warp_props(app, ui, warp_target));
+    }
+    if app.tool == Tool::Transform3D || sel.iter().any(|e| !matches!(e.kind, ElementKind::Camera) && e.transform_3d.is_some()) {
+        section(ui, "prop_3d", Section::Rule, tr!("3D Position and View"), None, |ui| {
+            match sel.iter().find(|e| !matches!(e.kind, ElementKind::Camera)) {
+                Some(first) => {
+                    let current = first.transform_3d;
+                    crate::transform3d_tool::properties_rows(
+                        app,
+                        ui,
+                        current,
+                        |ui, label, add| row(ui, label, |ui| add(ui)),
+                        live,
+                    );
+                }
+                None => {
+                    ui.label(text(Type::Caption, tr!("Click or drag a shape, group, bitmap, text or symbol on the stage with the 3D Rotation tool (G) to rotate it in 3D perspective.")));
+                }
+            }
+        });
     }
     if let Some(e) = sel.first() {
         // One count per template: the layers' phrase is its own plural, with its preposition, so
@@ -1088,7 +1158,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
     if !layers.is_empty() && layers.iter().all(|l| tl.layer(*l).is_some_and(|l| l.kind == anicraft_engine::doc::LayerKind::Armature)) {
         colour_effect_rows(app, ui, &e.color, m.color, EffectOf::Selection);
         if let ElementKind::Symbol { symbol, filters, blend, .. } = &e.kind
-            && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
+            && app.s.doc.symbol(*symbol).is_some()
         {
             filter_rows(app, ui, filters, m.filters);
             blend_row(app, ui, *blend, m.blend);
@@ -1209,9 +1279,9 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
         if !matches!(e.kind, ElementKind::Camera) {
             colour_effect_rows(app, ui, &e.color, m.color, EffectOf::Selection);
         }
-        // Blending and filters, on movie clips and buttons; filters on text too (ADR 0099).
+        // Blending and filters, on symbol instances (movie clips, buttons and graphics); filters on text too (ADR 0099, P-027).
         if let ElementKind::Symbol { symbol, filters, .. } = &e.kind
-            && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
+            && app.s.doc.symbol(*symbol).is_some()
         {
             filter_rows(app, ui, filters, m.filters);
         }
@@ -1219,7 +1289,7 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
             filter_rows(app, ui, &t.filters, m.filters);
         }
         if let ElementKind::Symbol { symbol, blend, .. } = &e.kind
-            && app.s.doc.symbol(*symbol).is_some_and(|x| x.kind != SymbolKind::Graphic)
+            && app.s.doc.symbol(*symbol).is_some()
         {
             blend_row(app, ui, *blend, m.blend);
         }

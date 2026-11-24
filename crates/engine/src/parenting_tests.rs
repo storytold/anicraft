@@ -19,7 +19,7 @@ fn pose(tx: f32, ty: f32, deg: f32) -> Affine {
 }
 
 fn bar(id: u64, m: Affine) -> Arc<Element> {
-    Arc::new(Element { id: ElementId(id), name: String::new(), transform: m, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 40.0, 10.0), Paint::Solid(Rgba::BLACK))) })
+    Arc::new(Element { id: ElementId(id), name: String::new(), transform: m, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 40.0, 10.0), Paint::Solid(Rgba::BLACK))) })
 }
 
 /// A layer whose one bar (element `id * 100`) tweens from `from` (frame 0) to `to` (frame 10).

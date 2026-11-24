@@ -142,7 +142,7 @@ fn a_long_stroke_is_painted_after_the_pointer_lifts_without_holding_the_frame() 
     assert_eq!(rig.app.drag, crate::app::Drag::None);
     // It is still drawn: the stage paints its sweep, piece by piece.
     let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), time: Some(rig.t + 0.01), ..Default::default() };
-    let xf = crate::pathtools::Xf { origin: rig.at(Vec2::ZERO), zoom: rig.app.view.zoom };
+    let xf = crate::pathtools::Xf::flat(rig.at(Vec2::ZERO), rig.app.view.zoom);
     let mut out = rig.ctx.run_ui(input, |ui| crate::ink::draw(&rig.app, ui.painter(), xf));
     out.textures_delta.clear();
     assert!(out.shapes.len() > 100, "{} pieces", out.shapes.len());

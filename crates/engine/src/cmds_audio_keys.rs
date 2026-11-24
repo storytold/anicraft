@@ -13,7 +13,7 @@
 
 use crate::params::*;
 use crate::{CommandSpec, EngineError, MAX_FRAME, Result, Session};
-use anicraft_doc::audio::analysis::{self, Channel, LipOptions, MAX_ANALYSIS_FRAMES, MAX_HOLD, MAX_SMOOTHING, Span, Viseme};
+use anicraft_doc::audio::analysis::{self, Channel, LipOptions, MAX_ANALYSIS_FRAMES, MAX_HOLD, MAX_SMOOTHING, Span, Viseme, Viseme12};
 use anicraft_doc::motion::MAX_KEYS;
 use anicraft_doc::sound::frame_start;
 use anicraft_doc::{Element, ElementId, ElementKind, FrameSound, Layer, LayerId, LayerKind, LoopMode, Property, Sound, SoundSync, Symbol, SymbolKind, own_value};
@@ -42,7 +42,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "sound.lip_sync",
             "Auto Lip-Sync…",
             "Modify/Timeline",
-            "{layer? (the layer with the mouth; default the active layer), element? (a graphic symbol instance of mouth poses on it; default the selected one, or the only one), mouths?: {rest, open, wide, round, closed} (each a 0-based frame of the symbol or a frame label in it; default by the symbol's frame labels, as the Lip-sync mouth chart template names them), sound_layer?, sound_frame? (the speech; default the sound at the playhead), threshold? (0–0.99 of the loudest frame: quieter is silence; default 0.08), hold? (fewest frames a mouth is held, 1–12; default 2), from?, to? (frames; default the frames the sound is heard on)} → {keys, from, to, layer, element, mouths, counts}",
+            "{layer? (the layer with the mouth; default the active layer), element? (a graphic symbol instance of mouth poses on it; default the selected one, or the only one), mouths?: {rest, open, wide, round, closed} or 12-viseme keys {neutral, ah, d, ee, f, l, m, oh, r, s, uh, woo}, mouths_12?: {neutral?, ah?, d?, ee?, f?, l?, m?, oh?, r?, s?, uh?, woo?} | true, mode?: visemes|visemes_12, sound_layer?, sound_frame? (the speech; default the sound at the playhead), threshold? (0–0.99 of the loudest frame: quieter is silence; default 0.08), hold? (fewest frames a mouth is held, 1–12; default 2), from?, to? (frames; default the frames the sound is heard on)} → {keys, from, to, layer, element, mouths, counts}",
             true,
             lip_sync,
         ),
@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "sound.analyse",
             "Analyse Sound",
             "",
-            "{what?: levels|visemes (default levels), sound_layer?, sound_frame?, from?, to?, threshold?, smoothing?, channel? (levels), hold? (visemes)} → {sound, name, layer, keyframe, from, to, fps, levels (each frame's loudness, 0–1 of the loudest) and values (gated and smoothed), or visemes (rest|open|wide|round|closed per frame)}",
+            "{what?: levels|visemes|visemes_12 (default levels), sound_layer?, sound_frame?, from?, to?, threshold?, smoothing?, channel? (levels), hold? (visemes)} → {sound, name, layer, keyframe, from, to, fps, levels (each frame's loudness, 0–1 of the loudest) and values (gated and smoothed), visemes (rest|open|wide|round|closed per frame), or visemes_12 (neutral|ah|d|ee|f|l|m|oh|r|s|uh|woo per frame)}",
             false,
             analyse,
         ),
@@ -202,6 +202,7 @@ pub struct Source {
     pub from: u32,
     pub to: u32,
     span: Span,
+    fs: FrameSound,
 }
 
 impl Source {
@@ -273,11 +274,12 @@ pub fn source(s: &Session, p: &Value) -> Result<Source> {
     }
     // A loop has no end of its own: it sounds for as long as its span (or the movie) lets it.
     let span = Span { fps, offset: from - keyframe, frames: to - from + 1, heard: if fs.looping { u64::MAX } else { heard } };
-    Ok(Source { layer, keyframe, sound, from, to, span })
+    Ok(Source { layer, keyframe, sound, from, to, span, fs: fs.clone() })
 }
 
 fn pcm(src: &Source) -> Result<Arc<anicraft_doc::audio::Pcm>> {
-    src.sound.decoded().map(|d| d.pcm.clone()).ok_or_else(|| EngineError::State(format!("'{}' can't be decoded", src.sound.name)))
+    let dec = src.sound.decoded().ok_or_else(|| EngineError::State(format!("'{}' can't be decoded", src.sound.name)))?;
+    anicraft_doc::sound::trimmed_pcm(&dec.pcm, &src.fs).ok_or_else(|| EngineError::State(format!("'{}' has an empty trim range", src.sound.name)))
 }
 
 /// How the loudness becomes a value.
@@ -343,6 +345,11 @@ pub fn levels(src: &Source, set: &LevelSettings) -> Result<Levels> {
 /// The mouth shape of each frame of `src`.
 pub fn visemes(src: &Source, opts: &LipOptions) -> Result<Vec<Viseme>> {
     Ok(analysis::visemes(&*pcm(src)?, &src.span, opts))
+}
+
+/// The 12-viseme studio mouth shape of each frame of `src`.
+pub fn visemes_12(src: &Source, opts: &LipOptions) -> Result<Vec<Viseme12>> {
+    Ok(analysis::visemes_12(&*pcm(src)?, &src.span, opts))
 }
 
 /// The frames that get a key when `values` (one per frame) are held between keys: every
@@ -696,6 +703,141 @@ pub fn default_mouths(sym: &Symbol) -> [u32; 5] {
     [rest_f, open_f, wide.unwrap_or(open_f), round.unwrap_or(open_f), closed.or(rest).unwrap_or(rest_f)].map(|f| f.min(last))
 }
 
+/// Auto-matched frame label candidates for each of the 12 studio visemes (`Viseme12`).
+fn mouth_names_12(v: Viseme12) -> &'static [&'static str] {
+    match v {
+        Viseme12::Neutral => &["neutral", "rest", "silence", "sil", "idle", "x"],
+        Viseme12::Ah => &["ah", "ai", "a", "aa", "open"],
+        Viseme12::D => &["d", "cdgknrsthyz", "dgknt", "t", "cons", "etc"],
+        Viseme12::Ee => &["ee", "e", "i", "wide", "smile"],
+        Viseme12::F => &["f", "fv", "v"],
+        Viseme12::L => &["l", "th"],
+        Viseme12::M => &["m", "mbp", "closed", "bmp", "pbm", "b", "p"],
+        Viseme12::Oh => &["oh", "o", "round"],
+        Viseme12::R => &["r", "er", "wq"],
+        Viseme12::S => &["s", "cdgknrsthyz", "sz", "sh", "ch"],
+        Viseme12::Uh => &["uh", "u", "schwa"],
+        Viseme12::Woo => &["woo", "wq", "oo", "w", "q"],
+    }
+}
+
+/// Default symbol frame indices for the 12 studio visemes, in [`Viseme12::ALL`] order.
+pub fn default_mouths_12(sym: &Symbol) -> [u32; 12] {
+    let last = sym.timeline.frame_count().max(1) - 1;
+    let found = Viseme12::ALL.map(|v| mouth_names_12(v).iter().find_map(|n| labelled_frame(sym, n)));
+    if found.iter().all(Option::is_none) {
+        return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(|i: u32| i.min(last));
+    }
+    let [neutral, ah, d, ee, f, l, m, oh, r, s, uh, woo] = found;
+    let neutral_f = neutral.or(m).unwrap_or(0);
+    let m_f = m.or(neutral).unwrap_or(neutral_f);
+    let ah_f = ah.or(uh).or(ee).or(oh).unwrap_or(neutral_f);
+    let ee_f = ee.or(d).or(s).unwrap_or(ah_f);
+    let oh_f = oh.or(woo).or(uh).unwrap_or(ah_f);
+    let uh_f = uh.or(ah).or(oh).unwrap_or(ah_f);
+    let woo_f = woo.or(oh).unwrap_or(oh_f);
+    let d_f = d.or(s).or(ee).unwrap_or(ee_f);
+    let s_f = s.or(d).or(ee).unwrap_or(ee_f);
+    let f_f = f.or(m).unwrap_or(m_f);
+    let l_f = l.or(d).unwrap_or(ah_f);
+    let r_f = r.or(woo).or(oh).unwrap_or(oh_f);
+    [neutral_f, ah_f, d_f, ee_f, f_f, l_f, m_f, oh_f, r_f, s_f, uh_f, woo_f].map(|fr| fr.min(last))
+}
+
+fn resolve_mouth_frame(sym: &Symbol, frames: u32, key: &str, v: &Value) -> Result<u32> {
+    let frame = match v {
+        Value::String(label) => labelled_frame(sym, label).ok_or_else(|| {
+            EngineError::Param(format!(
+                "'{}' has no frame labelled '{}'",
+                sym.name,
+                label.chars().take(60).collect::<String>()
+            ))
+        })?,
+        other => other
+            .as_u64()
+            .and_then(|f| u32::try_from(f).ok())
+            .ok_or_else(|| EngineError::Param(format!("mouth '{key}' must be a frame of the symbol (0-based) or a frame label")))?,
+    };
+    if frame >= frames {
+        return Err(EngineError::Param(format!(
+            "mouth '{key}': '{}' has {frames} frames (0 to {})",
+            sym.name,
+            frames - 1
+        )));
+    }
+    Ok(frame)
+}
+
+fn viseme12_from_any_key(key: &str) -> Option<Viseme12> {
+    if let Some(v12) = Viseme12::from_key(key) {
+        return Some(v12);
+    }
+    match key.trim().to_ascii_lowercase().as_str() {
+        "open" => Some(Viseme12::Ah),
+        "wide" => Some(Viseme12::Ee),
+        "round" => Some(Viseme12::Oh),
+        "closed" => Some(Viseme12::M),
+        _ => None,
+    }
+}
+
+fn wants_12_visemes(p: &Value) -> Result<bool> {
+    if let Some(mode) = opt_str(p, "mode")? {
+        return match mode {
+            "visemes_12" | "12" => Ok(true),
+            "visemes" | "5" => Ok(false),
+            other => Err(EngineError::Param(format!(
+                "unknown lip-sync mode '{}' (visemes or visemes_12)",
+                other.chars().take(40).collect::<String>()
+            ))),
+        };
+    }
+    if let Some(m12) = p.get("mouths_12")
+        && !m12.is_null()
+    {
+        if let Some(b) = m12.as_bool() {
+            return Ok(b);
+        }
+        return Ok(true);
+    }
+    if let Some(m) = p.get("mouths").and_then(Value::as_object) {
+        // Trigger 12-viseme mode automatically when any 12-viseme-specific key is passed in `mouths`.
+        if m.keys().any(|k| Viseme::from_key(k).is_none() && Viseme12::from_key(k).is_some()) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn mouths_12_param(sym: &Symbol, p: &Value) -> Result<[u32; 12]> {
+    let mut out = default_mouths_12(sym);
+    let frames = sym.timeline.frame_count().max(1);
+    for param_name in ["mouths", "mouths_12"] {
+        let Some(m) = p.get(param_name).filter(|m| !m.is_null()) else { continue };
+        if param_name == "mouths_12" && m.is_boolean() {
+            continue;
+        }
+        let map = m.as_object().ok_or_else(|| {
+            EngineError::Param(format!(
+                "param '{param_name}' must be an object {{neutral, ah, d, ee, f, l, m, oh, r, s, uh, woo}}, each a frame of the symbol (0-based) or a frame label"
+            ))
+        })?;
+        for (key, v) in map {
+            let shape = viseme12_from_any_key(key).ok_or_else(|| {
+                EngineError::Param(format!(
+                    "unknown mouth '{}' (neutral, ah, d, ee, f, l, m, oh, r, s, uh or woo)",
+                    key.chars().take(40).collect::<String>()
+                ))
+            })?;
+            let frame = resolve_mouth_frame(sym, frames, key, v)?;
+            if let Some(slot) = out.get_mut(shape.index()) {
+                *slot = frame;
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// The frame of `sym` each mouth shape shows: `mouths` over the defaults.
 fn mouths_param(sym: &Symbol, p: &Value) -> Result<[u32; 5]> {
     let mut out = default_mouths(sym);
@@ -704,13 +846,7 @@ fn mouths_param(sym: &Symbol, p: &Value) -> Result<[u32; 5]> {
     let map = m.as_object().ok_or_else(|| EngineError::Param("param 'mouths' must be an object {rest, open, wide, round, closed}, each a frame of the symbol (0-based) or a frame label".into()))?;
     for (key, v) in map {
         let shape = Viseme::from_key(key).ok_or_else(|| EngineError::Param(format!("unknown mouth '{}' (rest, open, wide, round or closed)", key.chars().take(40).collect::<String>())))?;
-        let frame = match v {
-            Value::String(label) => labelled_frame(sym, label).ok_or_else(|| EngineError::Param(format!("'{}' has no frame labelled '{}'", sym.name, label.chars().take(60).collect::<String>())))?,
-            other => other.as_u64().and_then(|f| u32::try_from(f).ok()).ok_or_else(|| EngineError::Param(format!("mouth '{key}' must be a frame of the symbol (0-based) or a frame label")))?,
-        };
-        if frame >= frames {
-            return Err(EngineError::Param(format!("mouth '{key}': '{}' has {frames} frames (0 to {})", sym.name, frames - 1)));
-        }
+        let frame = resolve_mouth_frame(sym, frames, key, v)?;
         if let Some(slot) = out.get_mut(shape.index()) {
             *slot = frame;
         }
@@ -720,9 +856,51 @@ fn mouths_param(sym: &Symbol, p: &Value) -> Result<[u32; 5]> {
 
 /// Auto Lip-Sync.
 fn lip_sync(s: &mut Session, p: &Value) -> Result<Value> {
+    let use_12 = wants_12_visemes(p)?;
     let src = source(s, p)?;
     let opts = lip_options(p)?;
     let (lid, el) = target(s, p, src.from)?;
+    if use_12 {
+        let mouths = mouths_12_param(graphic(s, &el, "Lip-sync")?, p)?;
+        let shapes = visemes_12(&src, &opts)?;
+        let mut keys: Vec<(u32, Viseme12)> = Vec::new();
+        let mut counts = [0u32; 12];
+        for (i, v) in shapes.iter().enumerate() {
+            if keys.last().is_none_or(|(_, last)| last != v) {
+                keys.push((src.from + i as u32, *v));
+                if let Some(n) = counts.get_mut(v.index()) {
+                    *n += 1;
+                }
+            }
+        }
+        let layer = s.layer_mut(Some(lid))?;
+        write_held(layer, el.id, src.from, src.to, &keys, &|base, v| {
+            let mut el = base.clone();
+            show_frame(&mut el, mouths.get(v.index()).copied().unwrap_or(0));
+            el
+        })?;
+        let named = |list: [u32; 12]| {
+            Value::Object(
+                Viseme12::ALL
+                    .iter()
+                    .zip(list)
+                    .map(|(v, n)| (v.key().to_string(), json!(n)))
+                    .collect(),
+            )
+        };
+        return Ok(json!({
+            "keys": keys.len(),
+            "from": src.from,
+            "to": src.to,
+            "layer": lid.0,
+            "element": el.id.0,
+            "sound": src.sound.id.0,
+            "mode": "visemes_12",
+            "mouths": named(mouths),
+            "mouths_12": named(mouths),
+            "counts": named(counts),
+        }));
+    }
     let mouths = mouths_param(graphic(s, &el, "Lip-sync")?, p)?;
     let shapes = visemes(&src, &opts)?;
     // A key where the mouth changes.
@@ -758,7 +936,8 @@ fn analyse(s: &mut Session, p: &Value) -> Result<Value> {
             out["values"] = lv.shaped.iter().map(round).collect();
         }
         "visemes" => out["visemes"] = visemes(&src, &lip_options(p)?)?.iter().map(|v| json!(v.key())).collect(),
-        other => return Err(EngineError::Param(format!("unknown 'what' '{}' (levels or visemes)", other.chars().take(40).collect::<String>()))),
+        "visemes_12" => out["visemes_12"] = visemes_12(&src, &lip_options(p)?)?.iter().map(|v| json!(v.key())).collect(),
+        other => return Err(EngineError::Param(format!("unknown 'what' '{}' (levels or visemes, or visemes_12)", other.chars().take(40).collect::<String>()))),
     }
     Ok(out)
 }

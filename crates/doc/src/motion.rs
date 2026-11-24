@@ -54,6 +54,12 @@ pub enum Property {
     Rotation,
     /// Degrees of horizontal skew, within ±89.
     Skew,
+    /// 3D Postcard pitch around X, degrees (`P-044`).
+    RotationX,
+    /// 3D Postcard yaw around Y, degrees (`P-044`).
+    RotationY,
+    /// 3D Postcard depth along Z, stage pixels (`P-044`).
+    Z,
     /// Colour effect (ADR 0056), by style. Alpha: opacity, percent.
     Alpha,
     /// Brightness, −100..=100 %.
@@ -92,7 +98,7 @@ impl<'de> Deserialize<'de> for Property {
 }
 
 /// How many properties there are (besides the filters' numbers).
-pub const PROPERTIES: usize = 20;
+pub const PROPERTIES: usize = 23;
 
 impl Property {
     pub const ALL: [Property; PROPERTIES] = [
@@ -102,6 +108,9 @@ impl Property {
         Property::ScaleY,
         Property::Rotation,
         Property::Skew,
+        Property::RotationX,
+        Property::RotationY,
+        Property::Z,
         Property::Alpha,
         Property::Brightness,
         Property::Tint,
@@ -139,6 +148,9 @@ impl Property {
             Property::ScaleY => "scale_y",
             Property::Rotation => "rotation",
             Property::Skew => "skew",
+            Property::RotationX => "rotation_x",
+            Property::RotationY => "rotation_y",
+            Property::Z => "z",
             Property::Alpha => "alpha",
             Property::Brightness => "brightness",
             Property::Tint => "tint",
@@ -178,6 +190,9 @@ impl Property {
             Property::ScaleY => "Scale Y",
             Property::Rotation => "Rotation",
             Property::Skew => "Skew",
+            Property::RotationX => "3D Rotation X",
+            Property::RotationY => "3D Rotation Y",
+            Property::Z => "3D Position Z",
             Property::Alpha => "Alpha",
             Property::Brightness => "Brightness",
             Property::Tint => "Tint",
@@ -199,18 +214,21 @@ impl Property {
     pub fn unit(self) -> &'static str {
         match self {
             Property::Filter(f) => f.param.unit(),
-            Property::X | Property::Y => "px",
+            Property::X | Property::Y | Property::Z => "px",
             Property::ScaleX | Property::ScaleY | Property::Alpha | Property::Brightness | Property::Tint => "%",
             Property::RedMultiplier | Property::GreenMultiplier | Property::BlueMultiplier | Property::AlphaMultiplier => "%",
-            Property::Rotation | Property::Skew => "°",
+            Property::Rotation | Property::Skew | Property::RotationX | Property::RotationY => "°",
             Property::TintRed | Property::TintGreen | Property::TintBlue | Property::RedOffset | Property::GreenOffset | Property::BlueOffset | Property::AlphaOffset => "",
         }
     }
 
-    /// The Motion Editor's groups: Position, Transform, Colour effect, Filters.
+    /// The Motion Editor's groups: Position, Transform, 3D, Colour effect, Filters.
     pub fn group(self) -> &'static str {
         if self.is_filter() {
             return "Filters";
+        }
+        if self.is_3d() {
+            return "3D";
         }
         match self.style() {
             None if matches!(self, Property::X | Property::Y) => "Position",
@@ -219,12 +237,12 @@ impl Property {
         }
     }
 
-    /// The colour effect style a colour property belongs to (`None` for position, transform
+    /// The colour effect style a colour property belongs to (`None` for position, transform, 3D
     /// and filters).
     pub fn style(self) -> Option<ColorStyle> {
         match self {
             Property::Filter(_) => None,
-            Property::X | Property::Y | Property::ScaleX | Property::ScaleY | Property::Rotation | Property::Skew => None,
+            Property::X | Property::Y | Property::ScaleX | Property::ScaleY | Property::Rotation | Property::Skew | Property::RotationX | Property::RotationY | Property::Z => None,
             Property::Alpha => Some(ColorStyle::Alpha),
             Property::Brightness => Some(ColorStyle::Brightness),
             Property::Tint | Property::TintRed | Property::TintGreen | Property::TintBlue => Some(ColorStyle::Tint),
@@ -244,6 +262,9 @@ impl Property {
             "scalex" => "scale_x",
             "scaley" => "scale_y",
             "rotate" => "rotation",
+            "rx" | "rotationx" => "rotation_x",
+            "ry" | "rotationy" => "rotation_y",
+            "tz" | "depth_z" | "position_z" => "z",
             "opacity" => "alpha",
             "tint_amount" => "tint",
             other => other,
@@ -259,6 +280,7 @@ impl Property {
             Property::ScaleX | Property::ScaleY => -1_000_000.0..=1_000_000.0,
             Property::Rotation => -100_000.0..=100_000.0,
             Property::Skew => -89.0..=89.0,
+            Property::RotationX | Property::RotationY | Property::Z => -100_000.0..=100_000.0,
             Property::Alpha | Property::Tint => 0.0..=100.0,
             Property::Brightness | Property::RedMultiplier | Property::GreenMultiplier | Property::BlueMultiplier | Property::AlphaMultiplier => -100.0..=100.0,
             Property::TintRed | Property::TintGreen | Property::TintBlue => 0.0..=255.0,
@@ -281,9 +303,14 @@ impl Property {
         self.filter().is_some_and(|f| f.param.is_stepped())
     }
 
-    /// Position and transform (the properties the element's matrix holds).
+    /// Whether this property is a 3D Postcard property (`RotationX`, `RotationY`, `Z`).
+    pub fn is_3d(self) -> bool {
+        matches!(self, Property::RotationX | Property::RotationY | Property::Z)
+    }
+
+    /// Position and transform (the properties the element's 2D matrix holds).
     pub fn is_transform(self) -> bool {
-        self.style().is_none() && !self.is_filter()
+        self.style().is_none() && !self.is_filter() && !self.is_3d()
     }
 
     fn clamp(self, v: f32) -> f32 {
@@ -306,6 +333,12 @@ impl Props {
         let mut p = Props([0.0; PROPERTIES]);
         for (q, v) in [(Property::X, d.tx), (Property::Y, d.ty), (Property::ScaleX, d.sx * 100.0), (Property::ScaleY, d.sy * 100.0), (Property::Rotation, d.rotation.to_degrees()), (Property::Skew, d.skew.atan().to_degrees())] {
             p.set(q, v);
+        }
+        if let Some(t3) = el.transform_3d {
+            let s = t3.sanitized();
+            p.set(Property::RotationX, s.rx_deg);
+            p.set(Property::RotationY, s.ry_deg);
+            p.set(Property::Z, s.tz);
         }
         p.set_colour(&el.color);
         p
@@ -1306,6 +1339,13 @@ impl MotionTween {
                 el.transform = m;
             }
         }
+        if self.tracks.iter().any(|t| t.property.is_3d()) {
+            let mut t3 = base.transform_3d.unwrap_or_default().sanitized();
+            t3.rx_deg = Property::RotationX.clamp(props.get(Property::RotationX));
+            t3.ry_deg = Property::RotationY.clamp(props.get(Property::RotationY));
+            t3.tz = Property::Z.clamp(props.get(Property::Z));
+            el.transform_3d = (!t3.is_identity()).then_some(t3);
+        }
         // Colour: the styles keyed here and the target's own, composed (ADR 0056).
         if self.tracks.iter().any(|t| t.property.style().is_some()) {
             el.color = props.color_effect(&self.colour_styles(&base.color));
@@ -1483,6 +1523,7 @@ mod tests {
             name: String::new(),
             transform: Affine::translate(x, y),
             color: ColorEffect::default(),
+            transform_3d: None,
             kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), crate::Paint::Solid(crate::Rgba::BLACK))),
         }
     }

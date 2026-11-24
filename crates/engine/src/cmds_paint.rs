@@ -134,12 +134,14 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     let c = path.bounds().center();
     let local = path.transformed(&Affine::translate(-c.x, -c.y));
     let id = ElementId(s.doc.alloc_id());
+    let fill_tag = if given.is_some() { None } else { s.style.fill_tag };
     let el = Element {
         id,
         name: String::new(),
         transform: Affine::translate(c.x, c.y),
         color: ColorEffect::default(),
-        kind: ElementKind::Shape(Shape { fill: Some(given.unwrap_or_else(|| s.style.fill_paint_for(&Affine::translate(-c.x, -c.y), &local.bounds()))), path: Arc::new(local), stroke: None, fill_rule: FillRule::EvenOdd, merge: !object, warp: None }),
+        transform_3d: None,
+        kind: ElementKind::Shape(Shape { fill: Some(given.unwrap_or_else(|| s.style.fill_paint_for(&Affine::translate(-c.x, -c.y), &local.bounds()))), path: Arc::new(local), stroke: None, fill_rule: FillRule::EvenOdd, merge: !object, warp: None, fill_tag, stroke_tag: None }),
     };
     if !object {
         // Raw: behind the drawing, so it takes only what is empty and joins the fills of its
@@ -160,7 +162,7 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
 /// Fills the empty area around `at` that the raw lines and fills of the active layer close off
 /// with `paint`, as the Paint Bucket does (behind the lines, joining fills of its colour).
 /// `false`: nothing closes it off.
-pub(crate) fn fill_enclosed(s: &mut Session, at: Vec2, paint: Paint) -> Result<bool> {
+pub(crate) fn fill_enclosed_tagged(s: &mut Session, at: Vec2, paint: Paint, fill_tag: Option<u64>) -> Result<bool> {
     let Some(path) = crate::merge::enclosed_area(&s.visible_elements(), at) else { return Ok(false) };
     let c = path.bounds().center();
     let el = Element {
@@ -168,7 +170,8 @@ pub(crate) fn fill_enclosed(s: &mut Session, at: Vec2, paint: Paint) -> Result<b
         name: String::new(),
         transform: Affine::translate(c.x, c.y),
         color: ColorEffect::default(),
-        kind: ElementKind::Shape(Shape { fill: Some(paint), path: Arc::new(path.transformed(&Affine::translate(-c.x, -c.y))), stroke: None, fill_rule: FillRule::EvenOdd, merge: true, warp: None }),
+        transform_3d: None,
+        kind: ElementKind::Shape(Shape { fill: Some(paint), path: Arc::new(path.transformed(&Affine::translate(-c.x, -c.y))), stroke: None, fill_rule: FillRule::EvenOdd, merge: true, warp: None, fill_tag, stroke_tag: None }),
     };
     crate::merge::merge_in_order(s, vec![el], crate::merge::Order::Behind)?;
     Ok(true)
@@ -345,7 +348,9 @@ fn distance(src: &[bool], w: usize, h: usize) -> Vec<f32> {
 
 fn ink(s: &mut Session, p: &Value) -> Result<Value> {
     let at = Vec2::new(f32_req(p, "x")?, f32_req(p, "y")?);
-    let color = opt_color(p, "color")?.unwrap_or(s.style.stroke);
+    let explicit_color = opt_color(p, "color")?;
+    let color = explicit_color.unwrap_or(s.style.stroke);
+    let stroke_tag = if explicit_color.is_some() { None } else { s.style.stroke_tag };
     let width = opt_f32(p, "width")?.unwrap_or(s.style.stroke_width.max(1.0));
     if !(0.1..=1000.0).contains(&width) {
         return Err(EngineError::Param("param 'width' must be between 0.1 and 1000".into()));
@@ -359,7 +364,9 @@ fn ink(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // The Ink Bottle carries the whole line: caps, joins and dashes too.
     let line = opt_stroke_style(p, &s.style.line, width)?.unwrap_or_else(|| s.style.line.clone());
-    element_shape_mut(s, id)?.stroke = Some(Stroke::new(color, width).with_profile(profile).with_style(line));
+    let sh = element_shape_mut(s, id)?;
+    sh.stroke = Some(Stroke::new(color, width).with_profile(profile).with_style(line));
+    sh.stroke_tag = stroke_tag;
     Ok(json!({"element": id.0}))
 }
 
@@ -413,11 +420,13 @@ fn pick_style(s: &mut Session, p: &Value) -> Result<Value> {
             let color = paint.primary_color();
             if other {
                 st.stroke = color;
+                st.stroke_tag = None;
                 st.use_stroke = true;
                 return Ok(json!({"picked": "fill", "into": "stroke", "paint": paint_kind(&paint), "color": hex_alpha(color)}));
             }
             st.fill = color;
             st.fill_paint = (!matches!(paint, Paint::Solid(_))).then(|| paint.clone());
+            st.fill_tag = None;
             // As in Animate, a picked gradient or bitmap is locked where it was on the stage.
             if st.fill_paint.is_some() {
                 st.lock_fill = true;
@@ -432,6 +441,7 @@ fn pick_style(s: &mut Session, p: &Value) -> Result<Value> {
                 return Ok(json!({"picked": "line", "into": "fill", "paint": "solid", "color": hex_alpha(stroke.color)}));
             }
             st.stroke = stroke.color;
+            st.stroke_tag = None;
             st.stroke_width = (stroke.width * scale).clamp(0.1, 1000.0);
             st.use_stroke = true;
             // Caps, joins and dashes as drawn (dashes scale with the shape, like the width).
@@ -473,11 +483,13 @@ fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
             && let Some(m) = to_local
         {
             sh.fill = Some(style.fill_paint_for(&m, &sh.path.bounds()));
+            sh.fill_tag = style.fill_tag;
             hit = true;
         }
         // Raw fills stay fill-only: the lines round them are shapes of their own (ADR 0031).
         if stroke && (sh.stroke.is_some() || !sh.merge) {
             sh.stroke = Some(line.clone());
+            sh.stroke_tag = style.stroke_tag;
             hit = true;
         }
         changed += usize::from(hit);
@@ -491,7 +503,7 @@ fn apply_style(s: &mut Session, p: &Value) -> Result<Value> {
 // ----- the fill swatch, Lock Fill and the Gradient Transform tool (ADR 0074) ---------------
 
 /// Animate's default gradient: white to black.
-fn default_stops() -> Vec<GradientStop> {
+pub(crate) fn default_stops() -> Vec<GradientStop> {
     vec![GradientStop { offset: 0.0, color: Rgba::WHITE }, GradientStop { offset: 1.0, color: Rgba::BLACK }]
 }
 
@@ -518,14 +530,14 @@ pub(crate) fn opt_stops(p: &Value) -> Result<Option<Vec<GradientStop>>> {
 
 /// The kinds of fill `paint.set_fill` makes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum FillKind {
+pub(crate) enum FillKind {
     Solid,
     Linear,
     Radial,
     Bitmap,
 }
 
-fn fill_kind(p: &Paint) -> FillKind {
+pub(crate) fn fill_kind(p: &Paint) -> FillKind {
     match p {
         Paint::Solid(_) => FillKind::Solid,
         Paint::Linear { .. } => FillKind::Linear,
@@ -535,14 +547,14 @@ fn fill_kind(p: &Paint) -> FillKind {
 }
 
 /// What `paint.set_fill` asks for: a kind of fill and the parts given.
-struct FillSpec {
-    kind: FillKind,
-    color: Option<Rgba>,
-    stops: Option<Vec<GradientStop>>,
-    spread: Option<Spread>,
-    linear_rgb: Option<bool>,
-    focal: Option<f32>,
-    bitmap: Option<BitmapId>,
+pub(crate) struct FillSpec {
+    pub(crate) kind: FillKind,
+    pub(crate) color: Option<Rgba>,
+    pub(crate) stops: Option<Vec<GradientStop>>,
+    pub(crate) spread: Option<Spread>,
+    pub(crate) linear_rgb: Option<bool>,
+    pub(crate) focal: Option<f32>,
+    pub(crate) bitmap: Option<BitmapId>,
 }
 
 impl FillSpec {
@@ -550,7 +562,7 @@ impl FillSpec {
     /// comes out on the unit box (to be placed); a gradient keeps the colours and options of
     /// the gradient it replaces, else starts white to black. `None`: a bitmap fill with no
     /// bitmap given or held.
-    fn apply(&self, base: &Paint) -> Option<Paint> {
+    pub(crate) fn apply(&self, base: &Paint) -> Option<Paint> {
         let mut p = match self.kind {
             FillKind::Solid => return Some(Paint::Solid(self.color.unwrap_or_else(|| base.primary_color()))),
             k if k == fill_kind(base) => base.clone(),
@@ -622,6 +634,10 @@ pub(crate) fn opt_focal(p: &Value) -> Result<Option<f32>> {
 
 /// `paint.set_fill`: the Colour panel's fill (type, stops, overflow, linear RGB, bitmap).
 pub(crate) fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
+    set_fill_tagged(s, p, None)
+}
+
+pub(crate) fn set_fill_tagged(s: &mut Session, p: &Value, tag_id: Option<u64>) -> Result<Value> {
     let swatch = s.style.fill_paint();
     let kind = match opt_str(p, "type")? {
         None => fill_kind(&swatch),
@@ -651,10 +667,11 @@ pub(crate) fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
             s.style.fill_paint = Some(other.clone());
         }
     }
+    s.style.fill_tag = tag_id;
     s.style.use_fill = true;
     let changed = if opt_bool(p, "selection")?.unwrap_or(true) && !s.selection.is_empty() {
         // Counts from several layers are added up.
-        s.each_layer(false, |s| set_selected_fills(s, &spec))?.get("changed").and_then(Value::as_u64).unwrap_or(0)
+        s.each_layer(false, |s| set_selected_fills(s, &spec, tag_id))?.get("changed").and_then(Value::as_u64).unwrap_or(0)
     } else {
         0
     };
@@ -663,7 +680,7 @@ pub(crate) fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// The selected shapes with a fill on the active layer get `spec`: the same kind of fill keeps
 /// where it lies, another kind is fitted to the shape.
-fn set_selected_fills(s: &mut Session, spec: &FillSpec) -> Result<Value> {
+fn set_selected_fills(s: &mut Session, spec: &FillSpec, tag_id: Option<u64>) -> Result<Value> {
     let sel: std::collections::HashSet<ElementId> = s.selection.on(s.layer).into_iter().collect();
     if sel.is_empty() {
         return Ok(json!({"changed": 0}));
@@ -678,8 +695,11 @@ fn set_selected_fills(s: &mut Session, spec: &FillSpec) -> Result<Value> {
         if fill_kind(old) != spec.kind {
             new = new.fitted(&sh.path.bounds());
         }
-        if sh.fill.as_ref() != Some(&new) {
+        let paint_changed = sh.fill.as_ref() != Some(&new);
+        let tag_changed = sh.fill_tag != tag_id;
+        if paint_changed || tag_changed {
             sh.fill = Some(new);
+            sh.fill_tag = tag_id;
             changed += 1;
             if sh.merge {
                 merged.push(id);

@@ -700,7 +700,17 @@ pub fn outline_variable_strokes(dl: &DisplayList) -> std::borrow::Cow<'_, Displa
         }
         let outline = stroke_outline(&it.path, &it.transform, st, crate::TOLERANCE);
         if !outline.is_empty() {
-            items.push(DisplayItem { path: std::sync::Arc::new(outline), transform: Affine::IDENTITY, fill: Some(anicraft_doc::Paint::Solid(st.color)), stroke: None, fill_rule: anicraft_geom::FillRule::NonZero, image: None, ..it.clone() });
+            let paint = st.paint.clone().unwrap_or(anicraft_doc::Paint::Solid(st.color)).transformed(&it.transform);
+            let keep_img = matches!(paint, anicraft_doc::Paint::Bitmap { .. });
+            items.push(DisplayItem {
+                path: std::sync::Arc::new(outline),
+                transform: Affine::IDENTITY,
+                fill: Some(paint),
+                stroke: None,
+                fill_rule: anicraft_geom::FillRule::NonZero,
+                image: if keep_img { it.image.clone() } else { None },
+                ..it.clone()
+            });
         }
     }
     std::borrow::Cow::Owned(DisplayList { links: Vec::new(), clip_modes: dl.clip_modes.clone(), items, clip_parents: dl.clip_parents.clone(), groups: dl.groups.clone(), left_out: dl.left_out })

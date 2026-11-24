@@ -97,7 +97,7 @@ pub struct Plan {
 /// Why a file can't go there, in the interface language.
 fn refusal(kind: DropKind, start: bool) -> String {
     match kind {
-        DropKind::Unsupported => tr!("AniCraft opens .anicraft, .fla and .xfl documents, and imports SVG drawings, PNG and JPEG images, and WAV, Ogg and MP3 sounds").into(),
+        DropKind::Unsupported => tr!("AniCraft opens .anicraft, .fla, .xfl and .psd documents, and imports SVG drawings, Photoshop (.psd), PNG and JPEG images, and WAV, Ogg and MP3 sounds").into(),
         _ if start => tr!("Open or create a document first, then drop drawings, images and sounds on its stage").into(),
         _ => tr!("Drop drawings, images and sounds on the stage or a layer's frame to place them, or on the Library to add them").into(),
     }
@@ -563,21 +563,21 @@ mod tests {
             assert!(plan.import.is_empty());
             assert_eq!(plan.left_out.len(), 2);
         }
-        let plan_at = |spot| plan(&[p("a.svg"), p("b.png"), p("c.mp3"), p("d.psd")], spot);
+        let plan_at = |spot| plan(&[p("a.svg"), p("b.png"), p("c.mp3"), p("d.psd"), p("e.zip")], spot);
         // On the stage: everything AniCraft reads, the rest left out with a reason.
         let on_stage = plan_at(Spot::Stage(10.0, 20.0));
-        assert_eq!((on_stage.to, on_stage.import.len(), on_stage.left_out.len()), (Some(DropTarget::Stage), 3, 1));
+        assert_eq!((on_stage.to, on_stage.import.len(), on_stage.left_out.len()), (Some(DropTarget::Stage), 4, 1));
         assert!(on_stage.left_out[0].1.contains("SVG"), "says what AniCraft reads");
         // On the Library: drawings (as graphic symbols), images and sounds.
         let in_library = plan_at(Spot::Library(Some(FolderId(7))));
-        assert_eq!((in_library.to, in_library.import.len(), in_library.left_out.len()), (Some(DropTarget::Library), 3, 1));
-        // On a layer's frame: the same three.
+        assert_eq!((in_library.to, in_library.import.len(), in_library.left_out.len()), (Some(DropTarget::Library), 4, 1));
+        // On a layer's frame: the same four.
         let on_frame = plan_at(Spot::Timeline(LayerId(3), 9));
-        assert_eq!((on_frame.to, on_frame.import.len(), on_frame.left_out.len()), (Some(DropTarget::Timeline), 3, 1));
+        assert_eq!((on_frame.to, on_frame.import.len(), on_frame.left_out.len()), (Some(DropTarget::Timeline), 4, 1));
         // Elsewhere on the window, or over the start screen: nothing imports.
         for spot in [Spot::Window, Spot::Start] {
             let plan = plan_at(spot);
-            assert!(plan.import.is_empty() && plan.to.is_none() && plan.left_out.len() == 4, "{spot:?}");
+            assert!(plan.import.is_empty() && plan.to.is_none() && plan.left_out.len() == 5, "{spot:?}");
         }
         // No pointer position: the stage, at the middle of the view.
         assert_eq!(plan_at(Spot::Unknown).to, Some(DropTarget::Stage));

@@ -742,7 +742,7 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     let id = ElementId(s.doc.alloc_id());
     let out = json!({"element": id.0, "font": block.font, "width": block.box_width, "height": block.box_height, "runs": block.runs.len().max(1), "note": note});
     remember(s, &block);
-    let el = Element { id, name: String::new(), transform: Affine::translate(x, y), color: ColorEffect::default(), kind: ElementKind::Text(Arc::new(block)) };
+    let el = Element { id, name: String::new(), transform: Affine::translate(x, y), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Text(Arc::new(block)) };
     s.editable_keyframe()?.elements.push(Arc::new(el));
     s.select_only([id]);
     Ok(out)
@@ -943,7 +943,7 @@ pub(crate) fn to_shapes(t: &TextBlock) -> Vec<anicraft_doc::Shape> {
     t.fill_paths()
         .into_iter()
         .filter(|(_, _, p)| !p.cmds.is_empty() || t.fills.is_empty())
-        .map(|(color, _, path)| anicraft_doc::Shape { path, fill: Some(anicraft_doc::Paint::Solid(color)), stroke: None, fill_rule: anicraft_geom::FillRule::NonZero, merge: false, warp: None })
+        .map(|(color, _, path)| anicraft_doc::Shape { path, fill: Some(anicraft_doc::Paint::Solid(color)), stroke: None, fill_rule: anicraft_geom::FillRule::NonZero, merge: false, warp: None, fill_tag: None, stroke_tag: None })
         .collect()
 }
 

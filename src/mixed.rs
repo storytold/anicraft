@@ -102,8 +102,8 @@ pub fn of(doc: &Document, all: &[Arc<Element>]) -> Mixed {
     };
     let decomposed: Vec<_> = all.iter().map(|e| e.transform.decompose()).collect();
     let instances = || all.iter().filter(|e| matches!(e.kind, ElementKind::Symbol { .. }));
-    // Blending and filters: movie clips and buttons (Animate offers them on those only).
-    let clips = || all.iter().filter(|e| kind_of(e).is_some_and(|k| k != SymbolKind::Graphic));
+    // Blending and filters: symbol instances (movie clips, buttons and graphics; P-027).
+    let clips = || all.iter().filter(|e| kind_of(e).is_some());
     let graphics = || all.iter().filter(|e| kind_of(e) == Some(SymbolKind::Graphic));
     let shapes: Vec<&Shape> = all
         .iter()
@@ -122,8 +122,8 @@ pub fn of(doc: &Document, all: &[Arc<Element>]) -> Mixed {
             _ => None,
         })),
         kind: differ(instances().map(|e| kind_of(e))),
-        // Filters: movie clips, buttons and text (ADR 0099).
-        filters: differ(all.iter().filter(|e| matches!(e.kind, ElementKind::Text(_)) || kind_of(e).is_some_and(|k| k != SymbolKind::Graphic)).filter_map(|e| e.kind.filters())),
+        // Filters: symbol instances and text (ADR 0099, P-027).
+        filters: differ(all.iter().filter(|e| matches!(e.kind, ElementKind::Text(_)) || kind_of(e).is_some()).filter_map(|e| e.kind.filters())),
         blend: differ(clips().filter_map(|e| match &e.kind {
             ElementKind::Symbol { blend, .. } => Some(*blend),
             _ => None,
@@ -255,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn filters_and_blending_rows_compare_movie_clips_only() {
+    fn filters_and_blending_rows_compare_symbol_instances_only() {
         let (mut s, [a, b, g], [r1, _]) = session();
         select(&mut s, &[b]);
         run(&mut s, "element.set_blend", json!({"mode": "multiply"}));
@@ -263,11 +263,14 @@ mod tests {
         select(&mut s, &[a, b, g, r1]);
         let m = mixed(&s);
         assert!(m.blend && m.filters);
-        // A graphic and a shape beside one movie clip: nothing to compare.
+        // A graphic beside a movie clip with filters/blend differs; a shape beside one instance has nothing to compare.
         select(&mut s, &[b, g, r1]);
         let m = mixed(&s);
+        assert!(m.blend && m.filters);
+        select(&mut s, &[b, r1]);
+        let m = mixed(&s);
         assert!(!m.blend && !m.filters);
-        // Setting either across the selection makes the movie clips alike.
+        // Setting either across the selection makes all symbol instances (including graphics) alike.
         select(&mut s, &[a, b, g]);
         run(&mut s, "element.set_blend", json!({"mode": "screen"}));
         run(&mut s, "element.set_filters", json!({"filters": []}));

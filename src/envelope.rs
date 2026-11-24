@@ -376,10 +376,13 @@ fn channel_peaks(ed: &mut EnvelopeEditor, sound: &Sound) -> Option<Arc<[Peaks; 2
 /// One channel's waveform over seconds `from .. from + window` of the sound's time (repeats
 /// wrap to its start), as far as it is heard.
 fn draw_wave(p: &egui::Painter, lane: Rect, peaks: &Peaks, sound: &Sound, t: &Target, from: f64, window: f64) {
-    let len = peaks.frames() as u64;
+    let full_len = peaks.frames() as u64;
+    let (trim_start, trim_end) = t.fs.trim_range(full_len);
+    let len = trim_end.saturating_sub(trim_start);
     if len == 0 {
         return;
     }
+    let (t0, t1) = (trim_start as usize, trim_end as usize);
     let rate = f64::from(sound.rate.max(1));
     let heard = (t.heard * rate) as u64;
     let per_px = window * rate / f64::from(lane.width().max(1.0));
@@ -393,11 +396,11 @@ fn draw_wave(p: &egui::Painter, lane: Rect, peaks: &Peaks, sound: &Sound, t: &Ta
             break;
         }
         let b = b.max(a + 1).min(heard);
-        let (s, n) = ((a % len) as usize, (b - a).min(len) as usize);
-        let range = if s + n <= len as usize {
+        let (s, n) = (t0 + (a % len) as usize, (b - a).min(len) as usize);
+        let range = if s + n <= t1 {
             peaks.range(s, s + n)
         } else {
-            match (peaks.range(s, len as usize), peaks.range(0, s + n - len as usize)) {
+            match (peaks.range(s, t1), peaks.range(t0, t0 + (s + n - t1))) {
                 (Some((l1, h1)), Some((l2, h2))) => Some((l1.min(l2), h1.max(h2))),
                 (one, other) => one.or(other),
             }
@@ -434,10 +437,11 @@ fn draw_ruler(p: &egui::Painter, r: Rect, from: f64, window: f64, frames: bool, 
 /// Plays the keyframe's sound on its own with its effect, for as long as it is heard.
 fn preview(app: &mut App, t: &Target) {
     let Some(dec) = t.sound.decoded() else { return };
+    let Some(pcm) = anicraft_engine::doc::sound::trimmed_pcm(&dec.pcm, &t.fs) else { return };
     let rate = app.sound.rate();
     let fps = app.s.doc.stage.fps;
-    let heard = t.fs.heard(Voice::play_frames(&dec.pcm, rate), frame_start(u64::from(t.span), fps, rate), frame_start(u64::from(t.rest), fps, rate));
-    let mut v = Voice::new(dec.pcm.clone(), VoiceKind::Event, 0, heard.max(1));
+    let heard = t.fs.heard_play(Voice::play_frames(&pcm, rate), frame_start(u64::from(t.span), fps, rate), frame_start(u64::from(t.rest), fps, rate));
+    let mut v = Voice::new(pcm, VoiceKind::Event, 0, heard.max(1));
     v.envelope = t.fs.effect.envelope(heard, rate);
     app.sound.preview_voice(v);
     if let Some(e) = app.sound.error.take() {

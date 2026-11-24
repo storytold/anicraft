@@ -10,6 +10,7 @@ pub use anicraft_actions as actions;
 pub mod aids;
 pub mod parenting;
 pub mod armature;
+pub mod autorig;
 pub mod spring;
 pub mod skin;
 pub mod weights;
@@ -26,6 +27,7 @@ mod hints;
 pub mod nine_slice;
 pub mod library;
 pub mod motion;
+pub mod motion_preset;
 pub mod path_table;
 pub mod width;
 pub mod stroke_style;
@@ -37,6 +39,7 @@ pub mod sample;
 pub mod templates;
 pub mod sound;
 pub mod swatch;
+pub mod transform3d;
 pub mod video;
 
 pub use filter::{Channel, FILTER_PARAMS, Filter, FilterColor, FilterEntry, FilterParam, FilterProp, FilterSide, MAX_FILTER_SLOTS, pairing as filter_pairing, active as active_filters, any_active as any_active_filter, pairs_up as filters_pair_up, MAX_BLUR, MAX_QUALITY, MAX_RAMP_STOPS, REST_SNAP, default_bevel_ramp, default_glow_ramp, pinned_stop, ramp_at};
@@ -46,6 +49,7 @@ pub use color_effect::{ADVANCED_ADD, ADVANCED_MUL, ColorEffect, ColorStyle, Colo
 pub use hints::{HINT_TOLERANCE, HintSide, MAX_SHAPE_HINTS, ShapeHint, hint_index, hint_letter, nearest_outline, placed_on, shapes_centre};
 pub use library::{FolderId, LibraryEntry, LibraryFolder, LibraryItem, LibraryTree, NameError};
 pub use motion::{KeyRef, MotionTween, OnPath, PROPERTIES, Pin, PinError, Property, PropertyKey, Props, Track, filter_properties, motion_path, own_value};
+pub use motion_preset::{BUILTIN_PRESET_IDS, BuiltinMotionPreset, MAX_MOTION_PRESET_NAME, MAX_MOTION_PRESETS, MotionClip, MotionPreset, builtin_motion_presets, find_builtin_preset, preset_name, sanitized_motion_presets};
 pub use sound::{EnvelopePoint, FrameSound, Sound, SoundEffect, SoundFormat, SoundId, SoundSync};
 pub use width::{MAX_WIDTH_FACTOR, MAX_WIDTH_POINTS, ProfilePreset, WidthPoint, WidthProfile};
 pub use stroke_style::{Cap, Dash, DashKind, Join, StrokeStyle};
@@ -57,7 +61,8 @@ pub use aids::{Aids, GUIDE_REACH, Grid, Guide, GuideAxis, MAX_GUIDES};
 pub use nine_slice::symbol_box;
 pub use rich_text::{BaselineShift, CharStyle, MAX_TEXT_RUNS, MAX_URL, ParagraphStyle, StyleSummary, TextFill, TextRun, safe_url};
 pub use armature::{Armature, Bone, BoneId, JointAngle, Limits, Pose};
-pub use eval::{DisplayItem, DisplayList, Group, MAX_EVAL_ELEMENTS, MAX_SYMBOL_DEPTH, evaluate, evaluate_guided, evaluate_layer_elements, evaluate_shown, evaluate_player, evaluate_scene, evaluate_scene_camera, evaluate_timeline, evaluate_timeline_at, guide_walk, instance_start};
+pub use transform3d::{MAX_3D_ANGLE_DEG, MAX_3D_Z, MAX_VANISHING, Transform3D};
+pub use eval::{DisplayItem, DisplayList, Group, MAX_EVAL_ELEMENTS, MAX_SYMBOL_DEPTH, evaluate, evaluate_guided, evaluate_keyframe_effects, evaluate_layer_elements, evaluate_shown, evaluate_player, evaluate_scene, evaluate_scene_camera, evaluate_timeline, evaluate_timeline_at, guide_walk, instance_start};
 pub use actions::{Action, ButtonEvent, EventHandler, FrameScript, Language, PluginScript, SourceScript};
 
 use anicraft_geom::{Affine, FillRule, Path, Rect, Vec2};
@@ -284,6 +289,43 @@ impl Paint {
         matches!(self, Paint::Linear { .. } | Paint::Radial { .. })
     }
 
+    /// Sanitizes colours, stops (2..=[`MAX_GRADIENT_STOPS`] in offset order), focal ratio and
+    /// finite coordinates; returns `None` when a gradient has fewer than two stops or non-finite
+    /// geometry.
+    pub fn sanitized(&self) -> Option<Paint> {
+        let clean_stops = |stops: &[GradientStop]| -> Option<Vec<GradientStop>> {
+            if stops.len() < 2 {
+                return None;
+            }
+            let mut v: Vec<GradientStop> = stops
+                .iter()
+                .take(MAX_GRADIENT_STOPS)
+                .map(|g| GradientStop { offset: if g.offset.is_finite() { g.offset.clamp(0.0, 1.0) } else { 0.0 }, color: g.color.sanitized() })
+                .collect();
+            v.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+            Some(v)
+        };
+        match self {
+            Paint::Solid(c) => Some(Paint::Solid(c.sanitized())),
+            Paint::Linear { start, end, stops, spread, linear_rgb } => {
+                if !(start.is_finite() && end.is_finite()) {
+                    return None;
+                }
+                Some(Paint::Linear { start: *start, end: *end, stops: clean_stops(stops)?, spread: *spread, linear_rgb: *linear_rgb })
+            }
+            Paint::Radial { center, radius, stops, spread, linear_rgb, focal, matrix } => {
+                if !(center.is_finite() && radius.is_finite() && *radius >= 0.0 && matrix.is_finite()) {
+                    return None;
+                }
+                let focal = if focal.is_finite() { focal.clamp(-MAX_FOCAL, MAX_FOCAL) } else { 0.0 };
+                Some(Paint::Radial { center: *center, radius: *radius, stops: clean_stops(stops)?, spread: *spread, linear_rgb: *linear_rgb, focal, matrix: *matrix })
+            }
+            Paint::Bitmap { bitmap, repeat, matrix } => {
+                matrix.is_finite().then_some(Paint::Bitmap { bitmap: *bitmap, repeat: *repeat, matrix: *matrix })
+            }
+        }
+    }
+
     /// The paint carried by `m` (its geometry moved from one space to another), so a shape in
     /// the new space shows it where it was: gradient ends are mapped, a radial gradient's and a
     /// bitmap's matrix is composed (exact under any transform).
@@ -412,8 +454,8 @@ impl Paint {
     }
 }
 
-/// A line: colour, width, an optional width profile (ADR 0018) and its style: caps, joins,
-/// miter limit, dashes (ADR 0046).
+/// A line: colour, width, an optional width profile (ADR 0018), its style (caps, joins,
+/// miter limit, dashes; ADR 0046), and an optional gradient or bitmap paint (`P-032`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(from = "StrokeFile")]
 pub struct Stroke {
@@ -427,10 +469,14 @@ pub struct Stroke {
     /// without a style are stored as before.
     #[serde(default, skip_serializing_if = "StrokeStyle::is_default")]
     pub style: StrokeStyle,
+    /// Optional non-solid paint (linear gradient, radial gradient or bitmap). `None` uses
+    /// `Paint::Solid(self.color)`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub paint: Option<Paint>,
 }
 
-/// What a file may hold for a stroke (a uniform profile is dropped on load, the style is
-/// sanitized).
+/// What a file may hold for a stroke (a uniform profile is dropped on load, the style and paint
+/// are sanitized).
 #[derive(Deserialize)]
 struct StrokeFile {
     color: Rgba,
@@ -439,18 +485,26 @@ struct StrokeFile {
     profile: Option<WidthProfile>,
     #[serde(default)]
     style: StrokeStyle,
+    #[serde(default)]
+    paint: Option<Paint>,
 }
 
 impl From<StrokeFile> for Stroke {
     fn from(f: StrokeFile) -> Stroke {
-        Stroke { color: f.color, width: f.width, profile: f.profile.filter(|p| !p.is_uniform()), style: f.style.sanitized() }
+        Stroke {
+            color: f.color.sanitized(),
+            width: f.width,
+            profile: f.profile.filter(|p| !p.is_uniform()),
+            style: f.style.sanitized(),
+            paint: f.paint.and_then(|p| p.sanitized()),
+        }
     }
 }
 
 impl Stroke {
     /// A solid stroke of one width with round caps and joins.
     pub fn new(color: Rgba, width: f32) -> Stroke {
-        Stroke { color, width, profile: None, style: StrokeStyle::default() }
+        Stroke { color, width, profile: None, style: StrokeStyle::default(), paint: None }
     }
     pub fn with_profile(self, profile: Option<WidthProfile>) -> Stroke {
         Stroke { profile: profile.filter(|p| !p.is_uniform()), ..self }
@@ -458,6 +512,17 @@ impl Stroke {
     /// The same stroke with caps, joins and dashes from `style` (sanitized).
     pub fn with_style(self, style: StrokeStyle) -> Stroke {
         Stroke { style: style.sanitized(), ..self }
+    }
+    /// The same stroke with an optional gradient/bitmap paint (sanitized).
+    pub fn with_paint(self, paint: Option<Paint>) -> Stroke {
+        let paint = paint.and_then(|p| p.sanitized());
+        let color = paint.as_ref().map_or(self.color, Paint::primary_color);
+        let paint = paint.filter(|p| !matches!(p, Paint::Solid(_)));
+        Stroke { color, paint, ..self }
+    }
+    /// Effective paint of the stroke (`self.paint`, else `Paint::Solid(self.color)`).
+    pub fn effective_paint(&self) -> Paint {
+        self.paint.clone().unwrap_or(Paint::Solid(self.color))
     }
     /// The farthest the stroke reaches from its path (local units): half its nominal width
     /// times the profile's widest factor, times what miter corners and square caps add.
@@ -469,13 +534,18 @@ impl Stroke {
     pub fn scaled(&self, k: f32) -> Stroke {
         Stroke { width: self.width * k, style: self.style.scaled(k), ..self.clone() }
     }
-    /// The stroke `t` of the way to `o` (shape tweens): colour, width, profile and style blend.
+    /// The stroke `t` of the way to `o` (shape tweens): colour, width, profile, style and paint blend.
     pub fn lerp(&self, o: &Stroke, t: f32) -> Stroke {
+        let paint = match (&self.paint, &o.paint) {
+            (None, None) => None,
+            _ => Some(self.effective_paint().lerp(&o.effective_paint(), t)),
+        };
         Stroke {
             color: self.color.lerp(o.color, t),
             width: anicraft_geom::lerp(self.width, o.width, t),
             profile: WidthProfile::lerp(self.profile.as_ref(), o.profile.as_ref(), t),
             style: self.style.lerp(&o.style, t),
+            paint,
         }
     }
 }
@@ -510,18 +580,26 @@ pub struct Shape {
     /// path is the bent outline; the warp keeps the outline as drawn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub warp: Option<Arc<warp::Warp>>,
+    /// Live Tagged Swatch link for `fill` (`Swatch::tag_id`, P-025).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fill_tag: Option<u64>,
+    /// Live Tagged Swatch link for `stroke` (`Swatch::tag_id`, P-025).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stroke_tag: Option<u64>,
 }
 
 impl PartialEq for Shape {
     fn eq(&self, o: &Shape) -> bool {
         // Every field is named here, so a new one cannot be left out: a field this missed
         // would make an edit to it alone look like no change (no undo step, no redraw).
-        let Shape { path, fill, stroke, fill_rule, merge, warp } = self;
+        let Shape { path, fill, stroke, fill_rule, merge, warp, fill_tag, stroke_tag } = self;
         arc_eq(path, &o.path)
             && *fill == o.fill
             && *stroke == o.stroke
             && *fill_rule == o.fill_rule
             && *merge == o.merge
+            && *fill_tag == o.fill_tag
+            && *stroke_tag == o.stroke_tag
             && match (warp, &o.warp) {
                 (Some(a), Some(b)) => arc_eq(a, b),
                 (None, None) => true,
@@ -532,7 +610,7 @@ impl PartialEq for Shape {
 
 impl Shape {
     pub fn filled(path: Path, fill: Paint) -> Shape {
-        Shape { path: Arc::new(path), fill: Some(fill), stroke: None, fill_rule: FillRule::NonZero, merge: false, warp: None }
+        Shape { path: Arc::new(path), fill: Some(fill), stroke: None, fill_rule: FillRule::NonZero, merge: false, warp: None, fill_tag: None, stroke_tag: None }
     }
     pub fn with_stroke(mut self, color: Rgba, width: f32) -> Shape {
         self.stroke = Some(Stroke::new(color, width));
@@ -583,10 +661,10 @@ pub enum ElementKind {
         loop_mode: LoopMode,
         #[serde(default)]
         first_frame: u32,
-        /// How the instance blends with what is below it (movie clips and buttons).
+        /// How the instance blends with what is below it (movie clips, buttons and graphics).
         #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
         blend: BlendMode,
-        /// Filters, applied in order (movie clips and buttons); each may be switched off
+        /// Filters, applied in order (movie clips, buttons and graphics); each may be switched off
         /// (ADR 0091).
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         filters: Vec<FilterEntry>,
@@ -617,8 +695,8 @@ pub enum ElementKind {
 }
 
 impl ElementKind {
-    /// The filter list of what takes filters: a symbol instance (movie clips and buttons draw
-    /// them) or a block of text (ADR 0099). `None` for everything else.
+    /// The filter list of what takes filters: a symbol instance (movie clips, buttons and graphics)
+    /// or a block of text (ADR 0099). `None` for everything else.
     pub fn filters(&self) -> Option<&[FilterEntry]> {
         match self {
             ElementKind::Symbol { filters, .. } => Some(filters),
@@ -1082,6 +1160,8 @@ pub struct Element {
     pub transform: Affine,
     #[serde(default)]
     pub color: ColorEffect,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transform_3d: Option<Transform3D>,
     pub kind: ElementKind,
 }
 
@@ -1309,19 +1389,31 @@ pub struct Keyframe {
     /// On an armature layer: the joint angles this keyframe poses the armature with (ADR 0043).
     #[serde(default, skip_serializing_if = "Pose::is_empty")]
     pub pose: Pose,
+    /// Independent facial & lip-sync parameters keyed on an Auto-Rigged character layer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub face_pose: Option<autorig::FacePose>,
+    /// Keyframe-level blend mode (P-027).
+    #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
+    pub blend: BlendMode,
+    /// Keyframe-level colour effect (P-027; tweened across classic tweens).
+    #[serde(default, skip_serializing_if = "ColorEffect::is_none")]
+    pub color_effect: ColorEffect,
+    /// Keyframe-level bitmap filters (P-027; tweened across classic tweens).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<FilterEntry>,
 }
 
 impl PartialEq for Keyframe {
     fn eq(&self, o: &Keyframe) -> bool {
         // Every field is named, so a new one cannot be left out (as in `Shape::eq`).
-        let Keyframe { start, duration, elements, tween, motion, hints, label, sound, script, pose } = self;
-        *start == o.start && *duration == o.duration && *tween == o.tween && *motion == o.motion && *hints == o.hints && *label == o.label && *sound == o.sound && *script == o.script && *pose == o.pose && arcs_eq(elements, &o.elements)
+        let Keyframe { start, duration, elements, tween, motion, hints, label, sound, script, pose, face_pose, blend, color_effect, filters } = self;
+        *start == o.start && *duration == o.duration && *tween == o.tween && *motion == o.motion && *hints == o.hints && *label == o.label && *sound == o.sound && *script == o.script && *pose == o.pose && *face_pose == o.face_pose && *blend == o.blend && *color_effect == o.color_effect && *filters == o.filters && arcs_eq(elements, &o.elements)
     }
 }
 
 impl Keyframe {
     pub fn new(start: u32, duration: u32) -> Self {
-        Keyframe { start, duration: duration.max(1), elements: Vec::new(), tween: None, motion: None, hints: Vec::new(), label: String::new(), sound: None, script: None, pose: Pose::default() }
+        Keyframe { start, duration: duration.max(1), elements: Vec::new(), tween: None, motion: None, hints: Vec::new(), label: String::new(), sound: None, script: None, pose: Pose::default(), face_pose: None, blend: BlendMode::Normal, color_effect: ColorEffect::None, filters: Vec::new() }
     }
     /// Mutable access to the elements whose ids satisfy `pick`, cloning only those.
     pub fn elements_mut_where(&mut self, mut pick: impl FnMut(ElementId) -> bool) -> Vec<&mut Element> {
@@ -1430,6 +1522,15 @@ pub struct Layer {
     /// artwork, never in the movie or an export. Its pictures are not in the document.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video: Option<Arc<video::VideoRef>>,
+    /// Layer-level blend mode (P-027).
+    #[serde(default, skip_serializing_if = "BlendMode::is_normal")]
+    pub blend: BlendMode,
+    /// Layer-level colour effect (P-027).
+    #[serde(default, skip_serializing_if = "ColorEffect::is_none")]
+    pub color_effect: ColorEffect,
+    /// Layer-level bitmap filters (P-027).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub filters: Vec<FilterEntry>,
 }
 
 /// How a mask layer's artwork reveals the layers it masks (ADR 0070).
@@ -1508,7 +1609,7 @@ pub const MAX_LAYER_HEIGHT: u8 = 3;
 impl PartialEq for Layer {
     fn eq(&self, o: &Layer) -> bool {
         // Every field is named, so a new one cannot be left out (as in `Shape::eq`).
-        let Layer { id, name, kind, parent, visible, locked, outline, color, onion, height_rows, keyframes, depth, depth_keys, attached, volume, muted, armature, mask_mode, opacity, rig_parent, video } = self;
+        let Layer { id, name, kind, parent, visible, locked, outline, color, onion, height_rows, keyframes, depth, depth_keys, attached, volume, muted, armature, mask_mode, opacity, rig_parent, video, blend, color_effect, filters } = self;
         *id == o.id
             && *name == o.name
             && *kind == o.kind
@@ -1528,6 +1629,9 @@ impl PartialEq for Layer {
             && opacity.to_bits() == o.opacity.to_bits()
             && *rig_parent == o.rig_parent
             && *video == o.video
+            && *blend == o.blend
+            && *color_effect == o.color_effect
+            && *filters == o.filters
             && match (armature, &o.armature) {
                 (Some(a), Some(b)) => arc_eq(a, b),
                 (a, b) => a.is_none() && b.is_none(),
@@ -1567,6 +1671,9 @@ impl Layer {
             opacity: 1.0,
             rig_parent: None,
             video: None,
+            blend: BlendMode::Normal,
+            color_effect: ColorEffect::None,
+            filters: Vec::new(),
         }
     }
     /// The layer's own opacity, `0..=1` whatever a file says (not a number: opaque).
@@ -2009,9 +2116,15 @@ pub struct Document {
     /// Eases the artist saved by name (ADR 0081), offered with the presets.
     #[serde(default, skip_serializing_if = "eases_is_empty")]
     pub eases: Arc<Vec<SavedEase>>,
+    /// Motion presets the artist saved by name (`P-041`), offered alongside built-in presets.
+    #[serde(default, skip_serializing_if = "motion_presets_is_empty")]
+    pub motion_presets: Arc<Vec<MotionPreset>>,
     /// Data tables and what they drive (ADR 0118). Left out of a file that has none.
     #[serde(default, skip_serializing_if = "data_is_empty")]
     pub data: Arc<DataSet>,
+    /// Reusable character rigs saved inside this document for cross-scene & cross-animation reuse.
+    #[serde(default, skip_serializing_if = "rigs_are_empty")]
+    pub character_rigs: Arc<Vec<autorig::CharacterRig>>,
     /// Next free id for layers, elements and symbols.
     pub next_id: u64,
 }
@@ -2052,7 +2165,11 @@ struct DocumentFile {
     #[serde(default)]
     eases: Arc<Vec<SavedEase>>,
     #[serde(default)]
+    motion_presets: Arc<Vec<MotionPreset>>,
+    #[serde(default)]
     data: Arc<DataSet>,
+    #[serde(default)]
+    character_rigs: Arc<Vec<autorig::CharacterRig>>,
     #[serde(default = "first_id")]
     next_id: u64,
 }
@@ -2063,12 +2180,16 @@ impl From<DocumentFile> for Document {
         if let Some(tl) = f.timeline {
             scenes.insert(0, Arc::new(Scene { name: "Scene 1".into(), timeline: tl, guides: Vec::new() }));
         }
-        Document { stage: f.stage, scenes, library: f.library, bitmaps: f.bitmaps, sounds: f.sounds, library_tree: f.library_tree, document_class: f.document_class, publish: f.publish, aids: f.aids, swatches: f.swatches, eases: f.eases, data: f.data, next_id: f.next_id }
+        Document { stage: f.stage, scenes, library: f.library, bitmaps: f.bitmaps, sounds: f.sounds, library_tree: f.library_tree, document_class: f.document_class, publish: f.publish, aids: f.aids, swatches: f.swatches, eases: f.eases, motion_presets: f.motion_presets, data: f.data, character_rigs: f.character_rigs, next_id: f.next_id }
     }
 }
 
 fn first_id() -> u64 {
     1
+}
+
+fn rigs_are_empty(r: &Arc<Vec<autorig::CharacterRig>>) -> bool {
+    r.is_empty()
 }
 
 fn library_tree_is_empty(t: &Arc<LibraryTree>) -> bool {
@@ -2081,6 +2202,10 @@ fn data_is_empty(d: &Arc<DataSet>) -> bool {
 
 fn eases_is_empty(e: &Arc<Vec<SavedEase>>) -> bool {
     e.is_empty()
+}
+
+fn motion_presets_is_empty(p: &Arc<Vec<MotionPreset>>) -> bool {
+    p.is_empty()
 }
 
 fn aids_is_default(a: &Arc<Aids>) -> bool {
@@ -2097,14 +2222,14 @@ static NO_TIMELINE: Timeline = Timeline { layers: Vec::new() };
 impl PartialEq for Document {
     fn eq(&self, o: &Document) -> bool {
         // Every field is named, so a new one cannot be left out (as in `Shape::eq`).
-        let Document { stage, scenes, library, bitmaps, sounds, library_tree, document_class, publish, swatches, aids, eases, data, next_id } = self;
-        *stage == o.stage && *next_id == o.next_id && *document_class == o.document_class && arcs_eq(scenes, &o.scenes) && arcs_eq(library, &o.library) && arcs_eq(bitmaps, &o.bitmaps) && arcs_eq(sounds, &o.sounds) && arc_eq(library_tree, &o.library_tree) && arc_eq(publish, &o.publish) && arc_eq(aids, &o.aids) && arc_eq(swatches, &o.swatches) && arc_eq(eases, &o.eases) && arc_eq(data, &o.data)
+        let Document { stage, scenes, library, bitmaps, sounds, library_tree, document_class, publish, swatches, aids, eases, motion_presets, data, character_rigs, next_id } = self;
+        *stage == o.stage && *next_id == o.next_id && *document_class == o.document_class && arcs_eq(scenes, &o.scenes) && arcs_eq(library, &o.library) && arcs_eq(bitmaps, &o.bitmaps) && arcs_eq(sounds, &o.sounds) && arc_eq(library_tree, &o.library_tree) && arc_eq(publish, &o.publish) && arc_eq(aids, &o.aids) && arc_eq(swatches, &o.swatches) && arc_eq(eases, &o.eases) && arc_eq(motion_presets, &o.motion_presets) && arc_eq(data, &o.data) && arc_eq(character_rigs, &o.character_rigs)
     }
 }
 
 impl Default for Document {
     fn default() -> Self {
-        let mut d = Document { stage: Stage::default(), scenes: vec![Arc::new(Scene::new("Scene 1"))], library: Vec::new(), bitmaps: Vec::new(), sounds: Vec::new(), library_tree: Arc::default(), document_class: String::new(), publish: Arc::default(), aids: Arc::default(), swatches: default_swatches(), eases: Arc::default(), data: Arc::default(), next_id: 1 };
+        let mut d = Document { stage: Stage::default(), scenes: vec![Arc::new(Scene::new("Scene 1"))], library: Vec::new(), bitmaps: Vec::new(), sounds: Vec::new(), library_tree: Arc::default(), document_class: String::new(), publish: Arc::default(), aids: Arc::default(), swatches: default_swatches(), eases: Arc::default(), motion_presets: Arc::default(), data: Arc::default(), character_rigs: Arc::default(), next_id: 1 };
         let id = LayerId(d.alloc_id());
         d.timeline_mut(0).layers.push(Arc::new(Layer::new(id, "Layer 1")));
         d
@@ -2196,6 +2321,10 @@ impl Document {
         if eases != *self.eases {
             self.eases = Arc::new(eases);
         }
+        let presets = motion_preset::sanitized_motion_presets(&self.motion_presets);
+        if presets != *self.motion_presets {
+            self.motion_presets = Arc::new(presets);
+        }
         let mut max_id = 0u64;
         let scan = |l: &Layer, max_id: &mut u64| {
             *max_id = (*max_id).max(l.id.0).max(l.video.as_ref().map_or(0, |v| v.id.0));
@@ -2208,6 +2337,7 @@ impl Document {
                     *max_id = (*max_id).max(e.id.0);
                     // Warp pins take ids from the same counter (ADR 0079).
                     if let ElementKind::Shape(s) = &e.kind {
+                        *max_id = (*max_id).max(s.fill_tag.unwrap_or(0)).max(s.stroke_tag.unwrap_or(0));
                         for p in s.warp.iter().flat_map(|w| &w.pins) {
                             *max_id = (*max_id).max(p.id.0);
                         }
@@ -2235,6 +2365,8 @@ impl Document {
                 sanitize_armature(l);
                 sanitize_warps(l);
                 sanitize_video(l);
+                sanitize_frame_sounds(l);
+                sanitize_layer_fx(l);
                 scan(l, &mut max_id);
                 sanitize_groups(l, 0, &mut max_id);
             }
@@ -2244,8 +2376,24 @@ impl Document {
         if !self.document_class.is_empty() && !actions::valid_class_name(&self.document_class) {
             self.document_class.clear();
         }
-        // Swatches that can't be repaired are dropped; at most MAX_SWATCHES are kept.
-        let swatches: Vec<Swatch> = self.swatches.iter().filter_map(Swatch::sanitized).take(MAX_SWATCHES).collect();
+        // Swatches that can't be repaired are dropped; at most MAX_SWATCHES are kept, and
+        // duplicate tag_ids are cleared so each tagged swatch owns a distinct id.
+        let mut seen_tags = std::collections::HashSet::new();
+        let swatches: Vec<Swatch> = self
+            .swatches
+            .iter()
+            .filter_map(Swatch::sanitized)
+            .take(MAX_SWATCHES)
+            .map(|mut sw| {
+                if let Some(tid) = sw.tag_id {
+                    max_id = max_id.max(tid);
+                    if !seen_tags.insert(tid) {
+                        sw.tag_id = None;
+                    }
+                }
+                sw
+            })
+            .collect();
         if swatches != *self.swatches {
             self.swatches = Arc::new(swatches);
         }
@@ -2280,6 +2428,8 @@ impl Document {
                 sanitize_armature(l);
                 sanitize_warps(l);
                 sanitize_video(l);
+                sanitize_frame_sounds(l);
+                sanitize_layer_fx(l);
                 scan(l, &mut max_id);
                 sanitize_groups(l, 0, &mut max_id);
             }
@@ -2297,6 +2447,45 @@ impl Document {
     }
 }
 
+/// Repairs layer/keyframe effects and shape tag ids on a loaded layer, touching only what needs it.
+fn sanitize_layer_fx(layer: &mut Arc<Layer>) {
+    let max_slots = usize::from(filter::MAX_FILTER_SLOTS);
+    let clean_filters = |fs: &[FilterEntry]| -> Vec<FilterEntry> {
+        fs.iter().take(max_slots).map(FilterEntry::sanitized).collect()
+    };
+    let bad_kf = |k: &Keyframe| {
+        k.color_effect != k.color_effect.sanitized()
+            || k.filters.len() > max_slots
+            || k.filters.iter().any(|f| *f != f.sanitized())
+            || k.elements.iter().any(|e| matches!(&e.kind, ElementKind::Shape(s) if s.fill_tag == Some(0) || s.stroke_tag == Some(0)))
+    };
+    let bad_layer = layer.color_effect != layer.color_effect.sanitized()
+        || layer.filters.len() > max_slots
+        || layer.filters.iter().any(|f| *f != f.sanitized());
+    if !bad_layer && !layer.keyframes.iter().any(|k| bad_kf(k)) {
+        return;
+    }
+    let l = Arc::make_mut(layer);
+    l.color_effect = l.color_effect.sanitized();
+    l.filters = clean_filters(&l.filters);
+    for k in &mut l.keyframes {
+        if !bad_kf(k) {
+            continue;
+        }
+        let k = Arc::make_mut(k);
+        k.color_effect = k.color_effect.sanitized();
+        k.filters = clean_filters(&k.filters);
+        for e in &mut k.elements {
+            if matches!(&e.kind, ElementKind::Shape(s) if s.fill_tag == Some(0) || s.stroke_tag == Some(0))
+                && let ElementKind::Shape(s) = &mut Arc::make_mut(e).kind
+            {
+                s.fill_tag = s.fill_tag.filter(|&id| id > 0);
+                s.stroke_tag = s.stroke_tag.filter(|&id| id > 0);
+            }
+        }
+    }
+}
+
 /// A reference video (ADR 0116) a file can't mean is repaired, or dropped. Touches only what
 /// needs it.
 fn sanitize_video(layer: &mut Arc<Layer>) {
@@ -2304,6 +2493,19 @@ fn sanitize_video(layer: &mut Arc<Layer>) {
     let fixed = v.sanitized();
     if fixed.as_ref() != Some(&**v) {
         Arc::make_mut(layer).video = fixed.map(Arc::new);
+    }
+}
+
+fn sanitize_frame_sounds(layer: &mut Arc<Layer>) {
+    if !layer.keyframes.iter().any(|k| k.sound.as_ref().is_some_and(|fs| !fs.is_sane())) {
+        return;
+    }
+    for k in &mut Arc::make_mut(layer).keyframes {
+        if k.sound.as_ref().is_some_and(|fs| !fs.is_sane())
+            && let Some(fs) = Arc::make_mut(k).sound.as_mut()
+        {
+            fs.sanitize();
+        }
     }
 }
 

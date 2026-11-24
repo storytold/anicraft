@@ -10,12 +10,13 @@ fn inst(transform: Affine, pivot: Option<Vec2>) -> Element {
         name: String::new(),
         transform,
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: SymbolId(1), loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot },
     }
 }
 
 fn square(id: u64, x: f32, w: f32, h: f32) -> Element {
-    Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, 0.0), color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, w, h), Paint::Solid(Rgba::BLACK))) }
+    Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, 0.0), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, w, h), Paint::Solid(Rgba::BLACK))) }
 }
 
 /// A 40 × 20 arm whose registration point is its top left, tweened from `a` to `b` over ten frames.

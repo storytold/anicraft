@@ -228,9 +228,11 @@ fn apply(s: &mut Session, prepared: Prepared) -> Result<Value> {
                     fill_rule: FillRule::NonZero,
                     merge: false,
                     warp: None,
+                    fill_tag: None,
+                    stroke_tag: None,
                 };
                 let eid = ElementId(s.doc.alloc_id());
-                let el = Element { id: eid, name: b.name.clone(), transform: place.mul(&Affine::scale(up, up)), color: ColorEffect::opacity(1.0), kind: ElementKind::Shape(shape) };
+                let el = Element { id: eid, name: b.name.clone(), transform: place.mul(&Affine::scale(up, up)), color: ColorEffect::opacity(1.0), transform_3d: None, kind: ElementKind::Shape(shape) };
                 first.get_or_insert(eid);
                 s.doc.bitmaps.push(Arc::new(b));
                 s.doc.place_entry(anicraft_doc::library::LibraryEntry::Item(anicraft_doc::library::LibraryItem::Bitmap(bid)), folder);

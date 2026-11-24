@@ -955,6 +955,7 @@ fn symbol_frame(doc: &Document, id: anicraft_engine::doc::SymbolId) -> anicraft_
             name: String::new(),
             transform: Default::default(),
             color: Default::default(),
+            transform_3d: None,
             kind: ElementKind::Symbol { symbol: id, loop_mode: LoopMode::SingleFrame, first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
         })];
     }

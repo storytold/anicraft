@@ -115,14 +115,20 @@ fn a_filter_switched_off_is_as_if_absent_and_keeps_its_settings() {
 }
 
 #[test]
-fn graphics_take_no_filters() {
+fn graphics_take_filters_and_blend() {
     let mut s = Session::default();
     run(&mut s, "draw.rect", json!({"x": 100, "y": 100, "w": 100, "h": 100, "fill": "#ff0000", "stroke": null}));
     run(&mut s, "modify.convert_to_symbol", json!({"name": "G"}));
-    for (id, p) in [("filter.enable", json!({"enabled": false})), ("filter.remove", json!({})), ("filter.move", json!({"from": 0, "to": 1})), ("filter.copy", json!({}))] {
-        let e = s.execute(id, &p).unwrap_err().to_string();
-        assert!(e.contains("movie clip"), "{id}: {e}");
-    }
+    run(&mut s, "element.set_filters", json!({"filters": [{"type": "blur"}, {"type": "glow"}]}));
+    run(&mut s, "element.set_blend", json!({"mode": "multiply"}));
+    assert_eq!(kinds(&s), [("Blur", true), ("Glow", true)]);
+    run(&mut s, "filter.enable", json!({"index": 0, "enabled": false}));
+    assert_eq!(kinds(&s), [("Blur", false), ("Glow", true)]);
+    run(&mut s, "filter.move", json!({"from": 0, "to": 1}));
+    assert_eq!(kinds(&s), [("Glow", true), ("Blur", false)]);
+    run(&mut s, "filter.copy", json!({}));
+    run(&mut s, "filter.remove", json!({}));
+    assert!(list(&s).is_empty());
 }
 
 #[test]

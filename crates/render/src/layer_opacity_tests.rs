@@ -7,7 +7,7 @@ use anicraft_geom::{Affine, Path};
 use std::sync::Arc;
 
 fn square(id: u64, x: f32, colour: Rgba) -> Arc<Element> {
-    Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, 0.0), color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 8.0, 4.0), Paint::Solid(colour))) })
+    Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, 0.0), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 8.0, 4.0), Paint::Solid(colour))) })
 }
 
 /// A 12 × 4 white stage: a red square under a blue one, overlapping from x = 4 to 8, on one
@@ -42,7 +42,7 @@ fn a_faded_layer_shows_its_artwork_as_one() {
 fn a_folder_fades_its_layers_and_layers_fade_on_top_of_each_other() {
     // Two layers at 50 %, each a full black cover, the top one in a folder at 50 %.
     let mut d = Document { stage: Stage { width: 4, height: 4, background: Rgba::WHITE, ..Stage::default() }, ..Document::default() };
-    let cover = |id: u64| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 4.0, 4.0), Paint::Solid(Rgba::BLACK))) });
+    let cover = |id: u64| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 4.0, 4.0), Paint::Solid(Rgba::BLACK))) });
     let layer = |id: u64, el: u64, parent: Option<LayerId>| {
         let mut l = Layer::new(LayerId(id), "l");
         l.keyframes = vec![Arc::new(Keyframe { elements: vec![cover(el)], ..Keyframe::new(0, 1) })];

@@ -118,7 +118,7 @@ fn rewrite(s: &mut Session, p: &Value, nothing: &str, mut each: impl FnMut(&Elem
             }
             made.push(id);
             let name = if keeps { el.name.clone() } else { String::new() };
-            out.push(Arc::new(Element { id, name, transform: el.transform, color: el.color, kind: ElementKind::Shape(shape) }));
+            out.push(Arc::new(Element { id, name, transform: el.transform, color: el.color, transform_3d: None, kind: ElementKind::Shape(shape) }));
         }
     }
     if changed == 0 {
@@ -191,10 +191,10 @@ fn lines_to_fills(s: &mut Session, p: &Value) -> Result<Value> {
             // A line that draws nothing (no width) has no outline to keep.
             return Ok(None);
         }
-        let fill = Shape { path: Arc::new(outline.transformed(inv)), fill: Some(Paint::Solid(st.color)), stroke: None, fill_rule: FillRule::EvenOdd, merge: sh.merge, warp: None };
+        let fill = Shape { path: Arc::new(outline.transformed(inv)), fill: Some(st.effective_paint()), stroke: None, fill_rule: FillRule::EvenOdd, merge: sh.merge, warp: None, fill_tag: sh.stroke_tag, stroke_tag: None };
         Ok(Some(match &sh.fill {
             // The shape keeps its fill; the line's outline lies over it, as the line did.
-            Some(_) => vec![(Shape { stroke: None, ..sh.clone() }, true), (fill, false)],
+            Some(_) => vec![(Shape { stroke: None, stroke_tag: None, ..sh.clone() }, true), (fill, false)],
             None => vec![(fill, true)],
         }))
     })?;
@@ -281,7 +281,7 @@ fn soften(s: &mut Session, p: &Value) -> Result<Value> {
         for (i, band) in parts.enumerate() {
             let Some(paint) = faded(fill, band_alpha(i as u32 + 1, steps)) else { continue };
             if !band.is_empty() {
-                made.push((Shape { path: Arc::new(band.transformed(inv)), fill: Some(paint), stroke: None, fill_rule: FillRule::EvenOdd, merge: sh.merge, warp: None }, false));
+                made.push((Shape { path: Arc::new(band.transformed(inv)), fill: Some(paint), stroke: None, fill_rule: FillRule::EvenOdd, merge: sh.merge, warp: None, fill_tag: None, stroke_tag: None }, false));
             }
         }
         made.reverse();

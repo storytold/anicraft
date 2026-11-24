@@ -38,7 +38,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Sound",
             "",
             None,
-            "{sound, layer?, frame? (a blank keyframe is made there if the frame is empty), sync?: event|start|stop|stream, repeat?, loop?, effect?, envelope?, extend? (lengthen the layer's last span to the sound's length)}",
+            "{sound, layer?, frame? (a blank keyframe is made there if the frame is empty), sync?: event|start|stop|stream, repeat?, loop?, in_sec?: f64, out_sec?: f64 | null, effect?, envelope?, extend? (lengthen the layer's last span to the sound's length)}",
             true,
             place,
         ),
@@ -47,9 +47,18 @@ pub fn specs() -> Vec<CommandSpec> {
             "Sound Settings",
             "",
             None,
-            "{layer?, frame?, sound?: id | null (null takes the sound off), sync?, repeat?, loop?, effect?: none|left_channel|right_channel|fade_left_to_right|fade_right_to_left|fade_in|fade_out|custom (presets shape over the time the sound is heard; custom starts from the effect before), envelope?: [{at (seconds from the sound's start), left (0–1), right (0–1)}…] (1–16 points; makes the effect custom)}",
+            "{layer?, frame?, sound?: id | null (null takes the sound off), sync?, repeat?, loop?, in_sec?: f64 (trim start in seconds, >= 0), out_sec?: f64 | null (trim end in seconds, null clears), effect?: none|left_channel|right_channel|fade_left_to_right|fade_right_to_left|fade_in|fade_out|custom (presets shape over the time the sound is heard; custom starts from the effect before), envelope?: [{at (seconds from the sound's start), left (0–1), right (0–1)}…] (1–16 points; makes the effect custom)}",
             true,
             set,
+        ),
+        c(
+            "sound.split",
+            "Split Audio",
+            "Modify/Timeline",
+            None,
+            "{layer?, frame?}: splits a sounding keyframe span at frame (after its start) into two keyframes, advancing the second keyframe's audio in-point by the elapsed samples",
+            true,
+            split_sound,
         ),
         c("layer.toggle_mute", "Mute/Unmute Layer", "", None, "{layer?} (its sounds, and those in the symbols on it, go silent in playback and every export)", true, toggle_mute),
         c("layer.set_volume", "Layer Volume", "", None, "{volume? (0–1: the layer's sounds and those in the symbols on it), muted?, layer?}", true, set_volume),
@@ -118,6 +127,9 @@ pub(crate) fn import_to_library(s: &mut Session, p: &Value) -> Result<Value> {
         s.doc.bitmaps.push(Arc::new(bitmap));
         return Ok(json!({"bitmap": id.0, "width": w, "height": h}));
     }
+    if crate::psd_import::is_psd(&path) {
+        return crate::psd_import::import_psd_symbol(s, &path, opt_str(p, "name")?);
+    }
     if ext.as_deref() == Some("svg") {
         // A drawing becomes a graphic symbol holding its shapes (ADR 0065).
         return crate::cmds_file::import_svg_symbol(s, &path, opt_str(p, "name")?);
@@ -156,10 +168,11 @@ fn envelope_param(v: &Value) -> Result<Vec<EnvelopePoint>> {
     Ok(clean_points(&out))
 }
 
-/// `sync`, `repeat`, `loop`, `effect` and `envelope` from params over `fs`. `heard` is how
-/// long the sound would be heard, in seconds (Custom starts from the effect's shape over it).
-fn apply_settings(p: &Value, fs: FrameSound, heard: &dyn Fn(&FrameSound) -> f64) -> Result<FrameSound> {
-    let mut fs = apply_timing(p, fs)?;
+/// `sync`, `repeat`, `loop`, `in_sec`, `out_sec`, `effect` and `envelope` from params over `fs`.
+/// `heard` is how long the sound would be heard, in seconds (Custom starts from the effect's
+/// shape over it).
+fn apply_settings(p: &Value, fs: FrameSound, snd: Option<&Sound>, heard: &dyn Fn(&FrameSound) -> f64) -> Result<FrameSound> {
+    let mut fs = apply_timing(p, fs, snd)?;
     if let Some(e) = opt_str(p, "effect")? {
         let want = SoundEffect::from_key(e).ok_or_else(|| EngineError::Param("param 'effect' must be none, left_channel, right_channel, fade_left_to_right, fade_right_to_left, fade_in, fade_out or custom".into()))?;
         fs.effect = match want {
@@ -180,8 +193,8 @@ fn apply_settings(p: &Value, fs: FrameSound, heard: &dyn Fn(&FrameSound) -> f64)
     Ok(fs)
 }
 
-/// `sync`, `repeat` and `loop` from params over `fs`.
-fn apply_timing(p: &Value, mut fs: FrameSound) -> Result<FrameSound> {
+/// `sync`, `repeat`, `loop`, `in_sec` and `out_sec` from params over `fs`.
+fn apply_timing(p: &Value, mut fs: FrameSound, snd: Option<&Sound>) -> Result<FrameSound> {
     if let Some(x) = opt_str(p, "sync")? {
         fs.sync = SoundSync::from_key(x).ok_or_else(|| EngineError::Param("param 'sync' must be event, start, stop or stream".into()))?;
     }
@@ -195,6 +208,54 @@ fn apply_timing(p: &Value, mut fs: FrameSound) -> Result<FrameSound> {
     }
     if let Some(b) = opt_bool(p, "loop")? {
         fs.looping = b;
+    }
+    let rate = snd.map_or(44_100, |x| x.rate.max(1));
+    let total = snd.map(|x| x.frames);
+    match p.get("in_sec") {
+        None => {}
+        Some(Value::Null) => fs.in_frames = 0,
+        Some(v) => {
+            let sec = v.as_f64().filter(|x| x.is_finite() && (0.0..=MAX_ENVELOPE_SECONDS).contains(x)).ok_or_else(|| EngineError::Param(format!("param 'in_sec' must be a number between 0 and {MAX_ENVELOPE_SECONDS}")))?;
+            let f = (sec * f64::from(rate)).round() as u64;
+            if let Some(max_f) = total
+                && max_f > 0
+                && f >= max_f
+            {
+                return Err(EngineError::Param("param 'in_sec' must be before the end of the sound".into()));
+            }
+            fs.in_frames = f.min(sound::MAX_TRIM_FRAMES);
+        }
+    }
+    match p.get("out_sec") {
+        None => {}
+        Some(Value::Null) => fs.out_frames = None,
+        Some(v) => {
+            let sec = v.as_f64().filter(|x| x.is_finite() && *x > 0.0 && *x <= MAX_ENVELOPE_SECONDS).ok_or_else(|| EngineError::Param(format!("param 'out_sec' must be a positive number at most {MAX_ENVELOPE_SECONDS} (or null to clear)")))?;
+            let mut f = (sec * f64::from(rate)).round().max(1.0) as u64;
+            if let Some(max_f) = total
+                && max_f > 0
+            {
+                f = f.min(max_f);
+            }
+            fs.out_frames = Some(f.min(sound::MAX_TRIM_FRAMES));
+        }
+    }
+    if let Some(max_f) = total
+        && max_f > 0
+        && fs.in_frames >= max_f
+    {
+        fs.in_frames = 0;
+    }
+    if let Some(out_f) = fs.out_frames {
+        if let Some(max_f) = total
+            && max_f > 0
+            && out_f > max_f
+        {
+            fs.out_frames = Some(max_f);
+        }
+        if fs.out_frames.is_some_and(|o| o <= fs.in_frames) {
+            return Err(EngineError::Param("param 'out_sec' must be greater than 'in_sec'".into()));
+        }
     }
     Ok(fs)
 }
@@ -210,9 +271,16 @@ fn sound_param(s: &Session, p: &Value) -> Result<SoundId> {
 pub(crate) fn place(s: &mut Session, p: &Value) -> Result<Value> {
     let id = sound_param(s, p)?;
     let fps = s.doc.stage.fps;
-    let want = s.doc.sound(id).map_or(1, |x| x.movie_frames(fps));
     let snd = s.doc.sound(id).cloned();
-    let fs = apply_settings(p, FrameSound::new(id), &|fs| snd.as_ref().map_or(0.0, |x| fs.heard_seconds(x, want, want, fps)))?;
+    let raw_want = snd.as_ref().map_or(1, |x| x.movie_frames(fps));
+    let fs = apply_settings(p, FrameSound::new(id), snd.as_ref(), &|fs| snd.as_ref().map_or(0.0, |x| fs.heard_seconds(x, raw_want, raw_want, fps)))?;
+    let want = snd.as_ref().map_or(1, |x| {
+        let rate = f64::from(x.rate.max(1));
+        let secs = fs.trimmed_frames(x.frames) as f64 / rate;
+        let fps64 = if fps.is_finite() && fps > 0.0 { f64::from(fps) } else { 24.0 };
+        ((secs * fps64).ceil() as u32).max(1)
+    });
+    let rate = snd.as_ref().map_or(44_100, |x| x.rate.max(1));
     let (lid, frame) = target(s, p)?;
     let extend = opt_bool(p, "extend")?.unwrap_or(false);
     let layer = s.layer_mut(lid)?;
@@ -229,13 +297,25 @@ pub(crate) fn place(s: &mut Session, p: &Value) -> Result<Value> {
     if extend && last && k.duration < want {
         k.duration = want.min(MAX_FRAME.saturating_sub(k.start).saturating_add(1)).max(1);
     }
-    let out = json!({"layer": layer_id.0, "keyframe": k.start, "duration": k.duration, "sound": id.0, "sync": fs.sync.key(), "effect": fs.effect.key(), "frames": want});
+    let out = json!({
+        "layer": layer_id.0,
+        "keyframe": k.start,
+        "duration": k.duration,
+        "sound": id.0,
+        "sync": fs.sync.key(),
+        "in_frames": fs.in_frames,
+        "out_frames": fs.out_frames,
+        "in_sec": fs.in_frames as f64 / f64::from(rate),
+        "out_sec": fs.out_frames.map(|o| o as f64 / f64::from(rate)),
+        "effect": fs.effect.key(),
+        "frames": want,
+    });
     k.sound = Some(fs);
     Ok(out)
 }
 
-/// Sound Settings: changes the keyframe's sound (keeping its settings), its sync, repeats or
-/// loop; `sound: null` takes it off.
+/// Sound Settings: changes the keyframe's sound (keeping its settings), its sync, repeats,
+/// loop or in/out trim points; `sound: null` takes it off.
 fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let new_id = match p.get("sound") {
         Some(Value::Null) => None,
@@ -249,7 +329,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     let tl = s.timeline();
     let place = tl.layer(lid.unwrap_or(s.layer)).and_then(|l| l.keyframe_at(frame)).map(|k| (k.duration, s.doc.frame_count().saturating_sub(s.doc.scene_start(s.scene).saturating_add(k.start))));
     let sounds = s.doc.sounds.clone();
-    let heard = move |fs: &FrameSound| match (sounds.iter().find(|x| x.id == fs.sound), place) {
+    let heard = |fs: &FrameSound| match (sounds.iter().find(|x| x.id == fs.sound), place) {
         (Some(x), Some((span, rest))) => fs.heard_seconds(x, span, rest, fps),
         _ => 0.0,
     };
@@ -259,15 +339,155 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         return Ok(json!({"keyframe": k.start, "removed": had}));
     };
     let base = match (change, k.sound.clone()) {
-        (Some(id), Some(cur)) => FrameSound { sound: id, ..cur },
+        (Some(id), Some(cur)) => FrameSound { sound: id, in_frames: 0, out_frames: None, ..cur },
         (Some(id), None) => FrameSound::new(id),
         (None, Some(cur)) => cur,
         (None, None) => return Err(EngineError::State(format!("the keyframe at frame {} has no sound; pass \"sound\"", k.start + 1))),
     };
-    let fs = apply_settings(p, base, &heard)?;
-    let out = json!({"keyframe": k.start, "sound": fs.sound.0, "sync": fs.sync.key(), "repeat": fs.repeat, "loop": fs.looping, "effect": fs.effect.key(), "envelope": envelope_json(&fs.effect)});
+    let snd = sounds.iter().find(|x| x.id == base.sound).map(|x| &**x);
+    let rate = snd.map_or(44_100, |x| x.rate.max(1));
+    let fs = apply_settings(p, base, snd, &heard)?;
+    let out = json!({
+        "keyframe": k.start,
+        "sound": fs.sound.0,
+        "sync": fs.sync.key(),
+        "repeat": fs.repeat,
+        "loop": fs.looping,
+        "in_frames": fs.in_frames,
+        "out_frames": fs.out_frames,
+        "in_sec": fs.in_frames as f64 / f64::from(rate),
+        "out_sec": fs.out_frames.map(|o| o as f64 / f64::from(rate)),
+        "effect": fs.effect.key(),
+        "envelope": envelope_json(&fs.effect),
+    });
     k.sound = Some(fs);
     Ok(out)
+}
+
+/// Split Audio (`P-022`): splits a sounding keyframe span at `frame > k.start` into
+/// `[k.start .. frame)` and `[frame .. k.end())`, capping the first keyframe's `out_frames`
+/// and advancing the second keyframe's `in_frames` by the elapsed audio sample frames.
+fn split_sound(s: &mut Session, p: &Value) -> Result<Value> {
+    let (lid, frame) = target(s, p)?;
+    let fps = s.doc.stage.fps;
+    let target_lid = lid.unwrap_or(s.layer);
+    let (k_start, k_end, orig_fs, rate, total_frames) = {
+        let tl = s.timeline();
+        let layer = tl.layer(target_lid).ok_or_else(|| EngineError::State(format!("no layer with id {}", target_lid.0)))?;
+        if layer.kind == LayerKind::Folder {
+            return Err(EngineError::State(format!("'{}' is a folder; sounds go on a layer's keyframes", layer.name)));
+        }
+        let idx = layer.keyframe_index_at(frame).ok_or_else(|| EngineError::State(format!("frame {} is empty on this layer", frame + 1)))?;
+        let k = layer.keyframes.get(idx).ok_or_else(|| EngineError::State("no keyframe there".into()))?;
+        let fs = k.sound.clone().filter(|f| f.sync != SoundSync::Stop).ok_or_else(|| EngineError::State(format!("the keyframe at frame {} has no sound to split", k.start + 1)))?;
+        if frame <= k.start {
+            return Err(EngineError::State("move the playhead inside the sound's span (after its first frame) to split it".into()));
+        }
+        let snd = s.doc.sound(fs.sound);
+        let rate = snd.map_or(44_100, |x| x.rate.max(1));
+        let total = snd.map(|x| x.frames);
+        (k.start, k.end(), fs, rate, total)
+    };
+
+    let elapsed = frame_start(u64::from(frame), fps, rate).saturating_sub(frame_start(u64::from(k_start), fps, rate));
+    if elapsed == 0 {
+        return Err(EngineError::State("the split frame does not advance any audio samples".into()));
+    }
+
+    let limit = orig_fs.out_frames.or(total_frames.filter(|&t| t > 0));
+    let mut first_fs = orig_fs.clone();
+    let mut second_fs = orig_fs.clone();
+
+    if orig_fs.looping {
+        if let Some(lim) = limit {
+            let play_len = lim.saturating_sub(orig_fs.in_frames).max(1);
+            second_fs.in_frames = orig_fs.in_frames.saturating_add(elapsed % play_len);
+        } else {
+            second_fs.in_frames = orig_fs.in_frames.saturating_add(elapsed).min(sound::MAX_TRIM_FRAMES);
+        }
+        // If Event-looping, cut first half to its span by capping repeats or converting to Stream;
+        // if single-pass within limit, cap first_fs.out_frames.
+        if orig_fs.sync != SoundSync::Stream {
+            let cut = orig_fs.in_frames.saturating_add(elapsed);
+            if limit.is_none_or(|lim| cut <= lim) {
+                first_fs.looping = false;
+                first_fs.repeat = 1;
+                first_fs.out_frames = Some(cut.min(sound::MAX_TRIM_FRAMES));
+            }
+        }
+    } else {
+        let play_len = limit.map(|lim| lim.saturating_sub(orig_fs.in_frames));
+        let total_play = play_len.map(|l| l.saturating_mul(u64::from(orig_fs.repeat.max(1))));
+        if let Some(tp) = total_play
+            && elapsed >= tp
+        {
+            return Err(EngineError::State("the sound has already finished playing before this frame".into()));
+        }
+        if let Some(pl) = play_len.filter(|&l| l > 0 && orig_fs.repeat > 1) {
+            let passed_repeats = (elapsed / pl) as u32;
+            second_fs.repeat = orig_fs.repeat.saturating_sub(passed_repeats).max(1);
+            second_fs.in_frames = orig_fs.in_frames.saturating_add(elapsed % pl);
+            if passed_repeats == 0 {
+                let cut = orig_fs.in_frames.saturating_add(elapsed);
+                first_fs.repeat = 1;
+                first_fs.out_frames = Some(cut.min(sound::MAX_TRIM_FRAMES));
+            } else {
+                first_fs.repeat = passed_repeats.max(1);
+            }
+        } else {
+            let split_sample = orig_fs.in_frames.saturating_add(elapsed).min(sound::MAX_TRIM_FRAMES);
+            if let Some(lim) = limit
+                && split_sample >= lim
+            {
+                return Err(EngineError::State("the sound has already finished playing before this frame".into()));
+            }
+            first_fs.out_frames = Some(orig_fs.out_frames.map_or(split_sample, |o| o.min(split_sample)));
+            second_fs.in_frames = split_sample;
+        }
+    }
+
+    if let SoundEffect::Custom(pts) = &orig_fs.effect {
+        let elapsed_sec = elapsed as f64 / f64::from(rate);
+        first_fs.effect = SoundEffect::Custom(clean_points(
+            &pts.iter().filter(|pt| pt.at <= elapsed_sec + 1e-6).copied().collect::<Vec<_>>(),
+        ));
+        let shifted: Vec<EnvelopePoint> = pts
+            .iter()
+            .filter(|pt| pt.at >= elapsed_sec - 1e-6)
+            .map(|pt| EnvelopePoint::new((pt.at - elapsed_sec).max(0.0), pt.left, pt.right))
+            .collect();
+        if !shifted.is_empty() {
+            second_fs.effect = SoundEffect::Custom(clean_points(&shifted));
+        }
+    }
+
+    first_fs.sanitize();
+    second_fs.sanitize();
+
+    let layer = s.layer_mut(Some(target_lid))?;
+    crate::cmds_timeline::insert_keyframe_at(layer, frame, true)?;
+    if let Some(i0) = layer.keyframe_starting_at(k_start)
+        && let Some(k0) = layer.keyframe_mut(i0)
+    {
+        k0.sound = Some(first_fs.clone());
+    }
+    if let Some(i1) = layer.keyframe_starting_at(frame)
+        && let Some(k1) = layer.keyframe_mut(i1)
+    {
+        k1.sound = Some(second_fs.clone());
+    }
+    Ok(json!({
+        "layer": target_lid.0,
+        "first_keyframe": k_start,
+        "first_duration": frame - k_start,
+        "first_in_frames": first_fs.in_frames,
+        "first_out_frames": first_fs.out_frames,
+        "second_keyframe": frame,
+        "second_duration": k_end - frame,
+        "second_in_frames": second_fs.in_frames,
+        "second_out_frames": second_fs.out_frames,
+        "second_in_sec": second_fs.in_frames as f64 / f64::from(rate),
+    }))
 }
 
 /// A custom effect's points as `[{at, left, right}…]` (`null` for the presets).

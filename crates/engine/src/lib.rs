@@ -9,6 +9,7 @@ pub mod access;
 mod anim;
 pub mod left_out;
 mod cmds_actions;
+pub mod cmds_autorig;
 mod cmds_bone;
 mod cmds_warp;
 pub mod cmds_brush;
@@ -21,9 +22,11 @@ pub mod cmds_envelope;
 pub mod cmds_drop;
 pub mod cmds_erase;
 mod cmds_file;
+pub mod psd_import;
 mod cmds_frames;
 mod cmds_group;
 mod cmds_modify;
+pub mod cmds_transform3d;
 #[cfg(test)]
 mod origin_tests;
 #[cfg(test)]
@@ -32,6 +35,7 @@ mod cmds_motion;
 mod cmds_retime;
 mod cmds_hints;
 mod cmds_layer;
+pub mod cmds_layer_fx;
 pub mod cmds_library;
 pub mod cmds_macro;
 pub mod cmds_paint;
@@ -50,15 +54,18 @@ pub mod cmds_plugin;
 mod cmds_scene;
 pub mod cmds_sound;
 pub mod cmds_audio_keys;
+pub mod cmds_frame_picker;
 pub mod cmds_data;
 pub mod data_import;
 pub mod cmds_text;
 pub mod embed;
 mod cmds_timeline;
+pub mod cmds_timeline_power;
 mod cmds_view;
 mod cmds_width;
 mod cmds_stroke;
 pub mod cmds_shape;
+pub mod cmds_shape_pro;
 pub mod cmds_swatch;
 pub mod confirm;
 pub mod editing;
@@ -156,6 +163,7 @@ impl CommandSpec {
 pub fn commands() -> Vec<CommandSpec> {
     let mut v = Vec::new();
     v.extend(cmds_file::specs());
+    v.extend(psd_import::specs());
     v.extend(plugin_export::specs());
     v.extend(cmds_envelope::specs());
     v.extend(publish::specs());
@@ -164,10 +172,13 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(cmds_drop::specs());
     v.extend(cmds_recovery::specs());
     v.extend(cmds_timeline::specs());
+    v.extend(cmds_timeline_power::specs());
     v.extend(cmds_layer::specs());
+    v.extend(cmds_layer_fx::specs());
     v.extend(cmds_camera::specs());
     v.extend(parenting::specs());
     v.extend(cmds_bone::specs());
+    v.extend(cmds_autorig::specs());
     v.extend(cmds_warp::specs());
     v.extend(cmds_motion::specs());
     v.extend(cmds_retime::specs());
@@ -183,6 +194,7 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(cmds_library::specs());
     v.extend(merge::specs());
     v.extend(cmds_modify::specs());
+    v.extend(cmds_transform3d::specs());
     v.extend(cmds_path::specs());
     v.extend(cmds_raw::specs());
     v.extend(cmds_rawsub::specs());
@@ -200,9 +212,11 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(cmds_width::specs());
     v.extend(cmds_stroke::specs());
     v.extend(cmds_shape::specs());
+    v.extend(cmds_shape_pro::specs());
     v.extend(cmds_plugin::specs());
     v.extend(cmds_sound::specs());
     v.extend(cmds_audio_keys::specs());
+    v.extend(cmds_frame_picker::specs());
     v.extend(cmds_video::specs());
     v.extend(cmds_actions::specs());
     v.extend(cmds_script::specs());
@@ -246,7 +260,7 @@ pub use cmds_layer::LAYER_COLORS;
 /// The command namespaces that change a timeline's layers and frames, refused while a group is
 /// open for editing (ADR 0073): a group is one layer and one frame. A name ending in `.` is a
 /// namespace, any other one command.
-const GROUP_REFUSES: &[&str] = &["timeline.", "layer.", "camera.", "bone.", "motion.", "tween.", "frames.", "sound.place", "sound.to_keyframes", "sound.lip_sync", "script.set", "script.clear"];
+const GROUP_REFUSES: &[&str] = &["timeline.", "layer.", "camera.", "bone.", "motion.", "tween.", "frames.", "sound.place", "sound.split", "sound.to_keyframes", "sound.lip_sync", "script.set", "script.clear"];
 
 /// Last addressable frame (0-based); about 70 minutes at 24 fps.
 pub const MAX_FRAME: u32 = anicraft_doc::MAX_FRAME;
@@ -307,6 +321,10 @@ pub struct ToolStyle {
     /// What several selected objects turn, scale and skew about with Free Transform and
     /// Modify › Transform (ADR 0109). The whole selection's point by default, as in Animate.
     pub transform_origin: TransformOrigin,
+    /// Active Tagged Swatch id for new/applied fills (P-025), cleared when an untagged fill is set.
+    pub fill_tag: Option<u64>,
+    /// Active Tagged Swatch id for new/applied strokes (P-025), cleared when an untagged stroke is set.
+    pub stroke_tag: Option<u64>,
 }
 
 /// What several selected objects are transformed about (ADR 0109, issue #296).
@@ -349,7 +367,7 @@ impl TransformOrigin {
 
 impl Default for ToolStyle {
     fn default() -> Self {
-        ToolStyle { fill: anicraft_doc::Rgba::hex(0x3d8bfd), fill_paint: None, lock_fill: false, stroke: anicraft_doc::Rgba::hex(0x1b2a4a), stroke_width: 2.0, use_fill: true, use_stroke: true, stroke_profile: anicraft_doc::ProfilePreset::Uniform, custom_profile: None, line: anicraft_doc::StrokeStyle::default(), object_drawing: true, snap_objects: true, transform_origin: TransformOrigin::Selection }
+        ToolStyle { fill: anicraft_doc::Rgba::hex(0x3d8bfd), fill_paint: None, lock_fill: false, stroke: anicraft_doc::Rgba::hex(0x1b2a4a), stroke_width: 2.0, use_fill: true, use_stroke: true, stroke_profile: anicraft_doc::ProfilePreset::Uniform, custom_profile: None, line: anicraft_doc::StrokeStyle::default(), object_drawing: true, snap_objects: true, transform_origin: TransformOrigin::Selection, fill_tag: None, stroke_tag: None }
     }
 }
 
@@ -365,10 +383,11 @@ impl ToolStyle {
         let paint = self.fill_paint();
         if self.lock_fill || matches!(paint, anicraft_doc::Paint::Solid(_)) { paint.transformed(to_local) } else { paint.fitted(bounds) }
     }
-    /// Sets the fill swatch to a solid colour (dropping a picked gradient or bitmap).
+    /// Sets the fill swatch to a solid colour (dropping a picked gradient, bitmap, or tag).
     pub fn set_fill_color(&mut self, c: anicraft_doc::Rgba) {
         self.fill = c;
         self.fill_paint = None;
+        self.fill_tag = None;
     }
     /// The width profile new strokes get.
     pub fn profile(&self) -> Option<anicraft_doc::WidthProfile> {
@@ -478,6 +497,8 @@ pub struct Session {
     pub filter_presets: filter_library::FilterLibrary,
     /// Copied filters (Copy Filters, ADR 0091), for Paste Filters.
     pub filter_clipboard: Option<Vec<anicraft_doc::FilterEntry>>,
+    /// Copied motion clip (Copy Motion, `P-041`), for Paste Motion.
+    pub motion_clipboard: Option<anicraft_doc::MotionClip>,
     /// The open envelope (ADR 0080): view state over the shapes it bends, like a gesture.
     pub(crate) envelope: Option<cmds_envelope::Envelope>,
     /// The commands run since the last undo step was recorded, which the next step keeps so it
@@ -608,6 +629,7 @@ impl Session {
             brushes: brush_library::BrushLibrary::default(),
             filter_presets: filter_library::FilterLibrary::default(),
             filter_clipboard: None,
+            motion_clipboard: None,
             envelope: None,
             rec: history::Recording::default(),
             gesture_rec: 0,
@@ -709,12 +731,14 @@ impl Session {
         let brushes = std::mem::take(&mut self.brushes);
         let filter_presets = std::mem::take(&mut self.filter_presets);
         let filter_clipboard = self.filter_clipboard.take();
+        let motion_clipboard = self.motion_clipboard.take();
         *self = Session::new(doc);
         self.recent = recent;
         self.brushes = brushes;
         self.filter_presets = filter_presets;
-        // Like copied artwork, copied filters carry across to the next document.
+        // Like copied artwork, copied filters and motion carry across to the next document.
         self.filter_clipboard = filter_clipboard;
+        self.motion_clipboard = motion_clipboard;
         // The clipboard survives New/Open, so artwork can move between documents.
         self.clipboard = clipboard;
         self.plugins = plugins;
@@ -746,6 +770,7 @@ impl Session {
         swap(&mut self.frame_clipboard, &mut from.frame_clipboard);
         swap(&mut self.ease_clipboard, &mut from.ease_clipboard);
         swap(&mut self.filter_clipboard, &mut from.filter_clipboard);
+        swap(&mut self.motion_clipboard, &mut from.motion_clipboard);
         swap(&mut self.plugins, &mut from.plugins);
         swap(&mut self.recent, &mut from.recent);
         swap(&mut self.brushes, &mut from.brushes);
@@ -1434,6 +1459,8 @@ mod tests_sound;
 #[cfg(test)]
 mod tests_audio_keys;
 #[cfg(test)]
+mod frame_picker_tests;
+#[cfg(test)]
 mod video_tests;
 #[cfg(test)]
 mod hint_tests;
@@ -1515,3 +1542,7 @@ mod group_tests;
 mod swatch_tests;
 #[cfg(test)]
 mod parity_tests;
+#[cfg(test)]
+mod timeline_power_tests;
+#[cfg(test)]
+mod tests_pack3_fx_swatches;

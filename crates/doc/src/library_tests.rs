@@ -7,6 +7,7 @@ fn instance(d: &mut Document, symbol: SymbolId) -> Arc<Element> {
         name: String::new(),
         transform: Default::default(),
         color: Default::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
     })
 }
@@ -133,7 +134,7 @@ fn uses_count_every_keyframe_and_unused_follows_reachability() {
     let b = add_symbol(&mut d, "B", &[a]);
     if let Some(s) = d.library.iter_mut().find(|s| s.id == a) {
         let layer = Arc::make_mut(&mut Arc::make_mut(s).timeline.layers[0]);
-        let e = Arc::new(Element { id: ElementId(5_000_000), name: String::new(), transform: Default::default(), color: Default::default(), kind: ElementKind::Symbol { symbol: b, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None } });
+        let e = Arc::new(Element { id: ElementId(5_000_000), name: String::new(), transform: Default::default(), color: Default::default(), transform_3d: None, kind: ElementKind::Symbol { symbol: b, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None } });
         layer.keyframe_mut(0).unwrap().elements.push(e);
     }
     assert_eq!(d.unused_items(), vec![LibraryItem::Symbol(a), LibraryItem::Symbol(b)]);

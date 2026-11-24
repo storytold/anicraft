@@ -48,6 +48,9 @@ pub fn tool_id(t: Tool) -> &'static str {
     match t {
         Tool::Select => "tool.selection",
         Tool::Subselect => "tool.subselection",
+        Tool::Lasso => "tool.lasso",
+        Tool::PolyLasso => "tool.poly_lasso",
+        Tool::MagicWand => "tool.magic_wand",
         Tool::Transform => "tool.free_transform",
         Tool::GradientTransform => "tool.gradient_transform",
         Tool::Width => "tool.width",
@@ -68,7 +71,9 @@ pub fn tool_id(t: Tool) -> &'static str {
         Tool::Bone => "tool.bone",
         Tool::Bind => "tool.bind",
         Tool::Warp => "tool.warp",
+        Tool::Transform3D => "tool.transform_3d",
         Tool::Hand => "tool.hand",
+        Tool::RotateView => "tool.rotate_view",
         Tool::Zoom => "tool.zoom",
     }
 }
@@ -90,6 +95,8 @@ fn view_label(id: &str) -> &'static str {
         "view.find_prev" => tr_noop!("Find Previous"),
         "view.movie_explorer" => tr_noop!("Movie Explorer"),
         "view.panel.properties" => tr_noop!("Properties Panel"),
+        "view.panel.auto_rig" => tr_noop!("Auto Rig Studio Panel"),
+        "view.panel.frame_picker" => tr_noop!("Frame Picker Panel"),
         "view.panel.align" => tr_noop!("Align Panel"),
         "view.panel.colour" => tr_noop!("Colour Panel"),
         "view.panel.library" => tr_noop!("Library Panel"),

@@ -16,6 +16,9 @@ use std::sync::OnceLock;
 pub enum Icon {
     Select,
     Subselect,
+    Lasso,
+    PolyLasso,
+    MagicWand,
     Transform,
     Pen,
     Pencil,
@@ -30,6 +33,7 @@ pub enum Icon {
     Bucket,
     Ink,
     Hand,
+    RotateView,
     Zoom,
     First,
     Last,
@@ -71,6 +75,7 @@ pub enum Icon {
     Bone,
     Bind,
     Warp,
+    Transform3D,
     EditMultiple,
     Layer,
     Parent,
@@ -93,7 +98,7 @@ pub enum Icon {
 
 impl Icon {
     #[cfg(test)]
-    pub const ALL: [Icon; 75] = [
+    pub const ALL: [Icon; 80] = [
         Icon::PanelProperties,
         Icon::PanelSwatches,
         Icon::PanelLibrary,
@@ -102,6 +107,7 @@ impl Icon {
         Icon::PanelOutput,
         Icon::PanelActions,
         Icon::Warp,
+        Icon::Transform3D,
         Icon::Plus,
         Icon::Trash,
         Icon::Copy,
@@ -140,6 +146,9 @@ impl Icon {
         Icon::DistributeV,
         Icon::Select,
         Icon::Subselect,
+        Icon::Lasso,
+        Icon::PolyLasso,
+        Icon::MagicWand,
         Icon::Transform,
         Icon::Pen,
         Icon::Pencil,
@@ -154,6 +163,7 @@ impl Icon {
         Icon::Bucket,
         Icon::Ink,
         Icon::Hand,
+        Icon::RotateView,
         Icon::Zoom,
         Icon::First,
         Icon::Last,
@@ -183,6 +193,9 @@ impl Icon {
             Icon::Select => ("mouse-pointer-2", false),
             // A hollow arrowhead, mirrored to point like a cursor: the subselection arrow.
             Icon::Subselect => ("navigation", true),
+            Icon::Lasso => ("anicraft-lasso", false),
+            Icon::PolyLasso => ("anicraft-poly-lasso", false),
+            Icon::MagicWand => ("anicraft-magic-wand", false),
             Icon::Transform => ("scaling", false),
             // A stroke swelling and tapering, with a width point across it (AniCraft original).
             Icon::Width => ("anicraft-width", false),
@@ -206,6 +219,7 @@ impl Icon {
             Icon::Bucket => ("paint-bucket", false),
             Icon::Ink => ("droplet", false),
             Icon::Hand => ("hand", false),
+            Icon::RotateView => ("anicraft-rotate-view", false),
             Icon::Zoom => ("zoom-in", false),
             Icon::First => ("chevrons-left", false),
             Icon::Last => ("chevrons-right", false),
@@ -253,6 +267,8 @@ impl Icon {
             Icon::Bind => ("anicraft-bind", false),
             // A mesh bent around a pin (AniCraft original, on Lucide's grid): Asset Warp.
             Icon::Warp => ("anicraft-warp", false),
+            // A perspective-tilted card with a 3D orbit arrow (AniCraft original): 3D Rotation.
+            Icon::Transform3D => ("anicraft-transform-3d", false),
             // Frames stacked one behind the other, all edited at once (AniCraft original, on
             // Lucide's grid): Edit Multiple Frames.
             Icon::EditMultiple => ("anicraft-edit-multiple", false),
@@ -350,6 +366,7 @@ static FILES: &[(&str, &str)] = &[
     ("anicraft-bind", include_str!("../assets/icons/anicraft-bind.svg")),
     ("anicraft-parent", include_str!("../assets/icons/anicraft-parent.svg")),
     ("anicraft-warp", include_str!("../assets/icons/anicraft-warp.svg")),
+    ("anicraft-transform-3d", include_str!("../assets/icons/anicraft-transform-3d.svg")),
     ("anicraft-edit-multiple", include_str!("../assets/icons/anicraft-edit-multiple.svg")),
     ("folder", include_str!("../assets/icons/folder.svg")),
     ("folder-open", include_str!("../assets/icons/folder-open.svg")),
@@ -364,6 +381,10 @@ static FILES: &[(&str, &str)] = &[
     ("anicraft-panel-history", include_str!("../assets/icons/anicraft-panel-history.svg")),
     ("anicraft-panel-output", include_str!("../assets/icons/anicraft-panel-output.svg")),
     ("anicraft-panel-actions", include_str!("../assets/icons/anicraft-panel-actions.svg")),
+    ("anicraft-lasso", include_str!("../assets/icons/anicraft-lasso.svg")),
+    ("anicraft-poly-lasso", include_str!("../assets/icons/anicraft-poly-lasso.svg")),
+    ("anicraft-magic-wand", include_str!("../assets/icons/anicraft-magic-wand.svg")),
+    ("anicraft-rotate-view", include_str!("../assets/icons/anicraft-rotate-view.svg")),
 ];
 
 /// The value of attribute `name` in an element's tag text.

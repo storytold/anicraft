@@ -9,7 +9,7 @@ fn pose(tx: f32, ty: f32, deg: f32) -> Affine {
 }
 
 fn square(id: u64, m: Affine) -> Arc<Element> {
-    Arc::new(Element { id: ElementId(id), name: String::new(), transform: m, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), Paint::Solid(Rgba::BLACK))) })
+    Arc::new(Element { id: ElementId(id), name: String::new(), transform: m, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), Paint::Solid(Rgba::BLACK))) })
 }
 
 /// A layer whose one object goes from `from` (frame 0) to `to` (frame 10), tweened.
@@ -204,7 +204,7 @@ fn parenting_works_inside_a_symbol() {
     let sym = Symbol { id: SymbolId(500), name: "Rig".into(), kind: SymbolKind::Graphic, linkage: None, scale_grid_kept: None, scale_grid: None, timeline: Timeline { layers: vec![Arc::new(child), Arc::new(tweened(1, pose(0.0, 0.0, 0.0), pose(0.0, 0.0, 90.0)))] } };
     let mut host = Layer::new(LayerId(9), "host");
     let mut k = Keyframe::new(0, 11);
-    k.elements.push(Arc::new(Element { id: ElementId(900), name: String::new(), transform: Affine::translate(300.0, 300.0), color: ColorEffect::default(), kind: ElementKind::Symbol { symbol: SymbolId(500), loop_mode: LoopMode::Loop, first_frame: 0, blend: BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None } }));
+    k.elements.push(Arc::new(Element { id: ElementId(900), name: String::new(), transform: Affine::translate(300.0, 300.0), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Symbol { symbol: SymbolId(500), loop_mode: LoopMode::Loop, first_frame: 0, blend: BlendMode::Normal, filters: Vec::new(), events: Vec::new(), pivot: None } }));
     host.keyframes = vec![Arc::new(k)];
     let mut d = doc(vec![host]);
     d.library.push(Arc::new(sym));

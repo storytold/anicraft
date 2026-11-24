@@ -7,6 +7,7 @@ fn shape_el(id: u64, x: f32) -> Element {
         name: String::new(),
         transform: Affine::translate(x, 0.0),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), Paint::Solid(Rgba::BLACK))),
     }
 }
@@ -81,6 +82,7 @@ fn nested_symbols_compose_transforms_and_cycles_terminate() {
             name: String::new(),
             transform: Affine::translate(1.0, 0.0),
             color: ColorEffect::default(),
+            transform_3d: None,
             kind: ElementKind::Symbol { symbol: sid, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
         },
     );
@@ -94,6 +96,7 @@ fn nested_symbols_compose_transforms_and_cycles_terminate() {
             name: String::new(),
             transform: Affine::translate(100.0, 0.0),
             color: ColorEffect::Alpha(0.5),
+            transform_3d: None,
             kind: ElementKind::Symbol { symbol: sid, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
         },
     );
@@ -146,6 +149,7 @@ fn masks_inside_symbols_nest_in_the_instance_clip() {
         name: String::new(),
         transform: Affine::IDENTITY,
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: sid, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
     };
     push(Arc::make_mut(&mut d.timeline_mut(0).layers[1]), 0, inst);
@@ -233,6 +237,7 @@ fn shape_tweens_morph_between_different_shapes_and_classic_ones_hold() {
         name: String::new(),
         transform: Affine::IDENTITY,
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Shape(Shape::filled(path, Paint::Solid(Rgba::BLACK))),
     };
     let mut k0 = Keyframe::new(0, 10);
@@ -272,7 +277,7 @@ fn motion_guides_steer_tweens_and_their_artwork_is_marked() {
     let mut line = Shape::filled(l, Paint::Solid(Rgba::BLACK)).with_stroke(Rgba::BLACK, 1.0);
     line.fill = None;
     g.keyframe_mut(0).unwrap().duration = 11;
-    push(&mut g, 0, Element { id: ElementId(5), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(line) });
+    push(&mut g, 0, Element { id: ElementId(5), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(line) });
     let mut moving = Layer::new(LayerId(2), "Box");
     moving.parent = Some(LayerId(1));
     let mut k0 = Keyframe::new(0, 10);
@@ -323,6 +328,7 @@ fn movie_clips_play_their_own_timeline_graphics_keep_step_buttons_hold_up() {
         name: String::new(),
         transform: Affine::translate(x, 0.0),
         color: ColorEffect::default(),
+        transform_3d: None,
         kind: ElementKind::Symbol { symbol: sid, loop_mode: crate::LoopMode::Loop, first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None },
     };
     let (mut k0, mut k1) = (Keyframe::new(0, 5), Keyframe::new(5, 7));
@@ -419,7 +425,7 @@ fn motion_tweens_survive_a_file_round_trip_and_old_files_have_none() {
 /// so element transforms count too).
 fn square_to_circle(hints: Vec<crate::ShapeHint>) -> Document {
     let mut d = Document::default();
-    let el = |id, x, path| Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, 0.0), color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(path, Paint::Solid(Rgba::BLACK))) };
+    let el = |id, x, path| Element { id: ElementId(id), name: String::new(), transform: Affine::translate(x, 0.0), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(path, Paint::Solid(Rgba::BLACK))) };
     let mut k0 = Keyframe::new(0, 10);
     k0.elements.push(Arc::new(el(1, 0.0, Path::rect(0.0, 0.0, 100.0, 100.0))));
     k0.tween = Some(Tween { easing: Easing::Linear, kind: TweenKind::Shape, ..Default::default() });
@@ -561,7 +567,7 @@ fn instance_filters_tween_when_they_pair_up() {
     let mut d = Document::default();
     let sid = SymbolId(90);
     d.library.push(Arc::new(Symbol { id: sid, name: "Clip".into(), kind: SymbolKind::MovieClip, linkage: None, scale_grid_kept: None, scale_grid: None, timeline: Timeline { layers: vec![Arc::new(Layer::new(LayerId(91), "x"))] } }));
-    let inst = |filters: Vec<Filter>| Element { id: ElementId(92), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Symbol { symbol: sid, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: filters.into_iter().map(Into::into).collect(), events: Vec::new(), pivot: None } };
+    let inst = |filters: Vec<Filter>| Element { id: ElementId(92), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Symbol { symbol: sid, loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: filters.into_iter().map(Into::into).collect(), events: Vec::new(), pivot: None } };
     let blur = |b: f32| Filter::Blur { blur_x: b, blur_y: b, quality: 1 };
     let mut tw = Tween::new(Easing::Linear, TweenKind::Classic);
     tw.set_ease(crate::EaseGroup::Filters, Some(Easing::QuadIn));
@@ -646,7 +652,7 @@ fn text_el(id: u64, filters: Vec<crate::FilterEntry>, field: Option<crate::TextF
         filters,
         ..crate::TextBlock::default()
     };
-    Element { id: ElementId(id), name: String::new(), transform: Affine::translate(50.0, 40.0), color: ColorEffect::Alpha(0.5), kind: ElementKind::Text(Arc::new(block)) }
+    Element { id: ElementId(id), name: String::new(), transform: Affine::translate(50.0, 40.0), color: ColorEffect::Alpha(0.5), transform_3d: None, kind: ElementKind::Text(Arc::new(block)) }
 }
 
 /// ADR 0099: text with filters draws in a group of its own that the filters run on, as a movie
@@ -720,7 +726,7 @@ fn raw_stroke_runs_with_different_colour_effects_keep_them_in_a_shape_tween() {
         let mut s = Shape::filled(p, Paint::Solid(Rgba::BLACK)).with_stroke(Rgba::BLACK, 2.0);
         s.fill = None;
         s.merge = true;
-        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color, kind: ElementKind::Shape(s) })
+        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color, transform_3d: None, kind: ElementKind::Shape(s) })
     };
     let mut d = Document::default();
     let mut k0 = Keyframe::new(0, 10);
@@ -757,7 +763,7 @@ fn polygon_runs_doc(stroke: &crate::Stroke) -> Document {
                 s.fill = None;
                 s.stroke = Some(stroke.clone());
                 s.merge = true;
-                Arc::new(Element { id: ElementId(first + k as u64), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, kind: ElementKind::Shape(s) })
+                Arc::new(Element { id: ElementId(first + k as u64), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, transform_3d: None, kind: ElementKind::Shape(s) })
             })
             .collect()
     };
@@ -798,7 +804,7 @@ fn joined_stroke_runs_keep_their_identities_in_a_shape_tween() {
         s.fill = None;
         s.stroke = Some(solid_stroke());
         s.merge = true;
-        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, kind: ElementKind::Shape(s) })
+        Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::None, transform_3d: None, kind: ElementKind::Shape(s) })
     };
     for (a0, a1, a2, b0, b1, b2, b3) in [
         (v(0.0, 20.0), v(40.0, 20.0), v(80.0, 20.0), v(0.0, 20.0), v(30.0, 20.0), v(60.0, 20.0), v(90.0, 20.0)),
@@ -868,6 +874,7 @@ fn polygon_at(first: u64, at: anicraft_geom::Vec2, radius: f32, sides: usize, st
             name: String::new(),
             transform: Affine::translate(centre.x, centre.y),
             color: ColorEffect::None,
+            transform_3d: None,
             kind: ElementKind::Shape(s),
         })
     };

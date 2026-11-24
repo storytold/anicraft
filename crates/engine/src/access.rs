@@ -333,6 +333,7 @@ pub const PATH_PARAMS: &[(&str, &[(&str, Access)])] = &[
     ("file.delete_template", &[("folder", Write)]),
     ("file.templates", &[("folder", Read)]),
     ("file.import", &[("path", Read)]),
+    ("file.import_psd", &[("path", Read)]),
     ("file.import_to_library", &[("path", Read)]),
     ("file.import_video", &[("path", Read)]),
     ("file.video_info", &[("path", Read)]),
@@ -374,6 +375,9 @@ pub const PATH_PARAMS: &[(&str, &[(&str, Access)])] = &[
     ("macro.delete", &[("folder", Write)]),
     ("macro.move", &[("folder", Write)]),
     ("macro.import", &[("folder", Write), ("path", Read)]),
+    ("rig.auto_detect", &[("path", Read)]),
+    ("rig.save_preset", &[("path", Write)]),
+    ("rig.load_preset", &[("path", Read), ("artwork_path", Read)]),
 ];
 
 /// Commands whose `path`, `dir` or `folder` is not a place on disk (an element, a Library
@@ -408,6 +412,7 @@ pub const NOT_FILES: &[&str] = &[
     "library.duplicate",
     "library.delete",
     "modify.convert_to_symbol",
+    "symbol.new_empty",
     "prefs.recent_pin",
     "prefs.recent_remove",
     "file.recent_list",

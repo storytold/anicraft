@@ -72,7 +72,7 @@ fn check(name: &str, doc: &Document, scale: f32) -> (usize, usize) {
 }
 
 fn shape_el(id: u64, m: Affine, shape: Shape) -> Arc<Element> {
-    Arc::new(Element { id: ElementId(id), name: String::new(), transform: m, color: ColorEffect::default(), kind: ElementKind::Shape(shape) })
+    Arc::new(Element { id: ElementId(id), name: String::new(), transform: m, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(shape) })
 }
 
 /// A two-second movie, one layer per ease: classic tweens moving, turning, growing, skewing

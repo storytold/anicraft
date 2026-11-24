@@ -8,11 +8,11 @@ use boa_engine::{Context, Source};
 // ----- fixtures ---------------------------------------------------------------------------------
 
 fn rect(id: u64, x: f32, y: f32, w: f32, h: f32, c: u32) -> Arc<Element> {
-    Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(x, y, w, h), Paint::Solid(Rgba::hex(c)))) })
+    Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(x, y, w, h), Paint::Solid(Rgba::hex(c)))) })
 }
 
 fn inst(id: u64, symbol: u64, name: &str, m: Affine, events: Vec<EventHandler>) -> Arc<Element> {
-    Arc::new(Element { id: ElementId(id), name: name.into(), transform: m, color: ColorEffect::default(), kind: ElementKind::Symbol { symbol: SymbolId(symbol), loop_mode: LoopMode::Loop, first_frame: 0, blend: BlendMode::Normal, filters: Vec::new(), events, pivot: None } })
+    Arc::new(Element { id: ElementId(id), name: name.into(), transform: m, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Symbol { symbol: SymbolId(symbol), loop_mode: LoopMode::Loop, first_frame: 0, blend: BlendMode::Normal, filters: Vec::new(), events, pivot: None } })
 }
 
 fn kf(start: u32, duration: u32, elements: Vec<Arc<Element>>, actions: Vec<Action>, label: &str) -> Arc<Keyframe> {
@@ -90,6 +90,7 @@ fn fixture() -> Document {
         name: String::new(),
         transform: Affine::translate(20.0, 300.0),
         color: ColorEffect::Tint { color: Rgba::hex(0xff00ff), amount: 0.25 },
+        transform_3d: None,
         kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 100.0, 40.0), Paint::linear(Vec2::new(0.0, 0.0), Vec2::new(100.0, 0.0), vec![GradientStop { offset: 0.0, color: Rgba::hex(0xffffff) }, GradientStop { offset: 1.0, color: Rgba::hex(0x000000) }])).with_stroke(Rgba::hex(0xffff00), 2.0)),
     });
     let mut mask = Layer::new(LayerId(6), "mask");
@@ -510,8 +511,8 @@ fn frames_are_baked_and_stored_once() {
 fn variable_width_strokes_become_filled_outlines() {
     use anicraft_doc::{ProfilePreset, Stroke};
     let mut doc = Document::default();
-    let shape = Shape { path: Arc::new(Path::line(Vec2::new(10.0, 10.0), Vec2::new(200.0, 10.0))), fill: None, stroke: Some(Stroke::new(Rgba::hex(0x00ff00), 10.0).with_profile(ProfilePreset::TaperEnd.profile())), fill_rule: FillRule::NonZero, merge: false, warp: None };
-    let el = Element { id: ElementId(77), name: String::new(), transform: Affine::translate(5.0, 0.0), color: Default::default(), kind: ElementKind::Shape(shape) };
+    let shape = Shape { path: Arc::new(Path::line(Vec2::new(10.0, 10.0), Vec2::new(200.0, 10.0))), fill: None, stroke: Some(Stroke::new(Rgba::hex(0x00ff00), 10.0).with_profile(ProfilePreset::TaperEnd.profile())), fill_rule: FillRule::NonZero, merge: false, warp: None, fill_tag: None, stroke_tag: None };
+    let el = Element { id: ElementId(77), name: String::new(), transform: Affine::translate(5.0, 0.0), color: Default::default(), transform_3d: None, kind: ElementKind::Shape(shape) };
     Arc::make_mut(&mut doc.timeline_mut(0).layers[0]).keyframe_mut(0).unwrap().elements.push(Arc::new(el));
     let m = movie(&doc, &HtmlOptions::default());
     let items = &m.json["contents"][0]["l"][0]["e"];
@@ -525,10 +526,10 @@ fn stroke_caps_joins_and_dashes_reach_the_page() {
     use anicraft_doc::{Cap, Dash, Join, Stroke, StrokeStyle};
     let mut doc = Document::default();
     let style = StrokeStyle { cap: Cap::Butt, join: Join::Miter, miter_limit: 6.0, dash: Some(Dash::Dashed { lengths: vec![4.0, 1.5].into(), offset: 1.0 }) };
-    let line = |y: f32, st: Stroke| Shape { path: Arc::new(Path::line(Vec2::new(10.0, y), Vec2::new(200.0, y))), fill: None, stroke: Some(st), fill_rule: FillRule::NonZero, merge: false, warp: None };
+    let line = |y: f32, st: Stroke| Shape { path: Arc::new(Path::line(Vec2::new(10.0, y), Vec2::new(200.0, y))), fill: None, stroke: Some(st), fill_rule: FillRule::NonZero, merge: false, warp: None, fill_tag: None, stroke_tag: None };
     let shapes = [line(10.0, Stroke::new(Rgba::BLACK, 3.0)), line(30.0, Stroke::new(Rgba::BLACK, 3.0).with_style(style)), line(50.0, Stroke::new(Rgba::BLACK, 3.0).with_style(StrokeStyle { dash: Dash::dotted(2.0), ..StrokeStyle::default() }))];
     for (i, sh) in shapes.into_iter().enumerate() {
-        let el = Element { id: ElementId(70 + i as u64), name: String::new(), transform: Affine::scale(2.0, 2.0), color: Default::default(), kind: ElementKind::Shape(sh) };
+        let el = Element { id: ElementId(70 + i as u64), name: String::new(), transform: Affine::scale(2.0, 2.0), color: Default::default(), transform_3d: None, kind: ElementKind::Shape(sh) };
         Arc::make_mut(&mut doc.timeline_mut(0).layers[0]).keyframe_mut(0).unwrap().elements.push(Arc::new(el));
     }
     let m = movie(&doc, &HtmlOptions::default());
@@ -590,7 +591,7 @@ fn bitmaps_and_sounds_are_embedded_once() {
     let wav = anicraft_doc::audio::wav::encode(8000, 1, &[0.0; 80], anicraft_doc::audio::wav::Bits::Int16);
     doc.sounds.push(Arc::new(anicraft_doc::Sound::from_data(anicraft_doc::SoundId(60), "beep", wav).unwrap()));
     let fill = Paint::Bitmap { bitmap: anicraft_doc::BitmapId(50), repeat: true, matrix: Affine::scale(2.0, 2.0) };
-    let a = Element { id: ElementId(70), name: String::new(), transform: Affine::IDENTITY, color: Default::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), fill.clone())) };
+    let a = Element { id: ElementId(70), name: String::new(), transform: Affine::IDENTITY, color: Default::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), fill.clone())) };
     let b = Element { id: ElementId(71), kind: ElementKind::Shape(Shape::filled(Path::rect(20.0, 0.0, 10.0, 10.0), fill)), ..a.clone() };
     {
         let k = Arc::make_mut(&mut doc.timeline_mut(0).layers[0]).keyframe_mut(0).unwrap();
@@ -639,7 +640,7 @@ fn sounds_carry_their_envelopes_and_volumes_and_start_in_graphics_and_clips_as_i
         l.volume = volume;
         Arc::new(l)
     };
-    let inst = |id, symbol| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: Default::default(), kind: ElementKind::Symbol { symbol: SymbolId(symbol), loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None } });
+    let inst = |id, symbol| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: Default::default(), transform_3d: None, kind: ElementKind::Symbol { symbol: SymbolId(symbol), loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters: Vec::new(), events: Vec::new(), pivot: None } });
     // A graphic with a fading sound on its frame 1 (of 2), a clip with a left-channel one on its
     // frame 0 (of 3), both on a layer at half volume; a sound of the main timeline's own.
     doc.library.push(Arc::new(Symbol { linkage: None, scale_grid_kept: None, scale_grid: None, id: SymbolId(20), name: "g".into(), kind: SymbolKind::Graphic, timeline: Timeline { layers: vec![layer(21, vec![key(0, 1, None, vec![]), key(1, 1, snd(SoundSync::Event, SoundEffect::FadeOut), vec![])], 1.0)] } }));
@@ -723,7 +724,7 @@ fn button_sounds_start_in_the_page_as_in_the_player() {
 #[test]
 fn hostile_documents_export_without_panicking() {
     let mut doc = Document::default();
-    let bad = Element { id: ElementId(5), name: "x".into(), transform: Affine { m: [f32::NAN, 0.0, 0.0, 1.0, f32::INFINITY, 0.0] }, color: ColorEffect::Advanced(ColorTransform { mul: [f32::NAN, 2.0, -1.0, f32::INFINITY], add: [f32::NAN, 0.0, 0.0, 0.0] }), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, f32::NAN, 1.0), Paint::radial(Vec2::ZERO, -5.0, vec![GradientStop { offset: f32::NAN, color: Rgba::BLACK }]))) };
+    let bad = Element { id: ElementId(5), name: "x".into(), transform: Affine { m: [f32::NAN, 0.0, 0.0, 1.0, f32::INFINITY, 0.0] }, color: ColorEffect::Advanced(ColorTransform { mul: [f32::NAN, 2.0, -1.0, f32::INFINITY], add: [f32::NAN, 0.0, 0.0, 0.0] }), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, f32::NAN, 1.0), Paint::radial(Vec2::ZERO, -5.0, vec![GradientStop { offset: f32::NAN, color: Rgba::BLACK }]))) };
     let fine = Element { id: ElementId(6), transform: Affine::IDENTITY, ..bad.clone() };
     let missing = inst(7, 12345, "ghost", Affine::IDENTITY, vec![]);
     Arc::make_mut(&mut doc.timeline_mut(0).layers[0]).keyframe_mut(0).unwrap().elements = vec![Arc::new(bad), Arc::new(fine), missing];
@@ -912,7 +913,7 @@ fn the_js_player_draws_random_numbers_like_the_rust_player() {
 fn field_el(id: u64, name: &str, at: Vec2, (w, h): (f32, f32), text: &str, f: Option<anicraft_doc::TextField>) -> Arc<Element> {
     let n = text.chars().count() as f32;
     let t = anicraft_doc::TextBlock { text: text.into(), font: "Inter".into(), size: 14.0, bold: true, italic: false, color: Rgba::hex(0x112233), align: anicraft_doc::TextAlign::Center, letter_spacing: 0.5, line_spacing: 2.0, width: None, outline: Arc::new(Path::rect(2.0, 2.0, 8.0 * n, 12.0)), box_width: w, box_height: h, field: f, on_path: None, ..Default::default() };
-    Arc::new(Element { id: ElementId(id), name: name.into(), transform: Affine::translate(at.x, at.y), color: ColorEffect::default(), kind: ElementKind::Text(Arc::new(t)) })
+    Arc::new(Element { id: ElementId(id), name: name.into(), transform: Affine::translate(at.x, at.y), color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Text(Arc::new(t)) })
 }
 
 /// A movie with a dynamic field (`score_txt`, with a background and a border), an input field
@@ -1318,7 +1319,7 @@ fn filtered_doc(filters: &[anicraft_doc::Filter]) -> Document {
     let mut a = Shape::filled(Path::ellipse(12.0, 10.0, 11.0, 8.5), grad);
     a.stroke = Some(anicraft_doc::Stroke::new(Rgba::hex(0x112233), 1.5));
     let b = Shape::filled(Path::rect(16.3, 4.6, 9.2, 13.7), Paint::Solid(Rgba::hex(0x22aa44).with_alpha(0.5)));
-    let el = |id, s| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(s) });
+    let el = |id, s| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(s) });
     d.library.push(symbol(300, SymbolKind::MovieClip, vec![layer(301, vec![kf(0, 1, vec![el(302, a), el(303, b)], vec![], "")])]));
     let mut i = (*inst(310, 300, "art", Affine::translate(18.4, 15.2), vec![])).clone();
     if let ElementKind::Symbol { filters: f, .. } = &mut i.kind {
@@ -1420,7 +1421,7 @@ fn soft_masked_doc(mode: anicraft_doc::MaskMode, inside: bool) -> Document {
     ];
     let mut d = filtered_doc(&filters);
     let ramp = Paint::linear(Vec2::new(10.0, 0.0), Vec2::new(54.0, 0.0), vec![stop(0.0, 0xffffff, 1.0), stop(0.5, 0x808080, 0.5), stop(1.0, 0x000000, 0.2)]);
-    let art = Arc::new(Element { id: ElementId(320), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(10.0, 4.0, 44.0, 48.0), ramp)) });
+    let art = Arc::new(Element { id: ElementId(320), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(10.0, 4.0, 44.0, 48.0), ramp)) });
     let mut mask = Layer::new(LayerId(321), "mask");
     mask.kind = LayerKind::Mask;
     mask.mask_mode = mode;
@@ -1621,7 +1622,7 @@ fn gradient_options_are_drawn_the_nearest_way_canvas_can() {
         *focal = 0.5;
     }
     let mut doc = Document::default();
-    let shape = |id: u64, p: Paint| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 100.0, 100.0), p)) });
+    let shape = |id: u64, p: Paint| Arc::new(Element { id: ElementId(id), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 100.0, 100.0), p)) });
     {
         let k = Arc::make_mut(&mut doc.timeline_mut(0).layers[0]).keyframe_mut(0).unwrap();
         k.elements = vec![shape(80, lin_p), shape(81, rad)];

@@ -381,7 +381,7 @@ mod tests {
     use anicraft_engine::Session;
     use anicraft_engine::doc::Document;
 
-    const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+    const XF: Xf = Xf::flat(Pos2::ZERO, 1.0);
 
     /// An app with a body shape standing on (300, 400) up to (300, 200) and a head instance
     /// centred on (300, 160), both on a normal layer: the body's and the head's ids.

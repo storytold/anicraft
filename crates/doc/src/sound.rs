@@ -171,6 +171,8 @@ pub const MAX_REPEAT: u32 = 9_999;
 pub const MAX_ENVELOPE_POINTS: usize = 16;
 /// Latest time an envelope point may sit at, in seconds from the sound's start (a day).
 pub const MAX_ENVELOPE_SECONDS: f64 = 86_400.0;
+/// Largest trim sample index accepted from files and commands.
+pub const MAX_TRIM_FRAMES: u64 = 1_000_000_000_000;
 
 /// One volume point of a custom envelope (ADR 0039).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -335,6 +337,12 @@ pub struct FrameSound {
     /// Its volume envelope per channel (ADR 0039).
     #[serde(default, skip_serializing_if = "SoundEffect::is_none")]
     pub effect: SoundEffect,
+    /// Source audio sample frame where playback begins (`0` = start of sound).
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub in_frames: u64,
+    /// Source audio sample frame where playback stops (`None` = end of sound).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_frames: Option<u64>,
 }
 
 fn one() -> u32 {
@@ -346,23 +354,77 @@ fn is_one(n: &u32) -> bool {
 fn is_false(b: &bool) -> bool {
     !*b
 }
+fn is_zero_u64(n: &u64) -> bool {
+    *n == 0
+}
 
 impl FrameSound {
     pub fn new(sound: SoundId) -> FrameSound {
-        FrameSound { sound, sync: SoundSync::Event, repeat: 1, looping: false, effect: SoundEffect::None }
+        FrameSound { sound, sync: SoundSync::Event, repeat: 1, looping: false, effect: SoundEffect::None, in_frames: 0, out_frames: None }
     }
 
-    /// How long it is heard from its start when nothing stops it, in output frames: `once` is
-    /// one play, `span` its keyframe's span and `rest` (for an event loop) the time left in the
-    /// movie.
-    pub fn heard(&self, once: u64, span: u64, rest: u64) -> u64 {
-        let repeats = once.saturating_mul(u64::from(self.repeat.clamp(1, MAX_REPEAT)));
+    /// Clamped `(start, end)` sample frames within `0..=total_frames`.
+    pub fn trim_range(&self, total_frames: u64) -> (u64, u64) {
+        let start = self.in_frames.min(total_frames);
+        let end = self.out_frames.map_or(total_frames, |o| o.min(total_frames)).max(start);
+        (start, end)
+    }
+
+    /// Length of one play in source sample frames after applying `in_frames` and `out_frames`.
+    pub fn trimmed_frames(&self, total_frames: u64) -> u64 {
+        let (start, end) = self.trim_range(total_frames);
+        end.saturating_sub(start)
+    }
+
+    /// Whether a loaded `FrameSound` already satisfies all bounds and ordering invariants.
+    pub fn is_sane(&self) -> bool {
+        (1..=MAX_REPEAT).contains(&self.repeat)
+            && self.in_frames <= MAX_TRIM_FRAMES
+            && self.out_frames.is_none_or(|o| o > self.in_frames && o <= MAX_TRIM_FRAMES)
+            && match &self.effect {
+                SoundEffect::Custom(p) => *p == clean_points(p),
+                _ => true,
+            }
+    }
+
+    /// Repairs hostile or out-of-order trim points, repeats and envelope points from a file.
+    pub fn sanitize(&mut self) {
+        self.repeat = self.repeat.clamp(1, MAX_REPEAT);
+        self.in_frames = self.in_frames.min(MAX_TRIM_FRAMES);
+        if let Some(o) = self.out_frames {
+            let clean = o.min(MAX_TRIM_FRAMES);
+            self.out_frames = if clean <= self.in_frames {
+                (self.in_frames < MAX_TRIM_FRAMES).then_some(self.in_frames + 1)
+            } else {
+                Some(clean)
+            };
+        }
+        if let SoundEffect::Custom(p) = &mut self.effect {
+            *p = clean_points(p);
+        }
+    }
+
+    /// How long one already-trimmed play of `play` output frames is heard from its start when
+    /// nothing stops it: `span` is its keyframe's span and `rest` (for an event loop) the time
+    /// left in the movie.
+    pub fn heard_play(&self, play: u64, span: u64, rest: u64) -> u64 {
+        if play == 0 {
+            return 0;
+        }
+        let repeats = play.saturating_mul(u64::from(self.repeat.clamp(1, MAX_REPEAT)));
         match (self.sync, self.looping) {
             (SoundSync::Stream, true) => span,
             (SoundSync::Stream, false) => repeats.min(span),
             (_, true) => rest,
             (_, false) => repeats,
         }
+    }
+
+    /// How long it is heard from its start when nothing stops it, in frames at the sound's rate:
+    /// `once` is the untrimmed sound length (`in_frames` and `out_frames` are applied first),
+    /// `span` its keyframe's span and `rest` (for an event loop) the time left in the movie.
+    pub fn heard(&self, once: u64, span: u64, rest: u64) -> u64 {
+        self.heard_play(self.trimmed_frames(once), span, rest)
     }
 
     /// [`FrameSound::heard`] in seconds, for a keyframe `span` frames long with `rest` frames
@@ -373,6 +435,30 @@ impl FrameSound {
         let frames = self.heard(sound.frames, frame_start(u64::from(span), fps, rate), frame_start(u64::from(rest), fps, rate));
         frames as f64 / f64::from(rate)
     }
+}
+
+/// Slices `pcm` to the `[in_frames .. out_frames]` range of `fs` (zero-copy when untrimmed;
+/// `None` when the trimmed range has zero frames).
+pub fn trimmed_pcm(pcm: &Arc<Pcm>, fs: &FrameSound) -> Option<Arc<Pcm>> {
+    let total = pcm.frames() as u64;
+    if total == 0 {
+        return None;
+    }
+    if fs.in_frames == 0 && fs.out_frames.is_none() {
+        return Some(pcm.clone());
+    }
+    let (start, end) = fs.trim_range(total);
+    if start >= end {
+        return None;
+    }
+    if start == 0 && end == total {
+        return Some(pcm.clone());
+    }
+    let ch = usize::from(pcm.channels.max(1));
+    let s0 = usize::try_from(start).ok()?.checked_mul(ch)?;
+    let s1 = usize::try_from(end).ok()?.checked_mul(ch)?;
+    let samples = pcm.samples.get(s0..s1)?.to_vec();
+    Some(Arc::new(Pcm { rate: pcm.rate, channels: pcm.channels, samples }))
 }
 
 /// Output frame (at `rate`) where movie frame `frame` starts, at `fps`.
@@ -617,8 +703,9 @@ pub fn voices(doc: &Document, rate: u32) -> Vec<Voice> {
             _ => {}
         }
         let Some(dec) = doc.sound(sound).and_then(Sound::decoded) else { continue };
-        let heard = p.fs.heard(Voice::play_frames(&dec.pcm, rate), p.span, movie_end.saturating_sub(p.at));
-        if let Some(v) = voice(&dec.pcm, &p.fs, p.at, p.skip, heard, heard, p.limit, p.gain, rate) {
+        let Some(pcm) = trimmed_pcm(&dec.pcm, &p.fs) else { continue };
+        let heard = p.fs.heard_play(Voice::play_frames(&pcm, rate), p.span, movie_end.saturating_sub(p.at));
+        if let Some(v) = voice(&pcm, &p.fs, p.at, p.skip, heard, heard, p.limit, p.gain, rate) {
             out.push((sound, v));
         }
     }
@@ -655,11 +742,12 @@ pub fn trigger(doc: &Document, playing: &mut Vec<(SoundId, Voice)>, started: &[S
             _ => {}
         }
         let Some(dec) = doc.sound(id).and_then(Sound::decoded) else { continue };
-        let once = Voice::play_frames(&dec.pcm, rate);
+        let Some(pcm) = trimmed_pcm(&dec.pcm, &s.sound) else { continue };
+        let once = Voice::play_frames(&pcm, rate);
         let span = frame_start(u64::from(s.span), doc.stage.fps, rate);
         let endless = s.sound.sync != SoundSync::Stream && s.sound.looping;
-        let heard = s.sound.heard(once, span, u64::MAX - at);
-        if let Some(v) = voice(&dec.pcm, &s.sound, at, 0, heard, if endless { once } else { heard }, u64::MAX, s.gain, rate) {
+        let heard = s.sound.heard_play(once, span, u64::MAX - at);
+        if let Some(v) = voice(&pcm, &s.sound, at, 0, heard, if endless { once } else { heard }, u64::MAX, s.gain, rate) {
             playing.push((id, v));
         }
     }

@@ -1005,7 +1005,7 @@ mod tests {
         use anicraft_engine::doc::{ColorEffect, ElementId, ElementKind, Filter, FilterEntry, SymbolId};
         use anicraft_engine::geom::Affine;
         let filters = vec![FilterEntry::from(Filter::new("blur").unwrap()), FilterEntry { filter: Filter::new("adjust_color").unwrap(), enabled: false }];
-        let clip = Element { id: ElementId(1), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), kind: ElementKind::Symbol { symbol: SymbolId(1), loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters, events: Vec::new(), pivot: None } };
+        let clip = Element { id: ElementId(1), name: String::new(), transform: Affine::IDENTITY, color: ColorEffect::default(), transform_3d: None, kind: ElementKind::Symbol { symbol: SymbolId(1), loop_mode: Default::default(), first_frame: 0, blend: Default::default(), filters, events: Vec::new(), pivot: None } };
         let names = |rows: Vec<Row>| -> Vec<String> {
             rows.iter()
                 .skip_while(|r| matches!(r, Row::Prop(p) if !p.is_filter()))

@@ -201,7 +201,7 @@ impl MotionTween {
                 Some(t) => t.keys.iter().map(|k| PropertyKey { frame: k.frame.saturating_add(frames), ..k.clone() }).collect(),
                 None => vec![PropertyKey { frame: frames, value: vb, ease: Easing::Linear }],
             };
-            if p == Property::Rotation
+            if matches!(p, Property::Rotation | Property::RotationX | Property::RotationY)
                 && let Some(first) = after.first()
             {
                 let turns = ((end - first.value) / 360.0).round() * 360.0;
@@ -242,6 +242,7 @@ mod tests {
             name: String::new(),
             transform: Affine::translate(x, y),
             color: ColorEffect::default(),
+            transform_3d: None,
             kind: ElementKind::Shape(Shape::filled(Path::rect(0.0, 0.0, 10.0, 10.0), crate::Paint::Solid(crate::Rgba::BLACK))),
         }
     }

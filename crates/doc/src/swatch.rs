@@ -23,6 +23,10 @@ pub struct Swatch {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     pub paint: SwatchPaint,
+    /// Live tag id (P-025): shapes whose `fill_tag` or `stroke_tag` matches update live when
+    /// this swatch is edited (`swatch.edit`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tag_id: Option<u64>,
 }
 
 /// What a swatch holds.
@@ -111,14 +115,14 @@ impl SwatchPaint {
 
 impl Swatch {
     pub fn new(name: &str, paint: SwatchPaint) -> Swatch {
-        Swatch { name: clean_name(name), paint }
+        Swatch { name: clean_name(name), paint, tag_id: None }
     }
     pub fn solid(c: Rgba) -> Swatch {
-        Swatch { name: String::new(), paint: SwatchPaint::Solid { color: c } }
+        Swatch { name: String::new(), paint: SwatchPaint::Solid { color: c }, tag_id: None }
     }
     /// Repaired (see [`SwatchPaint::sanitized`]), its name trimmed and bounded.
     pub fn sanitized(&self) -> Option<Swatch> {
-        Some(Swatch { name: clean_name(&self.name), paint: self.paint.sanitized()? })
+        Some(Swatch { name: clean_name(&self.name), paint: self.paint.sanitized()?, tag_id: self.tag_id.filter(|&id| id > 0) })
     }
 }
 
@@ -197,14 +201,15 @@ mod tests {
 
     #[test]
     fn swatches_are_repaired() {
-        let bad = Swatch { name: "  a\nb  ".into(), paint: SwatchPaint::Radial { stops: vec![GradientStop { offset: 2.0, color: Rgba::new(f32::NAN, 9.0, -1.0, 1.0) }, GradientStop { offset: -1.0, color: Rgba::WHITE }], spread: Spread::Pad, linear_rgb: false, focal: 5.0 } };
+        let bad = Swatch { name: "  a\nb  ".into(), paint: SwatchPaint::Radial { stops: vec![GradientStop { offset: 2.0, color: Rgba::new(f32::NAN, 9.0, -1.0, 1.0) }, GradientStop { offset: -1.0, color: Rgba::WHITE }], spread: Spread::Pad, linear_rgb: false, focal: 5.0 }, tag_id: Some(0) };
         let s = bad.sanitized().unwrap();
         assert_eq!(s.name, "ab");
+        assert_eq!(s.tag_id, None);
         let SwatchPaint::Radial { stops, focal, .. } = &s.paint else { panic!() };
         assert_eq!((stops[0].offset, stops[1].offset), (0.0, 1.0), "in order and in range");
         assert_eq!(stops[1].color, Rgba::new(0.0, 1.0, 0.0, 1.0));
         assert_eq!(*focal, MAX_FOCAL);
-        let one = Swatch { name: String::new(), paint: SwatchPaint::Linear { stops: vec![GradientStop { offset: 0.0, color: Rgba::BLACK }], spread: Spread::Pad, linear_rgb: false } };
+        let one = Swatch { name: String::new(), paint: SwatchPaint::Linear { stops: vec![GradientStop { offset: 0.0, color: Rgba::BLACK }], spread: Spread::Pad, linear_rgb: false }, tag_id: None };
         assert!(one.sanitized().is_none(), "a gradient needs two stops");
         assert_eq!(clean_name(&"x".repeat(500)).chars().count(), MAX_SWATCH_NAME);
     }

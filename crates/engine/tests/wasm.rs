@@ -100,6 +100,7 @@ fn exports_and_reimports_svg_and_lottie_in_memory() {
             name: "grad".into(),
             transform: Affine::IDENTITY,
             color: Default::default(),
+            transform_3d: None,
             kind: ElementKind::Shape(Shape::filled(GeomPath::rect(10.0, 10.0, 100.0, 60.0), linear)),
         }));
     }

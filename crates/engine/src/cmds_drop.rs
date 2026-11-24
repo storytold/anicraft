@@ -65,7 +65,7 @@ pub fn kind_of(path: &Path) -> DropKind {
     let ext = path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase);
     match ext.as_deref() {
         Some("anicraft") => DropKind::Document,
-        Some("svg") => DropKind::Drawing,
+        Some("svg" | "psd") => DropKind::Drawing,
         Some("png" | "jpg" | "jpeg") => DropKind::Image,
         _ if crate::cmds_sound::is_sound(path) => DropKind::Sound,
         _ => DropKind::Unsupported,
@@ -248,6 +248,12 @@ fn onto_timeline(s: &mut Session, p: &Value, files: &[PathBuf], x: f32, y: f32) 
         let path = f.display().to_string();
         let nothing = || EngineError::State(format!("{path} added nothing to the Library"));
         match kind_of(f) {
+            DropKind::Drawing if crate::psd_import::is_psd(f) => {
+                let v = crate::psd_import::import_psd_symbol(s, f, None)?;
+                let sym = v["symbol"].as_u64().ok_or_else(nothing)?;
+                items.push(json!({"symbol": sym}));
+                elements.extend(placed_ids(&crate::cmds_draw::place(s, &json!({"symbol": sym, "x": x, "y": y}))?));
+            }
             DropKind::Drawing if crate::cmds_file::one_layer(&crate::cmds_file::read_svg(f)?) => {
                 crate::cmds_file::import_to_stage(s, &json!({"path": path, "cx": x, "cy": y, "layer": "active"}))?;
                 elements.extend(s.selection.ids());

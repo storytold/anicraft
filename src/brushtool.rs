@@ -675,7 +675,7 @@ mod tests {
         app.drag = Drag::Brush;
         // A stroke that crosses itself, with a dab's worth of pressure readings.
         app.brush_samples = vec![(Vec2::new(40.0, 40.0), Some(0.8)), (Vec2::new(160.0, 120.0), Some(0.6)), (Vec2::new(40.0, 120.0), None), (Vec2::new(160.0, 40.0), Some(0.9))];
-        let xf = Xf { origin: egui::pos2(20.0, 20.0), zoom: 1.5 };
+        let xf = Xf::flat(egui::pos2(20.0, 20.0), 1.5);
         let sweep = egui::Id::new("anicraft.brush.sweep");
         let texture = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<egui::TextureHandle>(sweep));
         let frame = |app: &App| {
@@ -704,7 +704,7 @@ mod tests {
         options_mut(&mut app).pressure_opacity = false;
         assert!(frame(&app) < wash_shapes, "a clear fill has no ink to preview");
         // A view so far in that the stroke is larger than the image may be: still bounded.
-        let hulls = sweep_hulls(Xf { origin: Pos2::ZERO, zoom: 400.0 }, options(&app), &app.brush_samples);
+        let hulls = sweep_hulls(Xf::flat(Pos2::ZERO, 400.0), options(&app), &app.brush_samples);
         assert_eq!(hulls.len(), 4, "three steps and the tip at the end");
         assert!(coverage(&hulls, Pos2::new(-1e9, f32::NAN), 1.0, 8, 8).iter().all(|c| *c == 0.0), "off-screen and non-finite input paints nothing");
     }

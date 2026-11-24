@@ -867,11 +867,11 @@ fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool) -> Vec
     // The stroke is outlined from the flattened lines first, so the fill can then take them
     // without a copy; it is still drawn after the fill.
     let stroke = item.stroke.as_ref().and_then(|st| {
-        // Caps, joins, dashes (ADR 0046) and width profiles (ADR 0018); thin strokes and
-        // sub-pixel dash patterns fade instead of dropping out.
+        // Caps, joins, dashes (ADR 0046), width profiles (ADR 0018), and gradient/bitmap stroke paints (P-032).
         let (polys, alpha) = stroke::stroke_geometry(&lines, st, &m, true)?;
         let fx = ColorTransform::alpha(alpha).concat(&item.color);
-        Some((polys, Shader::new(&Paint::Solid(st.color), &m, &fx, None)))
+        let paint = st.paint.clone().unwrap_or(Paint::Solid(st.color));
+        Some((polys, Shader::new(&paint, &m, &fx, item.image.as_ref()).smoothed(item.smooth)))
     });
     if let Some(fill) = &item.fill {
         let polys: Vec<Vec<Vec2>> = lines.into_iter().map(|l| l.points).collect();

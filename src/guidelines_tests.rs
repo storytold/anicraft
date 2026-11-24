@@ -1,7 +1,9 @@
 //! Enforces docs/ui-guidelines.md: typography and colour come from `theme`, never raw values.
 
-const SOURCES: [(&str, &str); 34] = [
+const SOURCES: [(&str, &str); 36] = [
+    ("transform3d_tool.rs", include_str!("transform3d_tool.rs")),
     ("rich_edit.rs", include_str!("rich_edit.rs")),
+    ("frame_picker_panel.rs", include_str!("frame_picker_panel.rs")),
     ("windows.rs", include_str!("windows.rs")),
     ("ease_editor.rs", include_str!("ease_editor.rs")),
     ("colour.rs", include_str!("colour.rs")),

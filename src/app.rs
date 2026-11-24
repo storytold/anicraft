@@ -14,9 +14,14 @@ use std::path::PathBuf;
 pub enum Tool {
     Select,
     Subselect,
+    Lasso,
+    PolyLasso,
+    MagicWand,
     Transform,
     /// Asset Warp (ADR 0079): pins on shapes and bitmaps that bend them.
     Warp,
+    /// 3D Rotation (`P-044`): 3D Postcard X/Y/Z rotation, Z depth, FOV and vanishing point.
+    Transform3D,
     GradientTransform,
     Width,
     Bone,
@@ -36,6 +41,7 @@ pub enum Tool {
     Eyedropper,
     Camera,
     Hand,
+    RotateView,
     Zoom,
 }
 
@@ -71,14 +77,18 @@ impl GapSize {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 24] = [Tool::Select, Tool::Subselect, Tool::Transform, Tool::Warp, Tool::GradientTransform, Tool::Width, Tool::Bone, Tool::Bind, Tool::Pen, Tool::Text, Tool::Pencil, Tool::Brush, Tool::PaintBrush, Tool::Eraser, Tool::Rect, Tool::Oval, Tool::Star, Tool::Line, Tool::PaintBucket, Tool::InkBottle, Tool::Eyedropper, Tool::Camera, Tool::Hand, Tool::Zoom];
+    pub const ALL: [Tool; 29] = [Tool::Select, Tool::Subselect, Tool::Lasso, Tool::PolyLasso, Tool::MagicWand, Tool::Transform, Tool::Warp, Tool::Transform3D, Tool::GradientTransform, Tool::Width, Tool::Bone, Tool::Bind, Tool::Pen, Tool::Text, Tool::Pencil, Tool::Brush, Tool::PaintBrush, Tool::Eraser, Tool::Rect, Tool::Oval, Tool::Star, Tool::Line, Tool::PaintBucket, Tool::InkBottle, Tool::Eyedropper, Tool::Camera, Tool::Hand, Tool::RotateView, Tool::Zoom];
 
     pub fn label(self) -> &'static str {
         match self {
             Tool::Select => tr_noop!("Selection"),
             Tool::Subselect => tr_noop!("Subselection"),
+            Tool::Lasso => tr_noop!("Lasso"),
+            Tool::PolyLasso => tr_noop!("Polygon Lasso"),
+            Tool::MagicWand => tr_noop!("Magic Wand"),
             Tool::Transform => tr_noop!("Free Transform"),
             Tool::Warp => tr_noop!("Asset Warp"),
+            Tool::Transform3D => tr_noop!("3D Rotation"),
             Tool::GradientTransform => tr_noop!("Gradient Transform"),
             Tool::Width => tr_noop!("Width"),
             Tool::Bone => tr_noop!("Bone"),
@@ -98,6 +108,7 @@ impl Tool {
             Tool::Eyedropper => tr_noop!("Eyedropper"),
             Tool::Camera => tr_noop!("Camera"),
             Tool::Hand => tr_noop!("Hand"),
+            Tool::RotateView => tr_noop!("Rotate View"),
             Tool::Zoom => tr_noop!("Zoom"),
         }
     }
@@ -106,8 +117,12 @@ impl Tool {
         match self {
             Tool::Select => Some("V"),
             Tool::Subselect => Some("A"),
+            Tool::Lasso => Some("L"),
+            Tool::PolyLasso => Some("Shift+L"),
+            Tool::MagicWand => Some("W"),
             Tool::Transform => Some("Q"),
             Tool::Warp => Some("Shift+Q"),
+            Tool::Transform3D => Some("G"),
             Tool::GradientTransform => Some("F"),
             Tool::Width => Some("U"),
             Tool::Bone => Some("M"),
@@ -127,6 +142,7 @@ impl Tool {
             Tool::Eyedropper => Some("I"),
             Tool::Camera => Some("C"),
             Tool::Hand => Some("H"),
+            Tool::RotateView => Some("Shift+H"),
             Tool::Zoom => Some("Z"),
         }
     }
@@ -135,6 +151,9 @@ impl Tool {
         match self {
             Tool::Select => tr_noop!("Click to select, drag to move, drag on empty space to marquee-select. Shift adds to the selection."),
             Tool::Subselect => tr_noop!("Click a shape to show its points; on a merged drawing, the points of everything connected to it. Drag points or handles to reshape (a shared point moves every shape that has it; a smooth point's handles stay in line, Alt moves one alone); drag a line or fill to move everything connected. Shift adds to the point selection, drag on empty space to marquee points, arrow keys nudge them. Double-click an edge to add a point, Delete removes points, and right-click makes a point smooth or a corner. A motion path's points edit the same way (its ends stay), and so does the path of text on a path (the text follows)."),
+            Tool::Lasso => tr_noop!("Drag freehand around artwork to slice and select raw fills and lines inside the loop, plus enclosed objects. Shift adds to the selection."),
+            Tool::PolyLasso => tr_noop!("Click to place polygon lasso corners; click the start point, double-click or press Enter to select inside (Shift adds, Backspace removes the last corner, Esc cancels)."),
+            Tool::MagicWand => tr_noop!("Click a fill to select shapes of matching colour within Tolerance (Properties). Shift adds to the selection."),
             Tool::Pen => tr_noop!("Click to place corner points, drag to pull smooth handles (Alt moves one handle, Shift keeps 45° steps). Click the first point to close; Enter, Esc or a double-click finishes. Click the last point to make it a corner, drag from it for a new handle, Alt-drag it to draw its curve again; Backspace removes it. On a selected path: click a point to make it a corner and again to delete it, click the outline to add a point, click an open end to continue it. Ctrl-click a path to select it. Points snap to points and lines while Snap to Objects is on."),
             Tool::Text => tr_noop!("Click to type new text, or click text to edit it. Esc or a click elsewhere finishes. The options set the font, size and colour; double-click text with the Selection tool to edit it too."),
             Tool::Pencil => tr_noop!("Drag to draw freehand. The options bar sets Smooth, Straighten or Ink."),
@@ -145,6 +164,7 @@ impl Tool {
             Tool::Bone => tr_noop!("Drag from one symbol instance to another to join them with a bone (they move to an armature layer), or drag inside a shape to draw a bone in it (the shape bends with its bones); start on a bone's end to continue the chain. Instances and shapes mix: from a shape's bone end, release over an instance to carry it; from an instance, release over a shape, then draw bones inside it from that bone's end. Click a bone to select it. Pose the armature by dragging bones or instances with the Selection tool."),
             Tool::Bind => tr_noop!("Shows the points of shapes with bones: a square follows one bone, a triangle several. Click a bone to see the points it moves (filled). Click a point, or drag a box around points, to make them follow only that bone; Shift shares the bone with the ones they follow, Ctrl takes them from it. Turn on Paint Weights in Properties to brush the bone's influence on, off or smooth, shown as a heat map."),
             Tool::Warp => tr_noop!("Click a shape or a bitmap to pin it (the first pin covers it with a warp mesh). Drag a pin to bend the artwork around the other pins; with one pin it moves. Click a pin and press Delete to remove it. A pin moved at another frame keys it, and pins tween."),
+            Tool::Transform3D => tr_noop!("Drag horizontally to yaw around Y, vertically to pitch around X, Shift-drag to roll around Z, and Alt-drag for Z depth. Perspective FOV and vanishing point are in Properties."),
             Tool::GradientTransform => tr_noop!("Click a shape with a gradient or bitmap fill to show its handles. Drag the centre to move the fill, the square to change its width, the circle to change its size, the knob to rotate it (Shift: 15° steps) and, on a radial gradient, the triangle to move its focal point. A bitmap fill also has a square for its height and diamonds to skew it. Each drag is one undo step."),
             Tool::Transform => tr_noop!("Drag a handle to scale (Shift keeps proportions, Alt scales from the centre), a line between handles to skew (Alt skews about the centre), just outside a corner to rotate (Shift snaps 15°), inside to move."),
             Tool::Rect => tr_noop!("Drag to draw a rectangle. Shift draws a square."),
@@ -156,6 +176,7 @@ impl Tool {
             Tool::Eyedropper => tr_noop!("Click a fill to pick its colour, gradient or bitmap (then pour it with the Paint Bucket), or a line to pick its colour, width and profile (then apply it with the Ink Bottle). With shapes selected, the picked style goes onto them. Shift-click picks into the other swatch only."),
             Tool::Camera => tr_noop!("Drag on the stage to pan the camera, drag the round handle to turn it, and use the wheel to zoom (each drag is one undo step). Picking the tool adds a camera if the scene has none."),
             Tool::Hand => tr_noop!("Drag to pan the stage. Space works with any tool."),
+            Tool::RotateView => tr_noop!("Drag to rotate the canvas view around its centre (Shift snaps to 15° steps). Double-click the tool or click Reset 0° in the edit bar to straighten."),
             Tool::Zoom => tr_noop!("Click to zoom in, Alt-click to zoom out. Ctrl+wheel zooms anywhere."),
         }
     }
@@ -197,6 +218,8 @@ pub struct StageView {
     /// View › Clip Content Outside the Stage (#251): hide artwork on the pasteboard (it is still
     /// there, and still exported only where it is on the stage). Off: it shows, as in Animate.
     pub clip_to_stage: bool,
+    /// Canvas view rotation in radians (`P-029`, default `0.0`), about the viewport centre.
+    pub rotation: f32,
 }
 
 /// In-progress pointer gesture on the stage.
@@ -278,11 +301,19 @@ pub enum Drag {
     ArmatureMove { layer: anicraft_engine::doc::LayerId, last: egui::Pos2 },
     /// Asset Warp (ADR 0079): pin `pin` of `element` follows the pointer.
     WarpPin { element: anicraft_engine::doc::ElementId, pin: anicraft_engine::doc::warp::PinId },
+    /// 3D Rotation (`P-044`): screen origin `press` and starting 3D rotation/depth.
+    Transform3D { press: egui::Pos2, rx: f32, ry: f32, rz: f32, tz: f32 },
+    /// Auto Rig Studio: dragging joint dot `joint_idx` on `layer` to refine joint coordinates.
+    AutoRigJoint { layer: anicraft_engine::doc::LayerId, joint_idx: usize },
     /// Moving one of the open symbol's 9-slice guides (ADR 0055).
     SliceGuide { guide: crate::scale_grid::Guide },
     /// Selection tool: moving the scene's guide `index` (ADR 0076); `off`: the pointer is over a
     /// ruler or off the stage, where letting go deletes it.
     Guide { index: usize, off: bool },
+    /// Freehand Lasso drag (`Tool::Lasso`); vertices are stored in `App::lasso_points`.
+    Lasso,
+    /// Rotate Canvas View drag (`Tool::RotateView`).
+    RotateView { start_angle: f32, base_rotation: f32 },
     Pan,
 }
 
@@ -447,6 +478,11 @@ pub struct App {
     pub pen: Option<pathtools::PenPath>,
     /// Pencil samples of the stroke in progress (stage space).
     pub pencil: Vec<anicraft_engine::geom::Vec2>,
+    /// Lasso / Polygon Lasso vertices in stage space (`P-018`).
+    pub lasso_points: Vec<anicraft_engine::geom::Vec2>,
+    /// Magic Wand colour tolerance (`0..=255`, default `32.0`) and layer scope (`P-018`).
+    pub wand_tolerance: f32,
+    pub wand_all_layers: bool,
     /// A Selection-tool point drag's points (`raw.move_point`'s `points`), and the raw shapes a
     /// bend or point drag changed (merged again when it ends; ADR 0041).
     pub raw_points: serde_json::Value,
@@ -588,6 +624,8 @@ pub struct App {
     /// Window › Movie Explorer, the Library dock's other tab (ADR 0058).
     pub explorer: crate::movie_explorer::ExplorerView,
     pub actions: crate::actions_panel::State,
+    pub autorig: crate::autorig_panel::AutoRigUi,
+    pub frame_picker: crate::frame_picker_panel::FramePickerUi,
     /// Control › Test Movie: the movie playing in its own window.
     pub test_movie: Option<crate::test_movie::TestMovie>,
     /// Edit Envelope: a keyframe sound's volume per channel, in its own window (ADR 0039).
@@ -625,6 +663,7 @@ pub struct App {
     /// Paste looks at the system clipboard for a picture from another app (#263). Off in
     /// screenshot runs and tests, which must not depend on what this computer last copied.
     system_clipboard: bool,
+    pending_svg_paste: Option<String>,
     swallowed_paste: platform::SwallowedPaste,
     /// Document revision at the end of the last frame (edits schedule a repaint).
     pub(crate) last_revision: u64,
@@ -732,7 +771,7 @@ pub const VIEW_SHORTCUTS: &[(&str, &str)] = &[
 ];
 
 /// View actions without a default key: they can be given one in the shortcut editor.
-pub const VIEW_UNBOUND: &[&str] = &["view.panel.align", "view.panel.layer_depth", "view.panel.motion_editor"];
+pub const VIEW_UNBOUND: &[&str] = &["view.panel.align", "view.panel.auto_rig", "view.panel.frame_picker", "view.panel.layer_depth", "view.panel.motion_editor"];
 
 impl App {
     /// Show the last update's result once the native window begins drawing.
@@ -796,7 +835,7 @@ impl App {
             remote: None,
             s: session,
             tool: Tool::Select,
-            view: StageView { zoom: 1.0, pan: egui::Vec2::ZERO, fit: true, fitted: None, clip_to_stage: false },
+            view: StageView { zoom: 1.0, pan: egui::Vec2::ZERO, fit: true, fitted: None, clip_to_stage: false, rotation: 0.0 },
             stage_cache: stage::Cache::default(),
             drag: Drag::None,
             hint_menu: None,
@@ -848,6 +887,9 @@ impl App {
             rect_radius: 0.0,
             pen: None,
             pencil: Vec::new(),
+            lasso_points: Vec::new(),
+            wand_tolerance: 32.0,
+            wand_all_layers: false,
             raw_points: serde_json::Value::Null,
             raw_touched: Vec::new(),
             raw_with: Vec::new(),
@@ -917,6 +959,8 @@ impl App {
             video_failed: None,
             explorer: Default::default(),
             actions: crate::actions_panel::State::default(),
+            autorig: crate::autorig_panel::AutoRigUi::default(),
+            frame_picker: crate::frame_picker_panel::FramePickerUi::default(),
             test_movie: None,
             envelope: None,
             ease: None,
@@ -937,6 +981,7 @@ impl App {
             glyph_check: true,
             copied: false,
             system_clipboard: !shot_mode && !platform::WEB,
+            pending_svg_paste: None,
             swallowed_paste: platform::SwallowedPaste::default(),
             last_revision: 0,
             title: String::new(),
@@ -2776,7 +2821,7 @@ impl App {
                 self.tool = Tool::Eraser;
                 self.eraser = crate::erasertool::EraserOptions { size: 30.0, ..Default::default() };
                 self.brush_samples = (0..=30).map(|i| (anicraft_engine::geom::Vec2::new(720.0 + i as f32 * 12.0, 310.0), None)).collect();
-                crate::erasertool::commit(self, crate::pathtools::Xf { origin: egui::Pos2::ZERO, zoom: 1.0 });
+                crate::erasertool::commit(self, crate::pathtools::Xf::flat(egui::Pos2::ZERO, 1.0));
             }
             Some(which @ ("datachart" | "datatable")) => {
                 // Data tables that drive animation (ADR 0118): a bar chart whose bars follow a
@@ -3442,7 +3487,39 @@ impl App {
                 curve[2] = anicraft_engine::geom::Vec2::new(300.0, 100.0);
                 self.pen = Some(pathtools::PenPath { knots: vec![k(120.0, 160.0), curve, k(380.0, 150.0)], ..Default::default() });
             }
-            _ => {}
+            Some("framepicker" | "frame_picker") => {
+                self.show_panel(crate::dock::Panel::FramePicker);
+            }
+            Some("autorig" | "auto_rig") => {
+                if let Some(rig_lid) = self
+                    .s
+                    .timeline()
+                    .layers
+                    .iter()
+                    .find(|l| l.armature.as_ref().and_then(|a| a.char_rig.as_ref()).is_some())
+                    .map(|l| l.id.0)
+                {
+                    self.run("layer.select", json!({"layer": rig_lid}));
+                }
+                self.tool = Tool::Bone;
+                self.autorig.show_mesh = true;
+                if self.s.frame_count() > 6 {
+                    self.run("timeline.goto", json!({"frame": 6}));
+                }
+                self.show_panel(crate::dock::Panel::AutoRig);
+            }
+            _ => {
+                if self
+                    .s
+                    .timeline()
+                    .layer(self.s.layer)
+                    .and_then(|l| l.armature.as_ref())
+                    .and_then(|a| a.char_rig.as_ref())
+                    .is_some()
+                {
+                    self.show_panel(crate::dock::Panel::AutoRig);
+                }
+            }
         }
     }
 
@@ -3647,6 +3724,28 @@ impl App {
                 self.video.retry();
                 self.video_failed = None;
                 self.status_ok(if v["video"].is_null() { tr!("Removed the reference video — {undo} to undo", undo = self.undo_key()) } else { tr!("The reference video is relinked — {undo} to undo", undo = self.undo_key()) });
+            }
+            "file.import_psd" => {
+                if let Some(bid) = v["bitmap"].as_u64() {
+                    self.library_sel = Some(LibraryItem::Bitmap(anicraft_engine::doc::BitmapId(bid)));
+                }
+                let layers = v["layers"].as_u64().unwrap_or(1);
+                let undo = self.undo_key();
+                self.status_ok(trn!(
+                    "Imported {n} Photoshop layer — {undo} to undo",
+                    "Imported {n} Photoshop layers — {undo} to undo",
+                    layers,
+                    undo = undo
+                ));
+            }
+            "edit.paste_svg" => {
+                let n = v["elements"].as_u64().unwrap_or(0);
+                self.status_ok(trn!(
+                    "Pasted {n} vector element from SVG — {undo} to undo",
+                    "Pasted {n} vector elements from SVG — {undo} to undo",
+                    n,
+                    undo = self.undo_key()
+                ));
             }
             "file.import" => {
                 if let Some(b) = self.s.doc.bitmaps.last().filter(|b| v["bitmap"].as_u64() == Some(b.id.0)) {
@@ -3863,10 +3962,16 @@ impl App {
             crate::convert_symbol::open(self);
             return;
         }
-        // A picture copied in another app (a paint program, a screenshot) is what Paste means
-        // when it is the newest thing copied (#263).
-        if matches!(id, "edit.paste" | "edit.paste_in_place") && self.paste_from_system() {
-            return;
+        // SVG vector snippets or pictures copied in another app (Figma, Illustrator, Inkscape,
+        // Affinity, paint programs, screenshots) paste directly onto the stage (#263, P-038).
+        if matches!(id, "edit.paste" | "edit.paste_in_place") {
+            if let Some(svg) = self.pending_svg_paste.take() {
+                self.paste_svg_text(&svg);
+                return;
+            }
+            if self.paste_from_system() {
+                return;
+            }
         }
         // Pasted raw artwork floats, selected, until it is deselected (as in Animate), so it
         // can be dragged off what it landed on before the two join (#391).
@@ -3947,8 +4052,9 @@ impl App {
             "file.export_lottie" => Some((tr_noop!("Export Lottie animation (JSON, for web and apps)"), "path", "animation.json".to_string())),
             "file.export_html" => Some((tr_noop!("Export HTML canvas (one web page)"), "path", "movie.html".to_string())),
             "file.export_audio" => Some((tr_noop!("Export audio (the movie's soundtrack as a WAV)"), "path", "soundtrack.wav".to_string())),
-            "file.import_to_library" => Some((tr_noop!("Import to library (WAV, OGG or MP3 sound; PNG or JPEG image)"), "path", "sound.wav".to_string())),
-            "file.import" => Some((tr_noop!("Import to stage (SVG, PNG or JPEG; WAV, OGG or MP3 onto a new layer)"), "path", "drawing.svg".to_string())),
+            "file.import_to_library" => Some((tr_noop!("Import to library (WAV, OGG or MP3 sound; PNG, JPEG or PSD image)"), "path", "sound.wav".to_string())),
+            "file.import" => Some((tr_noop!("Import to stage (SVG, PNG, JPEG or PSD; WAV, OGG or MP3 onto a new layer)"), "path", "drawing.svg".to_string())),
+            "file.import_psd" => Some((tr_noop!("Import Photoshop document (.psd)"), "path", "artwork.psd".to_string())),
             // A video, read by the ffmpeg on this computer (ADR 0116); or another file for the
             // active layer's reference video.
             "file.import_video" => Some((tr_noop!("Import video (frames in the document, or a reference layer for tracing)"), "path", "video.mp4".to_string())),
@@ -3968,10 +4074,16 @@ impl App {
             "swatch.import" => Some((tr_noop!("Import swatches (a swatch file or a GIMP palette)"), "path", "swatches.json".to_string())),
             // A table of numbers for the Library (ADR 0118).
             "data.import_table" => Some((tr_noop!("Import a data table (CSV, TSV or JSON)"), "path", "data.csv".to_string())),
+            "rig.auto_detect" => {
+                self.show_panel(crate::dock::Panel::AutoRig);
+                Some((tr_noop!("Import & Auto-Rig Character (PNG or SVG)"), "path", "character.png".to_string()))
+            }
+            "rig.save_preset" => Some((tr_noop!("Save Character Rig Preset (.json)"), "path", "character-rig.json".to_string())),
+            "rig.load_preset" => Some((tr_noop!("Load Character Rig Preset (.json)"), "path", "character-rig.json".to_string())),
             _ => None,
         };
         if let Some((title, key, text)) = prompt {
-            let is_file = matches!(key, "path" | "dir") && (id.starts_with("file.") || matches!(id, "layer.set_video" | "plugin.install" | "macro.run" | "macro.import" | "brush.preset_export" | "brush.preset_import" | "filter.preset_export" | "filter.preset_import" | "swatch.export" | "swatch.import" | "data.import_table"));
+            let is_file = matches!(key, "path" | "dir") && (id.starts_with("file.") || matches!(id, "layer.set_video" | "plugin.install" | "macro.run" | "macro.import" | "brush.preset_export" | "brush.preset_import" | "filter.preset_export" | "filter.preset_import" | "swatch.export" | "swatch.import" | "data.import_table" | "rig.auto_detect" | "rig.save_preset" | "rig.load_preset"));
             if is_file && platform::WEB && platform::reads_file(id) {
                 // The browser's file picker (ADR 0036). The file arrives on a later frame
                 // (`open_picked`); a save or export asks for the download's name below.
@@ -4024,13 +4136,24 @@ impl App {
         if !self.system_clipboard {
             return false;
         }
-        let own = !self.s.clipboard.is_empty() && platform::clipboard_text().is_some_and(|t| t == tr!("Copied from AniCraft"));
+        let clip_text = platform::clipboard_text();
+        let own = !self.s.clipboard.is_empty() && clip_text.as_deref() == Some(tr!("Copied from AniCraft"));
         if own {
             return false;
+        }
+        if let Some(svg) = clip_text.filter(|t| looks_like_svg_clipboard(t)) {
+            self.paste_svg_text(&svg);
+            return true;
         }
         let Some(image) = platform::clipboard_image() else { return false };
         self.paste_image(&image);
         true
+    }
+
+    /// Pastes an SVG snippet onto the active layer at the centre of the view (`P-038`).
+    pub(crate) fn paste_svg_text(&mut self, svg: &str) {
+        let c = self.view_center_stage();
+        let _ = self.perform_here("edit.paste_svg", json!({"svg": svg, "x": c.x, "y": c.y, "float": true}));
     }
 
     /// Places `image` in the middle of the view as a bitmap, in the Library too (as an image
@@ -4066,6 +4189,14 @@ impl App {
 
     pub fn zoom_about(&mut self, canvas: egui::Rect, screen: egui::Pos2, new_zoom: f32) {
         let new_zoom = new_zoom.clamp(0.05, 64.0);
+        let screen = if self.view.rotation == 0.0 {
+            screen
+        } else {
+            let c = canvas.center();
+            let (s, co) = self.view.rotation.sin_cos();
+            let d = screen - c;
+            egui::pos2(c.x + d.x * co + d.y * s, c.y - d.x * s + d.y * co)
+        };
         let size = egui::vec2(self.s.doc.stage.width as f32, self.s.doc.stage.height as f32);
         let origin = canvas.center() + self.view.pan - size * self.view.zoom * 0.5;
         let stage_pt = (screen - origin) / self.view.zoom;
@@ -4288,6 +4419,14 @@ impl App {
             }
             return;
         }
+        // Capture SVG text delivered via egui's Paste event before converting clipboard events to
+        // shortcut key presses (`P-038`).
+        self.pending_svg_paste = ctx.input(|i| {
+            i.events.iter().find_map(|e| match e {
+                egui::Event::Paste(t) if looks_like_svg_clipboard(t) => Some(t.clone()),
+                _ => None,
+            })
+        });
         // (A browser sends these keys as presses already, with its clipboard events after.)
         if !platform::WEB {
             ctx.input_mut(clipboard_keys_as_presses);
@@ -4304,6 +4443,7 @@ impl App {
             crate::widthtool::consume_keys(self, ctx);
             crate::bone_tool::consume_keys(self, ctx);
             crate::warp_tool::consume_keys(self, ctx);
+            stage::consume_lasso_keys(self, ctx);
         }
         crate::library::consume_keys(self, ctx);
         crate::ease_editor::consume_keys(self, ctx);
@@ -4828,6 +4968,9 @@ impl App {
             self.raw_anchors.clear();
             self.raw_ends.clear();
         }
+        if self.tool != Tool::PolyLasso && !matches!(self.drag, Drag::Lasso) {
+            self.lasso_points.clear();
+        }
         pathtools::upkeep(self);
         crate::motion_path::upkeep(self);
         crate::widthtool::upkeep(self);
@@ -4975,6 +5118,18 @@ fn clipboard_keys_as_presses(i: &mut egui::InputState) {
     i.events.extend(keys.into_iter().map(|key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }));
 }
 
+/// Whether system-clipboard text looks like an SVG vector snippet (`<svg...>` or `<?xml...><svg...>`).
+pub(crate) fn looks_like_svg_clipboard(s: &str) -> bool {
+    let trimmed = s.trim_start_matches('\u{feff}').trim_start();
+    if trimmed.len() < 8 {
+        return false;
+    }
+    let head: String = trimmed.chars().take(4096).collect::<String>().to_ascii_lowercase();
+    head.starts_with("<svg")
+        || ((head.starts_with("<?xml") || head.starts_with("<!doctype") || head.starts_with("<!--"))
+            && head.contains("<svg"))
+}
+
 /// #263: a picture copied in another app pastes as a bitmap.
 #[cfg(test)]
 mod system_paste_tests {
@@ -5100,6 +5255,24 @@ mod clipboard_key_tests {
         let now = elements(&app);
         frame(&ctx, &mut app, input(ctrl(), vec![Event::Cut]));
         assert!(elements(&app) < now, "Ctrl+X cut the selection");
+    }
+
+    #[test]
+    fn ctrl_v_with_svg_clipboard_text_pastes_editable_vectors() {
+        let (ctx, mut app) = app();
+        for _ in 0..3 {
+            frame(&ctx, &mut app, input(Modifiers::NONE, vec![]));
+        }
+        assert!(super::looks_like_svg_clipboard("<svg viewBox=\"0 0 10 10\"><rect width=\"10\" height=\"10\"/></svg>"));
+        assert!(super::looks_like_svg_clipboard("<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><circle r=\"5\"/></svg>"));
+        assert!(!super::looks_like_svg_clipboard("AniCraft artwork"));
+
+        let before = elements(&app);
+        let steps = app.s.history().undo_len();
+        let svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 60 40\"><rect x=\"0\" y=\"0\" width=\"60\" height=\"40\" fill=\"#ff6633\"/></svg>";
+        frame(&ctx, &mut app, input(ctrl(), vec![Event::Paste(svg.into())]));
+        assert_eq!(elements(&app), before + 1, "SVG paste added a live vector shape");
+        assert_eq!(app.s.history().undo_len(), steps + 1, "one undo step");
     }
 
     #[test]

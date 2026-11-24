@@ -7,7 +7,7 @@ use std::sync::Arc;
 const SYM: SymbolId = SymbolId(900);
 
 fn el(id: u64, transform: Affine, kind: ElementKind) -> Element {
-    Element { id: ElementId(id), name: String::new(), transform, color: ColorEffect::default(), kind }
+    Element { id: ElementId(id), name: String::new(), transform, color: ColorEffect::default(), transform_3d: None, kind }
 }
 
 fn instance(of: SymbolId, transform: Affine) -> Element {

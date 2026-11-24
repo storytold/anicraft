@@ -21,8 +21,12 @@ This page is generated from the editor's shortcut map, so it always matches the 
 |---|---|---|
 | Selection | V | V |
 | Subselection | A | A |
+| Lasso | L | L |
+| Polygon Lasso | Shift+L | ⇧L |
+| Magic Wand | W | W |
 | Free Transform | Q | Q |
 | Asset Warp | Shift+Q | ⇧Q |
+| 3D Rotation | G | G |
 | Gradient Transform | F | F |
 | Width | U | U |
 | Bone | M | M |
@@ -41,6 +45,7 @@ This page is generated from the editor's shortcut map, so it always matches the 
 | Eyedropper | I | I |
 | Camera | C | C |
 | Hand | H | H |
+| Rotate View | Shift+H | ⇧H |
 | Zoom | Z | Z |
 
 ## File
@@ -128,12 +133,14 @@ This page is generated from the editor's shortcut map, so it always matches the 
 | Timeline › Keyframe | F6 | F6 |
 | Timeline › Blank Keyframe | F7 | F7 |
 | Timeline › Clear Keyframe | Shift+F6 | ⇧F6 |
+| New Symbol… | Ctrl+F8 | ⌘F8 |
 
 ## Modify
 
 | Action | Windows and Linux | macOS |
 |---|---|---|
 | Document Settings | Ctrl+J | ⌘J |
+| Timeline › Distribute to Layers | Ctrl+Shift+D | ⇧⌘D |
 | Shape › Add Shape Hint | Ctrl+Shift+H | ⇧⌘H |
 | Arrange › Bring to Front | Ctrl+Shift+Up | ⇧⌘↑ |
 | Arrange › Bring Forward | Ctrl+Up | ⌘↑ |
@@ -159,6 +166,8 @@ This page is generated from the editor's shortcut map, so it always matches the 
 |---|---|---|
 | Next Frame | . | . |
 | Previous Frame | , | , |
+| Previous Keyframe | Alt+, | ⌥, |
+| Next Keyframe | Alt+. | ⌥. |
 | Go to First Frame | Home, Shift+, | Home, ⇧, |
 | Go to Last Frame | End, Shift+. | End, ⇧. |
 | Previous Scene | Shift+PageUp | ⇧PageUp |

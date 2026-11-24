@@ -25,14 +25,33 @@ use std::sync::Arc;
 pub struct Xf {
     pub origin: Pos2,
     pub zoom: f32,
+    pub center: Pos2,
+    pub rotation: f32,
 }
 
 impl Xf {
+    pub const fn flat(origin: Pos2, zoom: f32) -> Xf {
+        Xf { origin, zoom, center: Pos2::ZERO, rotation: 0.0 }
+    }
     pub fn to_screen(self, p: Vec2) -> Pos2 {
-        pos2(self.origin.x + p.x * self.zoom, self.origin.y + p.y * self.zoom)
+        let u = pos2(self.origin.x + p.x * self.zoom, self.origin.y + p.y * self.zoom);
+        if self.rotation == 0.0 {
+            u
+        } else {
+            let (s, c) = self.rotation.sin_cos();
+            let d = u - self.center;
+            pos2(self.center.x + d.x * c - d.y * s, self.center.y + d.x * s + d.y * c)
+        }
     }
     pub fn to_stage(self, p: Pos2) -> Vec2 {
-        Vec2::new((p.x - self.origin.x) / self.zoom, (p.y - self.origin.y) / self.zoom)
+        let u = if self.rotation == 0.0 {
+            p
+        } else {
+            let (s, c) = self.rotation.sin_cos();
+            let d = p - self.center;
+            pos2(self.center.x + d.x * c + d.y * s, self.center.y - d.x * s + d.y * c)
+        };
+        Vec2::new((u.x - self.origin.x) / self.zoom, (u.y - self.origin.y) / self.zoom)
     }
     /// Stage units per screen point.
     pub fn unit(self) -> f32 {
@@ -1235,7 +1254,7 @@ mod tests {
     mod pen {
         use super::*;
 
-        const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+        const XF: Xf = Xf::flat(Pos2::ZERO, 1.0);
         const NONE: PenMods = PenMods { alt: false, shift: false, command: false };
         const ALT: PenMods = PenMods { alt: true, shift: false, command: false };
         const SHIFT: PenMods = PenMods { alt: false, shift: true, command: false };
@@ -1523,7 +1542,7 @@ mod tests {
     mod raw {
         use super::*;
 
-        const XF: Xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+        const XF: Xf = Xf::flat(Pos2::ZERO, 1.0);
 
         fn app_and_ctx() -> (App, egui::Context) {
             let ctx = egui::Context::default();

@@ -1,6 +1,6 @@
 # Command reference
 
-Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 399 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
+Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 445 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
 
 This page is generated from the command registry, so it always matches the version of AniCraft it came with.
 
@@ -23,7 +23,7 @@ This page is generated from the command registry, so it always matches the versi
 - **Export Frame as PNG…** `file.export_png` · File › Export
   Parameters: `{path, frame? (in the current scene), scale?}`
 - **Import to Stage…** `file.import` · File › Import · **Ctrl+R** (macOS **⌘R**) · changes the document
-  Parameters: `{path (.svg, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead)}`
+  Parameters: `{path (.svg, .psd, .png, .jpg; or a .wav, .ogg or .mp3 sound: onto a new layer at the playhead), x?, y? (top-left on the stage; default: centred), cx?, cy? (centred on that point instead), layer? (new (default) | active: a one-layer drawing goes into the active layer's keyframe at the playhead)}`
 - **Export Frame as SVG…** `file.export_svg` · File › Export
   Parameters: `{path, frame? (in the current scene), confirm?}`
 - **Export Video…** `file.export_video` · File › Export
@@ -44,6 +44,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{path, from?, to? (movie frames: every scene in order), background? (default false: transparent), confirm?}`
 - **Export HTML Canvas…** `file.export_html` · File › Export
   Parameters: `{path (.html: one self-contained page), title? (default: the file name), sound? (default true: embed the movie's sounds), fit? (default true: scale to the browser window), confirm?}`
+- **Import Photoshop (.psd)…** `file.import_psd` · File › Import · changes the document
+  Parameters: `{path, mode?: "layers" (default) | "flattened", x?, y?, cx?, cy?}`
 - **Publish Settings…** `publish.settings_get` · **Ctrl+Shift+F12** (macOS **⇧⌘F12**)
   Parameters: `{} (the document's publish profile, and where each format would go)`
 - **Publish** `file.publish` · **Shift+F12** (macOS **⇧F12**)
@@ -65,6 +67,10 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{}`
 - **Redo** `edit.redo` · **Ctrl+Y** (macOS **⌘Y**)
   Parameters: `{}`
+- **Copy Motion** `timeline.copy_motion` · Edit › Timeline
+  Parameters: `{layer?, frame?}: captures relative motion curves, colour effect, filters and easing onto the motion clipboard`
+- **Paste Motion** `timeline.paste_motion` · Edit › Timeline · changes the document
+  Parameters: `{layer?, frame?, duration?: u32}: applies the copied motion clip onto the selected object or active span`
 - **Cut Frames** `timeline.cut_frames` · Edit › Timeline · **Ctrl+Alt+X** (macOS **⌥⌘X**) · changes the document
   Parameters: `{layer? | layers?: [..], frame?, count?}`
 - **Copy Frames** `timeline.copy_frames` · Edit › Timeline · **Ctrl+Alt+C** (macOS **⌥⌘C**)
@@ -147,6 +153,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{name?}`
 - **Add Classic Motion Guide** `layer.add_motion_guide` · Insert › Timeline · changes the document
   Parameters: `{layer?}`
+- **New Symbol…** `symbol.new_empty` · **Ctrl+F8** (macOS **⌘F8**) · changes the document
+  Parameters: `{name?, kind?: "graphic"|"movie_clip"|"button", folder?: Library folder id, edit?: bool (default true)}`
 - **Add Camera** `camera.add` · Insert › Timeline · changes the document
   Parameters: `{} (a camera layer on top of the scene, at rest: it sees the stage as it is; nothing happens if there is one)`
 - **New Scene** `scene.new` · changes the document
@@ -166,12 +174,28 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{layer?}`
 - **Mask** `layer.toggle_mask` · Modify › Timeline · changes the document
   Parameters: `{layer?}`
+- **Reverse Frames** `timeline.reverse_frames` · Modify › Timeline · changes the document
+  Parameters: `{layer? | layers?: [..], from?: u32, to?: u32}`
+- **Distribute to Layers** `timeline.distribute_to_layers` · Modify › Timeline · **Ctrl+Shift+D** (macOS **⇧⌘D**) · changes the document
+  Parameters: `{layer?}`
+- **Distribute to Keyframes** `timeline.distribute_to_keyframes` · Modify › Timeline · changes the document
+  Parameters: `{layer?, start?: u32, step?: u32 (1..60, default 1)}`
+- **Convert to Frame-by-Frame Animation** `timeline.convert_to_frame_by_frame` · Modify › Timeline · changes the document
+  Parameters: `{layer?, from?: u32, to?: u32, step?: u32 (1..24, default 1)}`
+- **Apply Motion Preset** `motion.preset_apply` · Modify › Timeline · changes the document
+  Parameters: `{preset: name, layer?, frame?, duration?: u32}: applies a built-in or saved motion preset onto the target object`
 - **Layer Properties** `layer.set_properties` · Modify › Timeline · changes the document
   Parameters: `{layer?, name?, type?: normal|mask|masked|guide|guided, mask?: coverage|alpha|luminance (a mask layer's mask type), color?, outline?: bool (view as outlines), height?: 100|200|300, opacity?: 0..100 (percent), visible?, locked?, onion?} sets several at once, as one undo step; answers with the layer's properties`
 - **Remove Camera** `camera.remove` · Modify › Timeline · changes the document
   Parameters: `{} (removes the camera layer and its moves; asks first when the camera is animated)`
 - **Remove Parent** `layer.remove_parent` · Modify › Timeline · changes the document
   Parameters: `{layer? (default: the active layer), layers?: [ids], keep?: bool (default true)} the layer stops following its parent layer and stays where it is on stage at the playhead (layer.set_parent with parent: null)`
+- **Auto-Rig Character…** `rig.auto_detect` · changes the document
+  Parameters: `{path?: .png or .svg character file, element?: shape id on stage, layer?: layer id, name?, x?, y?, scale?, style_override?} → {rig_id, layer, element, character_style, view_angle, overall_confidence, warnings, joints, bones, triangles}`
+- **Rebuild Rig Skin Weights** `rig.rebind` · changes the document
+  Parameters: `{layer?} recomputes normalized skin weights around current joint locations while preserving original artwork`
+- **Auto Lip-Sync Character Rig** `rig.lip_sync` · changes the document
+  Parameters: `{layer?, sound_layer?, threshold?, hold?, from?, to?} analyses timeline speech audio and keys facial visemes & jaw motion across the speech span`
 - **Add Warp Mesh** `warp.add` · Modify › Asset Warp · changes the document
   Parameters: `{element? (a shape or bitmap; default the one selected), resolution? (cells along the longer side, 2…48; default 12)} → {element, created, resolution, columns, rows}. Covers the artwork with a warp mesh on every keyframe of its layer that holds it (it becomes a drawing object); on artwork that has one, changes the mesh's resolution`
 - **Remove Warp** `warp.remove` · Modify › Asset Warp · changes the document
@@ -252,6 +276,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{}`
 - **Distribute Vertical Centers** `align.distribute_v` · Modify › Align · changes the document
   Parameters: `{}`
+- **Reset 3D Transform** `modify.reset_3d_transform` · Modify › Transform · changes the document
+  Parameters: `{element?}`
 - **Bind to Data…** `data.bind` · Modify › Data · changes the document
   Parameters: `{property: x|y|scale_x|scale_y|rotation|alpha|frame (x, y pixels; scales and alpha percent; rotation degrees; frame: the 0-based frame of its symbol a graphic instance shows), table (id or name), column, element? (a symbol instance's id; default the selected one), start? (the span's first frame, 0-based; default the first frame the instance is on), frames? (the span's length; default one frame per row, or with a key column the frames the instance is on), from?, to? (the keys the first and last frame show; default the table's first and last; to before from plays it backwards), interpolation?: linear|step, scale?, offset? (value = column × scale + offset)} one binding per property of an instance; before the span it shows the first frame's value, after it the last's → {element, property, table, column, start, frames, value}`
 - **Remove Data Bindings** `data.unbind` · Modify › Data · changes the document
@@ -268,10 +294,20 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{distance (stage units, above 0 up to 1000), direction?: expand|inset (default expand), id? (default: the selected shapes)} moves each fill's outline out or in by the distance: expanding rounds corners, insetting keeps them; holes shrink as the fill grows; a fill thinner than twice an inset is removed. A drawing object's line follows its new outline → {changed, removed}`
 - **Soften Fill Edges…** `modify.soften_fill_edges` · Modify › Shape · changes the document
   Parameters: `{distance (the soft edge's width in stage units, above 0 up to 1000), steps? (1..=50 bands, default 4), direction?: expand|inset (default expand: the edge is added round the fill; inset: taken from it), id? (default: the selected shapes)} surrounds each fill with bands of its own paint whose alpha steps down outwards: band i of n has (n + 1 - i) / (n + 1) of the fill's alpha. Colour and gradient fills only → {softened, bands}`
+- **Smooth** `modify.smooth_shape` · Modify › Shape · changes the document
+  Parameters: `{strength?: 0..100 (default 50), id? (default: the selected shapes)} smooths selected shape outlines by relaxing anchors and tangent handles → {shapes, before_anchors, after_anchors}`
+- **Straighten** `modify.straighten_shape` · Modify › Shape · changes the document
+  Parameters: `{tolerance?: 0.01..500 (stage units, default 4.0), id? (default: the selected shapes)} collapses nearly-collinear curves into straight segments and snaps near-horizontal or near-vertical lines → {shapes, before_anchors, after_anchors}`
+- **Optimize…** `modify.optimize_shape` · Modify › Shape · changes the document
+  Parameters: `{tolerance?: 0.1..50.0 (stage units, default 2.5), id? (default: the selected shapes)} merges redundant short or collinear segments and refits minimal cubic curves → {shapes, before_anchors, after_anchors}`
+- **Distort** `modify.distort` · Modify › Transform · changes the document
+  Parameters: `{corners: [[x0, y0], [x1, y1], [x2, y2], [x3, y3]] (TL, TR, BR, BL in stage space), tolerance?: 0.005..50 (default 0.1)} deforms selected shapes on the active layer by an exact 4-corner projective homography from their rest bounds → {shapes, bounds}`
+- **Split Audio** `sound.split` · Modify › Timeline · changes the document
+  Parameters: `{layer?, frame?}: splits a sounding keyframe span at frame (after its start) into two keyframes, advancing the second keyframe's audio in-point by the elapsed samples`
 - **Convert Audio to Keyframes…** `sound.to_keyframes` · Modify › Timeline · changes the document
   Parameters: `{property: scale|scale_x|scale_y|alpha|x|y|rotation|first_frame, min, max (the property's value in silence and at the loudest frame: scale % of the object's size, alpha %, x and y pixels from where it is, rotation degrees from how it is turned, first_frame a 0-based frame of the graphic symbol), layer? (the layer that gets the keys; default the active layer), element? (the object on it; default the selected one, or the only one), sound_layer?, sound_frame? (the sound's keyframe; default the sound at the playhead), threshold? (0–0.99 of the loudest frame: quieter is silence; default 0.05), smoothing? (0–24 frames either side; default 1), channel?: both|left|right, step? (a key every n frames, 1–240; default 1), output?: auto|keyframes|motion (motion writes the property's curve in the motion tween on the span; auto picks it when the span has one), from?, to? (frames; default the frames the sound is heard on)} → {keys, from, to, output, property, layer, element}`
 - **Auto Lip-Sync…** `sound.lip_sync` · Modify › Timeline · changes the document
-  Parameters: `{layer? (the layer with the mouth; default the active layer), element? (a graphic symbol instance of mouth poses on it; default the selected one, or the only one), mouths?: {rest, open, wide, round, closed} (each a 0-based frame of the symbol or a frame label in it; default by the symbol's frame labels, as the Lip-sync mouth chart template names them), sound_layer?, sound_frame? (the speech; default the sound at the playhead), threshold? (0–0.99 of the loudest frame: quieter is silence; default 0.08), hold? (fewest frames a mouth is held, 1–12; default 2), from?, to? (frames; default the frames the sound is heard on)} → {keys, from, to, layer, element, mouths, counts}`
+  Parameters: `{layer? (the layer with the mouth; default the active layer), element? (a graphic symbol instance of mouth poses on it; default the selected one, or the only one), mouths?: {rest, open, wide, round, closed} or 12-viseme keys {neutral, ah, d, ee, f, l, m, oh, r, s, uh, woo}, mouths_12?: {neutral?, ah?, d?, ee?, f?, l?, m?, oh?, r?, s?, uh?, woo?} | true, mode?: visemes|visemes_12, sound_layer?, sound_frame? (the speech; default the sound at the playhead), threshold? (0–0.99 of the loudest frame: quieter is silence; default 0.08), hold? (fewest frames a mouth is held, 1–12; default 2), from?, to? (frames; default the frames the sound is heard on)} → {keys, from, to, layer, element, mouths, counts}`
 
 ## Commands
 
@@ -292,6 +328,10 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{}`
 - **Previous Frame** `timeline.prev_frame` · **,**
   Parameters: `{}`
+- **Previous Keyframe** `timeline.prev_keyframe` · **Alt+,** (macOS **⌥,**)
+  Parameters: `{layer? | layers?: [..] | all_layers?: true}`
+- **Next Keyframe** `timeline.next_keyframe` · **Alt+.** (macOS **⌥.**)
+  Parameters: `{layer? | layers?: [..] | all_layers?: true}`
 - **Go to First Frame** `timeline.first_frame` · **Home**
   Parameters: `{}`
 - **Go to Last Frame** `timeline.last_frame` · **End**
@@ -375,6 +415,12 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: `{layer?, before?: layer id | after?: layer id | into?: folder id} moves a layer anywhere in the stack, as a drag in the timeline does; a folder, mask or guide moves with everything in it. before / after: it lands just above that layer, or just below it and whatever it holds, beside it (in the same folder, or under the same mask or guide: normal layers only). into: it becomes the first layer in that folder. None of them: the bottom of the stack, outside every folder`
 - **Layer Type** `layer.set_type` · changes the document
   Parameters: `{type: normal|mask|masked|guide|guided, layer?}`
+- **Motion Presets** `motion.preset_list`
+  Parameters: `{}: lists built-in studio motion presets and user presets saved in this document`
+- **Save Motion Preset** `motion.preset_save` · changes the document
+  Parameters: `{name, layer?, frame?}: saves the motion on the span as a reusable preset in this document`
+- **Delete Motion Preset** `motion.preset_delete` · changes the document
+  Parameters: `{name}: deletes a user motion preset from this document`
 - **Onion Skin Layer** `layer.set_onion` · changes the document
   Parameters: `{onion?: bool (default: the other way), solo?: bool, layer?} whether onion skin draws the layer's frames around the playhead. solo: only this layer is onion-skinned (every other layer off); solo again on the only layer on turns them all back on (Alt-click)`
 - **Layer Colour** `layer.set_color` · changes the document
@@ -387,6 +433,14 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: `{mask: coverage|alpha|luminance, layer?} how a mask layer reveals the layers it masks: coverage (its fills' area), alpha (its artwork's opacity: gradients and faded shapes make soft edges) or luminance (its brightness: white shows, black hides; SVG's mask) (ADR 0070)`
 - **Get Layer Properties** `layer.properties`
   Parameters: `{layer?} the layer's name, type, mask type (mask layers), colour, outline, height (percent), opacity (percent), visible, locked and onion`
+- **Layer Effects** `layer.set_effects` · changes the document
+  Parameters: `{layer? (default: active layer), blend?: normal|layer|darken|multiply|lighten|screen|overlay|hardlight|add|subtract|difference|invert|alpha|erase, filters?: [{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool}], style?: none|brightness|tint|advanced|alpha, alpha? (%, 0..100), brightness? (%, -100..100), tint? (#rrggbb), tint_amount? (%, 0..100), red_multiplier?, green_multiplier?, blue_multiplier?, alpha_multiplier? (%, -100..100), red_offset?, green_offset?, blue_offset?, alpha_offset? (-255..255)} sets blend mode, filters and/or colour effect on a layer → {layer, blend, color_effect, filters}`
+- **Get Layer Effects** `layer.effects`
+  Parameters: `{layer? (default: active layer)} reports the layer's blend mode, colour effect and filters → {layer, blend, color_effect, filters}`
+- **Frame Effects** `timeline.set_frame_effects` · changes the document
+  Parameters: ``{layer? (default: active layer), frame? (default: playhead), blend?: normal|layer|darken|multiply|lighten|screen|overlay|hardlight|add|subtract|difference|invert|alpha|erase, filters?: [{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool}], style?: none|brightness|tint|advanced|alpha, alpha? (%, 0..100), brightness? (%, -100..100), tint? (#rrggbb), tint_amount? (%, 0..100), red_multiplier?, green_multiplier?, blue_multiplier?, alpha_multiplier? (%, -100..100), red_offset?, green_offset?, blue_offset?, alpha_offset? (-255..255)} sets blend mode, filters and/or colour effect on the keyframe covering `frame` → {layer, frame, keyframe, blend, color_effect, filters}``
+- **Get Frame Effects** `timeline.frame_effects`
+  Parameters: ``{layer? (default: active layer), frame? (default: playhead)} reports the covering keyframe's blend mode, colour effect and filters (plus evaluated tweened values at `frame`) → {layer, frame, keyframe, blend, color_effect, filters, evaluated}``
 - **Camera** `camera.set` · changes the document
   Parameters: `{x?, y? (camera centre, stage px), dx?, dy? (pan by), zoom? (%, 5–2000), zoom_by? (factor), rotation? (°), rotate_by? (°), reset?: bool, frame?, and the colour effect as element.set_color_effect takes it: style?: none|brightness|tint|advanced, brightness? (%), tint? (#rrggbb), tint_amount? (%), red_multiplier? … blue_offset? (the camera has no opacity: no alpha values)}`
 - **Camera Info** `camera.info`
@@ -431,6 +485,24 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: `{bone, x, y (stage px: where the bone's end goes), local?: [x, y] (the point dragged, in the bone's instance's space; default its end), frame?} → {reached, error (px), chain}; inverse kinematics turns the bone and the bones above it (limits respected, pinned bones kept)`
 - **Armatures** `bone.info`
   Parameters: ``{frame?, layer?, points?: bool} → every armature on the scene at the frame: its bones with joint and end (stage px, as keyed), joint angle and limits (°), slide and translation limits (px), spring (0–100) and its swing at the frame (°, what the spring adds to the angle), pinned; whether springs are on; the armature's members and whether it is mixed; each shape with bones (shapes: its bones, how many points, and with points every point on the stage with the bones it follows), the shape each bone is inside and how many points it moves; `shape` and `points` are the first shape's``
+- **Adjust Rig Joint** `rig.set_joint` · changes the document
+  Parameters: `{joint: joint id (e.g. 'elbow_l'), x, y, space?: 'stage'|'local' (default 'stage'), layer?} moves a joint dot, updates normalized [0..1] UV and fixed bone lengths, and refreshes skin weights`
+- **Pose Rig Joint (FK)** `rig.pose_fk` · changes the document
+  Parameters: `{joint?: joint id, bone?: bone id, angle_deg?: f32, rotate_by_deg?: f32, frame?, layer?} rotates a bone within its anatomical limits with strictly fixed bone length`
+- **Pose Rig Chain (IK)** `rig.pose_ik` · changes the document
+  Parameters: `{joint?: joint id, bone?: bone id, x: stage px, y: stage px, frame?, layer?} solves constrained CCD IK to target while keeping fixed bone lengths and joint limits`
+- **Set Facial Rig Pose** `rig.set_face` · changes the document
+  Parameters: `{layer?, frame?, eye_x?, eye_y?, brow_l?, brow_r?, brow_tilt_l?, brow_tilt_r?, blink_l?, blink_r?, jaw_open?, smile?, viseme?} keys independent eye, eyebrow, eyelid, jaw, mouth and viseme controls`
+- **Save Character Rig Preset…** `rig.save_preset`
+  Parameters: `{path: .json preset output file, layer?} writes permanent reusable rig with pixel & normalized [0..1] coordinates`
+- **Load Character Rig Preset…** `rig.load_preset` · changes the document
+  Parameters: `{path: .json preset file, artwork_path?: optional .png/.svg override, x?, y?, scale?} loads a saved rig preset into the current scene`
+- **Instantiate Reusable Character Rig** `rig.instantiate` · changes the document
+  Parameters: `{rig_id?: saved rig id in document, name?: rig name, x?, y?, scale?} places a reusable character rig from this document into the active scene`
+- **Character Rig Info** `rig.info`
+  Parameters: `{layer?, frame?} → complete rig details: character style, view angle, joints (stage px, local px, normalized [0..1], confidence, warnings), bones, facial pose, and reusable rigs`
+- **Validate Character Rig** `rig.validate`
+  Parameters: `{layer?, frame?} → deterministic geometric & deformation audit (fixed bone lengths, normalized skin weights, zero detached joints, zero inverted/torn mesh triangles)`
 - **Add Warp Pin** `warp.pin_add` · changes the document
   Parameters: `{element?, x, y (stage px, on the artwork)} → {element, pin, created}. Pins the artwork there (adding the mesh first if it has none), on every keyframe that bends the same mesh; nothing moves`
 - **Move Warp Pin** `warp.pin_move` · changes the document
@@ -550,9 +622,9 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Colour Effect** `element.set_color_effect` · changes the document
   Parameters: `{style?: none|brightness|tint|advanced|alpha (default: the style the values belong to, else each element's own), alpha? (%, 0..100), brightness? (%, -100..100), tint? (#rrggbb), tint_amount? (%, 0..100), red_multiplier?, green_multiplier?, blue_multiplier?, alpha_multiplier? (%, -100..100), red_offset?, green_offset?, blue_offset?, alpha_offset? (-255..255)} on every selected element (ADR 0056); values not given keep each element's own. A new style starts from the look it can keep: Advanced is exactly the effect before, Alpha keeps the opacity, Brightness and Tint start at 0 %. The camera has no opacity (no Alpha style, alpha multiplier or offset)`
 - **Blending** `element.set_blend` · changes the document
-  Parameters: `{mode: normal|layer|darken|multiply|lighten|screen|overlay|hardlight|add|subtract|difference|invert|alpha|erase} on the selected movie clip and button instances`
+  Parameters: `{mode: normal|layer|darken|multiply|lighten|screen|overlay|hardlight|add|subtract|difference|invert|alpha|erase} on the selected symbol instances`
 - **Filters** `element.set_filters` · changes the document
-  Parameters: `{filters: [{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool (default true; false switches it off, keeping its settings)}]} replaces the selected movie clip and button instances' filters (in order; [] removes them). Bevel: shadow_color, highlight_color, side: inner|outer|full, knockout; gradient filters: stops: [{offset 0..1, color "#rrggbbaa"}] (Gradient Glow's start and Gradient Bevel's middle stay transparent)`
+  Parameters: `{filters: [{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool (default true; false switches it off, keeping its settings)}]} replaces the selected symbol instances' and text's filters (in order; [] removes them). Bevel: shadow_color, highlight_color, side: inner|outer|full, knockout; gradient filters: stops: [{offset 0..1, color "#rrggbbaa"}] (Gradient Glow's start and Gradient Bevel's middle stay transparent)`
 - **Looping** `element.set_loop` · changes the document
   Parameters: `{loop?: loop|play_once|single_frame, first_frame?}`
 - **Symbol Type** `symbol.set_kind` · changes the document
@@ -603,6 +675,8 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: `{a, b, c, d, e, f, origin?: selection|registration|center (default selection)} affine applied in stage space (free transform), to the selection on every layer. With origin registration or center, the matrix's scale, rotation and skew are applied to each selected object about its own point instead (see modify.transform_origin) and its move (e, f) is left out`
 - **Set Transformation Point** `modify.transformation_point` · changes the document
   Parameters: `{x, y} (stage space, as modify.transform) moves the selected symbol instances' transformation point there (the white circle Free Transform shows): what each then turns, scales and skews about with Free Transform, the Modify › Transform commands, the Properties fields and in tweens. It is kept with the instance, in the instance's own space, so it travels with it. Anything else has no point of its own to keep (ADR 0111) → {set, x, y}`
+- **3D Rotation & Translation** `modify.set_3d_transform` · changes the document
+  Parameters: `{rx?: degrees, ry?: degrees, rz?: degrees, z?: pixels, fov?: 10..150, vanishing?: [x, y] | null, element?}`
 - **Pen Path** `draw.path` · changes the document
   Parameters: `{d: SVG path data (stage space), fill?, stroke?, stroke_width?, object?}`
 - **Pencil Stroke** `draw.freehand` · changes the document
@@ -643,6 +717,8 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: `{points: [[x, y], ..], smooth: bool} makes the raw anchors at those positions smooth (their handles in one line) or corners (handles drawn in), in every shape that has them`
 - **Snap Point** `draw.snap`
   Parameters: ``{x, y, snap, moving?: bool} where a point drawn at (x, y) snaps within `snap` stage units, by the snap engine's priority (ADR 0076): an anchor (Snap to Objects), a guide (Snap to Guides), a line or fill edge, the grid (Snap to Grid), a whole pixel (Snap to Pixels); `moving`: the selection is what moves (a Free Transform handle), so it isn't a target; returns {x, y, snapped: {x, y, to: point|guide|line|grid|pixel} | null}``
+- **Paste SVG** `edit.paste_svg` · changes the document
+  Parameters: `{svg, x?, y?, float?: bool} parses an SVG snippet and places its editable vector shapes onto the active layer centred at (x, y) or the stage centre, in one undo step`
 - **Replace** `find.replace` · changes the document
   Parameters: ``{the find.search query, with: text (kind text; $1 and ${name} insert groups when regex) | family (font) | #rrggbb (color; each place keeps its alpha) | library id (symbol, sound, bitmap), at?: one hit as find.search returned it (Replace); without `at`, every hit (Replace All, one undo step; asks first above 100 places)} → {replaced, skipped, notes}``
 - **Go to Found Item** `find.goto`
@@ -664,21 +740,21 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Import Brushes** `brush.preset_import`
   Parameters: `{path} adds the brushes in a brush set file to yours (a name you have already gets a number)`
 - **Move Filter** `filter.move` · changes the document
-  Parameters: ``{from, to} moves the filter at index `from` (0 is the first, applied first) to index `to` in the lists of the selected movie clips, buttons and text; the order changes how they draw``
+  Parameters: ``{from, to} moves the filter at index `from` (0 is the first, applied first) to index `to` in the lists of the selected symbol instances and text; the order changes how they draw``
 - **Enable Filter** `filter.enable` · changes the document
   Parameters: `{enabled: bool, index? (default: every filter)} switches a filter on or off; a filter switched off keeps its settings and draws nothing`
 - **Remove Filter** `filter.remove` · changes the document
-  Parameters: `{index? (default: every filter)} removes a filter from the selected movie clips, buttons and text`
+  Parameters: `{index? (default: every filter)} removes a filter from the selected symbol instances and text`
 - **Copy Filters** `filter.copy`
-  Parameters: `{index? (default: every filter)} copies the filters of the selected movie clip, button or text (one, or all), for Paste Filters`
+  Parameters: `{index? (default: every filter)} copies the filters of the selected symbol instance or text (one, or all), for Paste Filters`
 - **Paste Filters** `filter.paste` · changes the document
-  Parameters: `{replace? (default false: added after their own)} pastes the copied filters onto the selected movie clips, buttons and text`
+  Parameters: `{replace? (default false: added after their own)} pastes the copied filters onto the selected symbol instances and text`
 - **Filter Presets** `filter.preset_list`
   Parameters: `{} → {presets: your filter presets, each a name and its filters; builtin: the built-in ones (ADR 0099), each with its name, filters and whether you have hidden it}`
 - **Save Filter Preset** `filter.preset_save`
   Parameters: `{name, filters? (a list as element.set_filters takes; default: the selected object's)} saves a filter preset of your own (kept in your preferences; a name you have already is replaced, after asking; a built-in preset's name is refused)`
 - **Apply Filter Preset** `filter.preset_apply` · changes the document
-  Parameters: `{name: one of yours, or a built-in one (Soft Shadow, Hard Shadow, Neon Glow, Outline, Emboss, Engrave, Soft Focus, Greyscale)} gives the selected movie clips, buttons and text the preset's filters, replacing theirs (as Animate does)`
+  Parameters: `{name: one of yours, or a built-in one (Soft Shadow, Hard Shadow, Neon Glow, Outline, Emboss, Engrave, Soft Focus, Greyscale)} gives the selected symbol instances and text the preset's filters, replacing theirs (as Animate does)`
 - **Rename Filter Preset** `filter.preset_rename`
   Parameters: `{name, to} (your own presets; the built-in ones keep their names)`
 - **Delete Filter Preset** `filter.preset_delete`
@@ -721,6 +797,10 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: `{index} puts a copy right after it → {index, count}`
 - **Rename Swatch** `swatch.rename` · changes the document
   Parameters: `{index, name} (empty: no name, the hex shows on hover)`
+- **Tagged Swatch** `swatch.set_tagged` · changes the document
+  Parameters: `{index, tagged?: bool (default true), link_existing?: bool (default false)} turns a swatch into a Live Tagged Swatch (or untags it when false); with link_existing, shapes across scenes and Library symbols whose fill or stroke matches this swatch link to it → {index, tagged, tag_id, linked}`
+- **Edit Swatch** `swatch.edit` · changes the document
+  Parameters: `{index, type?: solid|linear|radial, color?, stops?, spread?, linear_rgb?: bool, focal?, name?} edits a swatch in place; when it is a Tagged Swatch, every shape linked to it across scenes and Library symbols updates to the new colour or gradient in one undo step → {index, tagged, tag_id, updated}`
 - **Apply Swatch** `swatch.apply` · changes the document
   Parameters: ``{index, target?: fill|stroke (default fill), selection?: bool (default true)} sets the fill swatch (as paint.set_fill: a gradient is fitted to each shape) or the stroke colour, and unless `selection` is false the selected shapes' fills or strokes. A gradient swatch can't be a stroke (strokes are one colour) → {target, changed}``
 - **Clear Swatches** `swatch.clear` · changes the document
@@ -773,14 +853,22 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: `{cap?: none|round|square, join?: miter|round|bevel, miter? (limit, 1..=100; a corner whose point is longer than this many widths is bevelled), style?: solid|dashed|dotted, dash? ([on, off, ..] lengths in the shape's units; implies dashed), dash_offset?, dot_spacing? (between dots, edge to edge; implies dotted), id? (default: the selected shapes)}`
 - **Sample Colour** `paint.sample`
   Parameters: `{x, y, scale? (the view's zoom, 0.01..=64, default 1: the colour of one screen pixel there)} the colour drawn at a point of what is being edited, over the stage colour: fills, gradients, bitmaps, lines, symbols and effects alike, as the CPU renderer draws them (the colour picker's eyedropper, #288) → {color: "#rrggbb", r, g, b}`
+- **Lasso Select** `raw.select_lasso` · changes the document
+  Parameters: `{points: [[x, y], ..] (3 to 4096 vertices), add?: bool} slices and selects raw fills and strokes inside the closed lasso polygon across visible unlocked layers, and selects objects whose centre or bounds lie inside → {selected, cut}`
+- **Magic Wand** `raw.magic_wand` · changes the document
+  Parameters: `{x, y, tolerance?: 0..255 (default 32), all_layers?: bool (default false), add?: bool} selects shapes whose fill colour matches what lies at (x, y) within tolerance on the active layer (or all visible unlocked layers) → {selected, color}`
+- **Stroke Paint** `element.set_stroke_paint` · changes the document
+  Parameters: `{type?: solid|linear|radial|bitmap, color?, stops?: [{offset: 0..1, color}, ..], spread?: extend|reflect|repeat, linear_rgb?: bool, focal?: -0.98..0.98, bitmap?: id, id? (default: the selected shapes)} sets solid, linear gradient, radial gradient or bitmap paint on selected shapes' strokes → {stroke_paint, changed}`
+- **Vector Art Brush** `draw.art_brush` · changes the document
+  Parameters: `{source: id (element_id or symbol_id), spine: [[x, y], ..] (2 to 4096 points), width_scale?: 0.05..20.0 (default 1.0)} warps vector outlines from source along the arc-length parameterized spine curve into a drawing object or group → {element, shapes}`
 - **Run Plug-in** `plugin.run` · changes the document
   Parameters: `{id, params?: {…} (see plugin.list; missing ones take their defaults)} one undo step`
 - **Remove Plug-in** `plugin.remove`
   Parameters: `{id, confirm? (when it deletes the plug-in's file from the plug-ins folder)}`
 - **Place Sound** `sound.place` · changes the document
-  Parameters: `{sound, layer?, frame? (a blank keyframe is made there if the frame is empty), sync?: event|start|stop|stream, repeat?, loop?, effect?, envelope?, extend? (lengthen the layer's last span to the sound's length)}`
+  Parameters: `{sound, layer?, frame? (a blank keyframe is made there if the frame is empty), sync?: event|start|stop|stream, repeat?, loop?, in_sec?: f64, out_sec?: f64 | null, effect?, envelope?, extend? (lengthen the layer's last span to the sound's length)}`
 - **Sound Settings** `sound.set` · changes the document
-  Parameters: `{layer?, frame?, sound?: id | null (null takes the sound off), sync?, repeat?, loop?, effect?: none|left_channel|right_channel|fade_left_to_right|fade_right_to_left|fade_in|fade_out|custom (presets shape over the time the sound is heard; custom starts from the effect before), envelope?: [{at (seconds from the sound's start), left (0–1), right (0–1)}…] (1–16 points; makes the effect custom)}`
+  Parameters: `{layer?, frame?, sound?: id | null (null takes the sound off), sync?, repeat?, loop?, in_sec?: f64 (trim start in seconds, >= 0), out_sec?: f64 | null (trim end in seconds, null clears), effect?: none|left_channel|right_channel|fade_left_to_right|fade_right_to_left|fade_in|fade_out|custom (presets shape over the time the sound is heard; custom starts from the effect before), envelope?: [{at (seconds from the sound's start), left (0–1), right (0–1)}…] (1–16 points; makes the effect custom)}`
 - **Mute/Unmute Layer** `layer.toggle_mute` · changes the document
   Parameters: `{layer?} (its sounds, and those in the symbols on it, go silent in playback and every export)`
 - **Layer Volume** `layer.set_volume` · changes the document
@@ -792,7 +880,11 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Rename Sound** `sound.rename` · changes the document
   Parameters: `{sound, name}`
 - **Analyse Sound** `sound.analyse`
-  Parameters: `{what?: levels|visemes (default levels), sound_layer?, sound_frame?, from?, to?, threshold?, smoothing?, channel? (levels), hold? (visemes)} → {sound, name, layer, keyframe, from, to, fps, levels (each frame's loudness, 0–1 of the loudest) and values (gated and smoothed), or visemes (rest|open|wide|round|closed per frame)}`
+  Parameters: `{what?: levels|visemes|visemes_12 (default levels), sound_layer?, sound_frame?, from?, to?, threshold?, smoothing?, channel? (levels), hold? (visemes)} → {sound, name, layer, keyframe, from, to, fps, levels (each frame's loudness, 0–1 of the loudest) and values (gated and smoothed), visemes (rest|open|wide|round|closed per frame), or visemes_12 (neutral|ah|d|ee|f|l|m|oh|r|s|uh|woo per frame)}`
+- **List Symbol Frames** `frame_picker.frames`
+  Parameters: `{element?, symbol?, layer?} → {symbol, name, frame_count, loop_mode, first_frame, frames: [{frame, label, non_empty}]}`
+- **Pick Symbol Frame** `frame_picker.pick` · changes the document
+  Parameters: `{frame_index, loop?: single_frame|play_once|loop, auto_keyframe?: bool, element?, layer?} sets loop and first_frame on the symbol instance (optionally inserting a keyframe at the playhead) in one undo step`
 - **Video Information** `file.video_info`
   Parameters: `{path, step?, max_edge?, start?, length?, max_frames?, ffmpeg?} what importing the video with these settings would take, before anything is decoded → {width, height, seconds, fps, audio, plan: {frames, width, height, limit, truncated, memory (bytes of decoded pixels)}}`
 - **Reference Video** `layer.set_video` · changes the document
