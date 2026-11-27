@@ -33,7 +33,7 @@ AniCraft is an independent, open-source project, and is not affiliated with or e
 | Drawing model | 16 | 3 | 4 | 0 |
 | Colour | 8 | 1 | 2 | 2 |
 | Text | 8 | 5 | 5 | 2 |
-| Symbols and Library | 13 | 3 | 4 | 0 |
+| Symbols and Library | 14 | 3 | 3 | 0 |
 | Timeline | 16 | 2 | 9 | 0 |
 | Tweens and the Motion Editor | 12 | 2 | 4 | 0 |
 | Bones and rigging | 8 | 2 | 3 | 0 |
@@ -49,7 +49,7 @@ AniCraft is an independent, open-source project, and is not affiliated with or e
 | Accessibility | 4 | 2 | 1 | 0 |
 | Preferences and shortcuts | 6 | 2 | 0 | 1 |
 | Automation | 4 | 2 | 1 | 1 |
-| **All** | **198** | **53** | **70** | **27** |
+| **All** | **199** | **53** | **69** | **27** |
 
 The counts are of the rows below, so they weigh a small feature like a large one. The backlog,
 not this table, says what matters most.
@@ -209,7 +209,7 @@ not this table, says what matters most.
 |---|---|---|
 | Graphic, movie clip and button symbols | **done** | [symbols](guide/symbols-and-library.md). |
 | Convert to Symbol, with name, type, folder | **done** | Missing: the registration point grid in the dialog (P-021). |
-| New Symbol (empty, Ctrl+F8) | **missing** | P-021. |
+| New Symbol (empty, Ctrl+F8) | **done** | Insert › New Symbol… (`library.new_symbol`, [#655](https://github.com/storytold/anicraft/issues/655)), and the Library panel's New Symbol button. |
 | Edit in place, edit symbols, the path back | **done** | [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md). A rotated instance opens upright. |
 | Graphic looping: loop, play once, single frame, first frame | **done** | Reverse loop modes import from Animate files†. |
 | Swap Symbol, Duplicate Symbol | **done** | |

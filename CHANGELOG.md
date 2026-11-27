@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Insert › New Symbol…** (Ctrl+F8, #655): creates a new, empty graphic, movie clip or button
+  symbol in the Library (optionally inside a folder) and opens it for editing without placing an
+  instance on the stage. Also available from the Library panel's New Symbol button and as
+  `library.new_symbol`.
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.

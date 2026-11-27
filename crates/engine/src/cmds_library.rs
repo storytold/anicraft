@@ -8,7 +8,7 @@
 use crate::params::*;
 use crate::{CommandSpec, EngineError, Result, Session};
 use anicraft_doc::library::{MAX_FOLDER_DEPTH, MAX_FOLDERS};
-use anicraft_doc::{BitmapId, ElementKind, FolderId, LibraryEntry, LibraryFolder, LibraryItem, Paint, SoundId, SymbolId, SymbolKind, Timeline};
+use anicraft_doc::{BitmapId, ElementKind, FolderId, Layer, LayerId, LibraryEntry, LibraryFolder, LibraryItem, Paint, SoundId, Symbol, SymbolId, SymbolKind, Timeline};
 use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -17,6 +17,15 @@ pub fn specs() -> Vec<CommandSpec> {
     let c = |id, label, menu, shortcut, params, mutates, run| CommandSpec { id, label, menu, shortcut, params, mutates, run };
     vec![
         c("library.items", "List Library", "", None, "{} every folder (id, name, parent, path) and item (symbol | bitmap | sound id, kind, name, folder, path, uses, unused) in Library order; `uses` counts instances, bitmap fills and keyframe sounds once per keyframe", false, items as crate::RunFn),
+        c(
+            "library.new_symbol",
+            "New Symbol…",
+            "Insert",
+            Some("Ctrl+F8"),
+            "{name? (default: the next free “Symbol n”), kind?: graphic|movie_clip|button (default: graphic), folder?: Library folder id (default: the top level), edit?: bool (default: true: open the new symbol for editing)} → {id, name, kind}: creates an empty symbol in the Library without placing it on the stage",
+            true,
+            new_symbol,
+        ),
         c("library.new_folder", "New Folder", "", None, "{name? (default: the next free “Folder n”), parent?: folder id} → {folder, name}; names are unique within a folder (case aside) and can't hold “/”", true, new_folder),
         c("library.rename", "Rename", "", None, "{symbol | bitmap | sound | folder: id, name} renames a Library item or folder; the name must be free in its folder (case aside) and can't hold “/”", true, rename),
         c("library.move", "Move to Folder", "", None, "{items: [{symbol | bitmap | sound | folder: id}, ..], to: folder id | null (the top level)} moves items and folders (with what they hold) into a folder; a folder can't go inside itself, and a name the folder already has stops the move", true, move_to),
@@ -173,6 +182,27 @@ fn items(s: &mut Session, _: &Value) -> Result<Value> {
         })
         .collect();
     Ok(json!({"folders": folders, "items": items, "unused": unused.len()}))
+}
+
+fn new_symbol(s: &mut Session, p: &Value) -> Result<Value> {
+    let folder = opt_folder(s, p, "folder")?;
+    let kind = opt_str(p, "kind")?.map(kind_of).transpose()?.unwrap_or(SymbolKind::Graphic);
+    let edit = opt_bool(p, "edit")?.unwrap_or(true);
+    let name = match opt_str(p, "name")? {
+        Some(n) => s.doc.check_name(folder, n, None).map_err(|e| EngineError::Param(e.to_string()))?,
+        None => s.doc.numbered_name(folder, "Symbol", s.doc.library.len() + 1),
+    };
+    let id = SymbolId(s.doc.alloc_id());
+    let layer = Layer::new(LayerId(s.doc.alloc_id()), "Layer 1");
+    let sym = Symbol { id, name: name.clone(), kind, linkage: None, scale_grid_kept: None, scale_grid: None, timeline: Timeline { layers: vec![Arc::new(layer)] } };
+    s.doc.library.push(Arc::new(sym));
+    if folder.is_some() {
+        s.doc.place_entry(LibraryEntry::Item(LibraryItem::Symbol(id)), folder);
+    }
+    if edit {
+        crate::editing::edit(s, &json!({"symbol": id.0}))?;
+    }
+    Ok(json!({"id": id.0, "name": name, "kind": kind_key(kind)}))
 }
 
 fn new_folder(s: &mut Session, p: &Value) -> Result<Value> {

@@ -45,6 +45,18 @@ layers, the symbol keeps those layers inside it, and the instance goes on the to
 Names are unique within a folder: if the name is taken, the dialog shows the name the symbol
 will get instead. The next time, the dialog offers the type and folder you used last.
 
+To start from an empty symbol and draw inside it:
+
+1. Choose **Insert › New Symbol…** (**Ctrl+F8**), or click the **+** (**New Symbol**) button
+   under the Library list.
+2. Type a **Name**, choose a **Type** (Graphic, Movie clip or Button), and choose the Library
+   **Folder** it goes into.
+3. Press **OK**.
+
+The new symbol is added to the Library with one empty layer and opens straight into symbol
+editing so you can draw its artwork right away, without placing an instance on the stage.
+Names must be unique within a folder (capitals aside).
+
 You can also make symbols by importing (see [Importing into the Library](#importing-into-the-library)).
 
 ## Editing a symbol in place

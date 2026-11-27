@@ -1859,6 +1859,7 @@ fn animate_default_keys_map_to_the_same_commands() {
         ("Shift+,", "timeline.first_frame"),
         ("Shift+.", "timeline.last_frame"),
         ("F8", "modify.convert_to_symbol"),
+        ("Ctrl+F8", "library.new_symbol"),
         ("Ctrl+Enter", "control.test_movie"),
         ("Ctrl+B", "modify.break_apart"),
         ("Ctrl+Shift+Z", "modify.remove_transform"),

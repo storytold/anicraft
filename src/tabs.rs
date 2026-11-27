@@ -322,10 +322,11 @@ fn settle(app: &mut App) {
     app.raw_points = Value::Null;
     app.raw_touched.clear();
     app.raw_with.clear();
-    // Windows that edit one keyframe or layer of this document.
+    // Windows and dialogs that target this document.
     app.envelope = None;
     app.ease = None;
     app.layer_props = None;
+    app.new_symbol = None;
     app.aids_dialogs = Default::default();
     // The History panel's picks and Save As Command number this document's undo steps: in
     // another document the same numbers are other steps.
@@ -336,6 +337,7 @@ fn settle(app: &mut App) {
 /// The document in `app` is another one from here on: nothing drawn for the last one is kept
 /// (ADR 0112: a document that isn't shown holds no render caches).
 fn arrived(app: &mut App) {
+    app.new_symbol = None;
     app.stage_cache.forget_document();
     app.last_revision = 0;
     app.heard = None;

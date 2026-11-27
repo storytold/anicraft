@@ -129,6 +129,7 @@ This page is generated from the editor's shortcut map, so it always matches the 
 | Timeline › Keyframe | F6 | F6 |
 | Timeline › Blank Keyframe | F7 | F7 |
 | Timeline › Clear Keyframe | Shift+F6 | ⇧F6 |
+| New Symbol… | Ctrl+F8 | ⌘F8 |
 
 ## Modify
 

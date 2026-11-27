@@ -192,6 +192,53 @@ fn history_picks_and_save_as_command_stay_with_their_document() {
 }
 
 #[test]
+fn new_symbol_dialog_closes_when_another_document_is_shown() {
+    let (ctx, mut app) = app();
+    app.tabs.keep_first();
+    // First document has unsaved changes; second is shown and clean.
+    app.run("draw.rect", json!({"x": 0, "y": 0, "w": 10, "h": 10}));
+    let first_symbols = app.s.doc.library.len();
+    app.perform("file.new", json!({}));
+    let second_symbols = app.s.doc.library.len();
+    assert_eq!(app.tabs.active(), 1);
+    assert!(infos(&app)[0].dirty);
+
+    // Tab switching is blocked while Create New Symbol is open on its own.
+    crate::new_symbol::open(&mut app);
+    assert!(app.new_symbol.is_some());
+    assert!(!activate(&mut app, 0));
+    assert_eq!(app.tabs.active(), 1);
+    assert!(app.new_symbol.is_some());
+
+    // Starting quit opens the close question (exempt from `busy`); switching to the dirty
+    // inactive document must clear the dialog so confirming it cannot add a symbol there.
+    quit(&mut app);
+    assert!(app.tabs.asking());
+    assert!(activate(&mut app, 0));
+    assert_eq!(app.tabs.active(), 0);
+    assert!(app.new_symbol.is_none(), "New Symbol dialog cleared once another document is shown");
+    answer(&mut app, Answer::Cancel);
+    frame(&ctx, &mut app, key(Key::Enter, Modifiers::NONE));
+    assert_eq!(app.s.doc.library.len(), first_symbols);
+    assert!(activate(&mut app, 1));
+    assert_eq!(app.s.doc.library.len(), second_symbols);
+
+    // Same for closing the dirty inactive tab directly.
+    crate::new_symbol::open(&mut app);
+    let first_id = infos(&app)[0].id;
+    close(&mut app, vec![first_id]);
+    assert!(app.tabs.asking());
+    assert!(activate(&mut app, 0));
+    assert_eq!(app.tabs.active(), 0);
+    assert!(app.new_symbol.is_none(), "New Symbol dialog cleared when close switches documents");
+    answer(&mut app, Answer::Cancel);
+    frame(&ctx, &mut app, key(Key::Enter, Modifiers::NONE));
+    assert_eq!(app.s.doc.library.len(), first_symbols);
+    assert!(activate(&mut app, 1));
+    assert_eq!(app.s.doc.library.len(), second_symbols);
+}
+
+#[test]
 fn a_copy_in_one_document_pastes_into_another_with_its_symbols() {
     let (_, mut app) = app();
     app.tabs.keep_first();

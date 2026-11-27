@@ -1,6 +1,6 @@
 # Command reference
 
-Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 406 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
+Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 407 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
 
 This page is generated from the command registry, so it always matches the version of AniCraft it came with.
 
@@ -153,6 +153,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{} (a camera layer on top of the scene, at rest: it sees the stage as it is; nothing happens if there is one)`
 - **New Scene** `scene.new` · changes the document
   Parameters: `{name?}`
+- **New Symbol…** `library.new_symbol` · **Ctrl+F8** (macOS **⌘F8**) · changes the document
+  Parameters: `{name? (default: the next free “Symbol n”), kind?: graphic|movie_clip|button (default: graphic), folder?: Library folder id (default: the top level), edit?: bool (default: true: open the new symbol for editing)} → {id, name, kind}: creates an empty symbol in the Library without placing it on the stage`
 
 ## Modify
 

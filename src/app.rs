@@ -405,6 +405,8 @@ pub struct App {
     pub prompt: Option<Prompt>,
     /// The Convert to Symbol dialog, and what it chose last (ADR 0053).
     pub convert: Option<crate::convert_symbol::ConvertDialog>,
+    /// The Create New Symbol dialog (Ctrl+F8, #655).
+    pub new_symbol: Option<crate::new_symbol::NewSymbolDialog>,
     /// The Layer Properties dialog while it is open (ADR 0061).
     pub layer_props: Option<crate::layer_props::LayerPropsDialog>,
     /// Open the timeline's Frame View menu on the next frame (screenshots, the audit).
@@ -841,6 +843,7 @@ impl App {
             left_out_said: false,
             prompt: None,
             convert: None,
+            new_symbol: None,
             layer_props: None,
             tl_frame_view_open: false,
             tl_header_spill: 0.0,
@@ -3502,7 +3505,7 @@ impl App {
 
     /// Any modal (prompt, confirmation, close guard) is open: global shortcuts pause.
     pub fn modal_open(&self) -> bool {
-        self.prompt.is_some() || self.convert.is_some() || self.shape_dialog.is_some() || self.trace.is_some() || self.doc_settings.is_some() || self.audio_keys.is_some() || self.confirm.is_some() || self.tabs.asking() || self.plugin_dialog.is_some() || self.templates.save.is_some() || self.video_import.is_some()
+        self.prompt.is_some() || self.convert.is_some() || self.new_symbol.is_some() || self.shape_dialog.is_some() || self.trace.is_some() || self.doc_settings.is_some() || self.audio_keys.is_some() || self.confirm.is_some() || self.tabs.asking() || self.plugin_dialog.is_some() || self.templates.save.is_some() || self.video_import.is_some()
     }
 
     /// The single entry point for user-initiated commands: asks first when the engine says the
@@ -3925,6 +3928,11 @@ impl App {
         if id == "modify.convert_to_symbol" {
             // Name, type and Library folder (ADR 0053).
             crate::convert_symbol::open(self);
+            return;
+        }
+        if id == "library.new_symbol" {
+            // Empty symbol in the Library, opened for editing (#655).
+            crate::new_symbol::open(self);
             return;
         }
         // A picture copied in another app (a paint program, a screenshot) is what Paste means
@@ -4997,6 +5005,7 @@ impl App {
         crate::drop::frame(self, &ctx);
         self.prompt_window(&ctx);
         crate::convert_symbol::window(self, &ctx);
+        crate::new_symbol::window(self, &ctx);
         crate::shape_dialogs::window(self, &ctx);
         crate::trace_dialog::window(self, &ctx);
         crate::doc_settings::window(self, &ctx);
