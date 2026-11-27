@@ -184,6 +184,8 @@ sys-locale = { version = "0.3", features = ["js"] }
 web-sys = { version = "0.3", features = ["BeforeUnloadEvent", "Blob", "BlobPropertyBag", "CssStyleDeclaration", "DomRect", "DragEvent", "Document", "Element", "Event", "EventTarget", "File", "FileList", "HtmlAnchorElement", "HtmlCanvasElement", "HtmlElement", "HtmlInputElement", "MediaQueryList", "Navigator", "Storage", "Url", "Window", "console"] }
 
 [dev-dependencies]
+# Native GPU regression tests open an adapter outside the window event loop.
+pollster.workspace = true
 # Plug-in fixtures for the shell's plug-in tests, in WebAssembly text (Apache-2.0 WITH
 # LLVM-exception; already in the tree for the engine's tests).
 wat = "1.228"

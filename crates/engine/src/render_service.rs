@@ -32,7 +32,7 @@
 use crate::editing::Front;
 use crate::history::StateId;
 use crate::onion::OnionSkin;
-use anicraft_doc::{DisplayList, Document, evaluate_scene, evaluate_scene_camera};
+use anicraft_doc::{ColorTransform, DisplayList, Document, ElementId, evaluate_scene, evaluate_scene_camera};
 use anicraft_render::{RenderStats, View, render};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -62,12 +62,42 @@ pub struct FrameJob {
     /// A symbol open in place, in front of the picture (ADR 0045): onion skin composes its own
     /// frames (ADR 0051). Set with [`FrameJob::inside`].
     pub front: Option<Arc<Front>>,
+    /// Editor-only focus. IDs are sorted so membership is cheap while evaluating the picture.
+    pub(crate) focus: Option<Arc<[ElementId]>>,
+    /// An already evaluated layer or backdrop, with its own scene identity.
+    pub(crate) prepared: Option<Arc<DisplayList>>,
+    /// A temporary stage tile whose key must still be wanted when it finishes.
+    pub(crate) preview: bool,
     /// The reference videos' pictures for this frame (ADR 0116): the stage's alone, never an
     /// export's. Set with [`FrameJob::with_reference`].
     pub reference: Option<Arc<Vec<crate::video::RefFrame>>>,
 }
 
 impl FrameJob {
+    pub fn preview_tile(mut self, preview: bool) -> Self {
+        if preview && !self.preview {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            (self.key, "live preview tile").hash(&mut hash);
+            self.key = hash.finish();
+        }
+        self.preview = preview;
+        self
+    }
+
+    /// Render prepared artwork with the same view and rasterizer. Jobs for the same
+    /// document state and part must supply the same list, even across different tile views.
+    pub fn with_prepared_list(mut self, part: impl Hash, list: Arc<DisplayList>) -> Self {
+        let mix = |key| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            (key, "prepared display list", &part).hash(&mut h);
+            h.finish()
+        };
+        self.key = mix(self.key);
+        self.scene = mix(self.scene);
+        self.prepared = Some(list);
+        self
+    }
+
     /// The same job with the reference videos' pictures `frames` under the artwork, keyed
     /// apart by which pictures they are.
     pub fn with_reference(mut self, frames: Option<Arc<Vec<crate::video::RefFrame>>>) -> FrameJob {
@@ -121,19 +151,125 @@ impl FrameJob {
         self
     }
 
+    /// Foreground the preview instances (sorted by ID) over dimmed surroundings. Focused tiles
+    /// have their own cache keys.
+    pub fn dim_around(mut self, focus: Option<Arc<[ElementId]>>) -> FrameJob {
+        if let Some(ids) = focus.filter(|ids| !ids.is_empty()) {
+            let mix = |k: u64| {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                (k, "dim around", ids.as_ref()).hash(&mut h);
+                h.finish()
+            };
+            self.key = mix(self.key);
+            self.scene = mix(self.scene);
+            self.focus = Some(ids);
+        }
+        self
+    }
+
     /// What the job draws: its frame with what its onion settings add (ADR 0047), on the open
     /// symbol's own timeline when there is one (ADR 0051).
     pub fn display_list(&self) -> DisplayList {
+        if let Some(list) = &self.prepared {
+            return list.as_ref().clone();
+        }
         let onion = self.onion.as_ref().filter(|o| o.shows());
-        let mut dl = match (&self.front, onion) {
-            (Some(front), Some(skin)) => display_list_inside(&self.doc, self.frame, front, skin),
+        let mut list = match (&self.front, onion) {
+            (Some(front), skin) if skin.is_some() || self.focus.is_some() => {
+                compose_inside(&self.doc, self.frame, front, skin)
+            }
             _ => display_list_for(&self.doc, self.frame, self.onion.as_ref(), self.camera),
         };
         if let Some(frames) = &self.reference {
-            crate::video::fill(&mut dl, frames);
+            crate::video::fill(&mut list, frames);
         }
-        dl
+        if let Some(focus) = &self.focus {
+            foreground_array(&mut list, focus);
+            dim_surroundings(&mut list, focus);
+        }
+        list
     }
+}
+
+/// Fade the largest whole groups that exclude the preview and any mask artwork. A group
+/// containing both preview and unrelated artwork keeps its opacity, so only its unrelated
+/// children are dimmed. Stack order, clipping and the document itself are unchanged.
+fn dim_surroundings(list: &mut DisplayList, focus: &[ElementId]) {
+    const DIM: f32 = 0.28;
+    let preserve = |item: &anicraft_doc::DisplayItem| item.masks.is_some() || focus.binary_search(&item.element).is_ok();
+    let mut contains_focus = vec![false; list.groups.len()];
+    for item in list.items.iter().filter(|i| preserve(i)) {
+        let mut parent = item.group;
+        while let Some(id) = parent {
+            let Some(keep) = contains_focus.get_mut(id as usize) else { break };
+            if std::mem::replace(keep, true) {
+                break;
+            }
+            parent = list.groups.get(id as usize).and_then(|g| g.parent).filter(|p| *p < id);
+        }
+    }
+    let kept = |id: Option<u32>| id.and_then(|id| contains_focus.get(id as usize)).copied().unwrap_or(true);
+    for (group, has_focus) in list.groups.iter_mut().zip(&contains_focus) {
+        if !has_focus && kept(group.parent) {
+            group.alpha *= DIM;
+        }
+    }
+    for item in list.items.iter_mut().filter(|i| !preserve(i) && kept(i.group)) {
+        if let Some(outline) = &mut item.outline {
+            outline.a *= DIM;
+        } else {
+            item.color = ColorTransform::alpha(DIM).concat(&item.color);
+        }
+    }
+}
+
+/// Move the preview to the front without changing its internal order, clip references or
+/// compositing. If a group contains both kinds of artwork, give each pass its own group run.
+fn foreground_array(list: &mut DisplayList, focus: &[ElementId]) {
+    let front = |item: &anicraft_doc::DisplayItem| usize::from(focus.binary_search(&item.element).is_ok());
+    let mut uses = vec![0; list.groups.len()];
+    for item in &list.items {
+        if let Some(bits) = item.group.and_then(|g| uses.get_mut(g as usize)) {
+            *bits |= 1 << front(item);
+        }
+    }
+    for (id, group) in list.groups.iter().enumerate().rev() {
+        let bits = uses.get(id).copied().unwrap_or(0);
+        if let Some(parent) = group.parent.and_then(|p| uses.get_mut(p as usize)) {
+            *parent |= bits;
+        }
+    }
+    let mut remap = vec![[None; 2]; list.groups.len()];
+    let mut groups = Vec::with_capacity(list.groups.len());
+    for (old, (group, bits)) in list.groups.iter().zip(uses).enumerate() {
+        for pass in 0..2 {
+            if bits & (1 << pass) != 0 {
+                let parent = group.parent.and_then(|p| remap.get(p as usize)).and_then(|set| set[pass]);
+                if let Some(set) = remap.get_mut(old) {
+                    set[pass] = Some(groups.len() as u32);
+                }
+                groups.push(anicraft_doc::Group { parent, ..group.clone() });
+            }
+        }
+    }
+    let mut forward = Vec::new();
+    let mut moved = Vec::new();
+    let mut links = std::mem::take(&mut list.links).into_iter().peekable();
+    for (old, mut item) in std::mem::take(&mut list.items).into_iter().enumerate() {
+        let pass = front(&item);
+        item.group = item.group.and_then(|g| remap.get(g as usize)).and_then(|set| set[pass]);
+        let (items, link_out) = if pass == 0 { (&mut list.items, &mut list.links) } else { (&mut forward, &mut moved) };
+        while links.peek().is_some_and(|(i, _)| *i == old as u32) {
+            if let Some((_, url)) = links.next() {
+                link_out.push((items.len() as u32, url));
+            }
+        }
+        items.push(item);
+    }
+    let base = list.items.len() as u32;
+    list.links.extend(moved.into_iter().map(|(i, url)| (i + base, url)));
+    list.items.append(&mut forward);
+    list.groups = groups;
 }
 
 /// A stage picture's frame with the open symbol in front composed by `skin`: the timelines around
@@ -141,15 +277,19 @@ impl FrameJob {
 /// onion skin on (not Edit Multiple Frames), the timeline the symbol was opened from shows its
 /// own onion frames too, dimmed with it (ADR 0061).
 pub fn display_list_inside(doc: &Document, frame: u32, front: &Front, skin: &OnionSkin) -> DisplayList {
+    compose_inside(doc, frame, front, Some(skin))
+}
+
+fn compose_inside(doc: &Document, frame: u32, front: &Front, skin: Option<&OnionSkin>) -> DisplayList {
     let (scene, local) = doc.locate(frame);
     let tl = &front.timeline;
-    let parent = front.parent.as_ref().filter(|_| skin.ghosts && !skin.edit_multiple);
+    let parent = front.parent.as_ref().zip(skin.filter(|s| s.ghosts && !s.edit_multiple));
     let mut dl = DisplayList::default();
     // Back to front: the picture's layers from the bottom up, each its own timeline.
     for l in doc.timeline(scene).layers.iter().rev() {
         if l.id == front.layer {
-            dl.append(crate::onion::compose_timeline(tl, front.frame, Some(skin), |f| anicraft_doc::evaluate_timeline_at(doc, tl, f, front.at)));
-        } else if let Some(p) = parent.filter(|p| p.layer == l.id) {
+            dl.append(crate::onion::compose_timeline(tl, front.frame, skin, |f| anicraft_doc::evaluate_timeline_at(doc, tl, f, front.at)));
+        } else if let Some((p, skin)) = parent.filter(|(p, _)| p.layer == l.id) {
             dl.append(parent_onion(doc, p, front, skin));
         } else {
             dl.append(anicraft_doc::evaluate_timeline(doc, &anicraft_doc::Timeline { layers: vec![l.clone()] }, local));
@@ -264,7 +404,7 @@ pub fn frame_key(state: StateId, frame: u32, view: &View, onion: Option<&OnionSk
 /// A job whose `scene` is derived from the same inputs as its key.
 pub fn make_job(state: StateId, doc: &Document, frame: u32, view: View, onion: Option<&OnionSkin>) -> FrameJob {
     let onion = onion.filter(|o| o.shows()).copied();
-    FrameJob { key: frame_key(state, frame, &view, onion.as_ref()), raster: 0, set: set_key(state, &view), scene: scene_key(state, frame, onion.as_ref()), doc: doc.clone(), frame, view, onion, camera: false, front: None, reference: None }
+    FrameJob { key: frame_key(state, frame, &view, onion.as_ref()), raster: 0, set: set_key(state, &view), scene: scene_key(state, frame, onion.as_ref()), doc: doc.clone(), frame, view, onion, camera: false, front: None, focus: None, prepared: None, preview: false, reference: None }
 }
 
 /// A job for rasterizer `raster` (from [`RenderService::raster_id`]; 0 is the CPU oracle, and
@@ -348,22 +488,28 @@ fn render_batch_by(jobs: &[FrameJob], slot: &RasterSlot) -> Vec<FrameImage> {
 /// before: a view and the look-ahead around it are several passes of one scene). The pictures,
 /// and this batch's scenes for the next.
 fn render_batch_from(jobs: &[FrameJob], slot: &RasterSlot, known: &Scenes) -> (Vec<FrameImage>, Scenes) {
+    let scenes = batch_scenes(jobs, known);
+    let imgs = jobs.par_iter().map(|j| render_tile(j, slot, &scenes)).collect();
+    (imgs, scenes)
+}
+
+/// One evaluated scene per distinct [`FrameJob::scene`]: from `known` when it is there, the
+/// job's prepared list (ADR 0092's Array preview) or else evaluated now.
+fn batch_scenes(jobs: &[FrameJob], known: &Scenes) -> Scenes {
     let mut scenes = Scenes::new();
     for j in jobs {
-        scenes.entry(j.scene).or_insert_with(|| known.get(&j.scene).cloned().unwrap_or_else(|| Arc::new(j.display_list())));
+        scenes.entry(j.scene).or_insert_with(|| known.get(&j.scene).cloned().or_else(|| j.prepared.clone()).unwrap_or_else(|| Arc::new(j.display_list())));
     }
-    let imgs = jobs
-        .par_iter()
-        .map(|j| {
-            // A job made for another rasterizer (queued before a switch) is drawn by the oracle.
-            let raster = slot.raster.as_ref().filter(|_| j.raster != 0 && j.raster == slot.id);
-            match scenes.get(&j.scene) {
-                Some(dl) => render_job_by(j, dl, raster),
-                None => render_job_by(j, &j.display_list(), raster),
-            }
-        })
-        .collect();
-    (imgs, scenes)
+    scenes
+}
+
+fn render_tile(job: &FrameJob, slot: &RasterSlot, scenes: &Scenes) -> FrameImage {
+    // A job made for another rasterizer (queued before a switch) is drawn by the oracle.
+    let raster = slot.raster.as_ref().filter(|_| job.raster != 0 && job.raster == slot.id);
+    match scenes.get(&job.scene) {
+        Some(dl) => render_job_by(job, dl, raster),
+        None => render_job_by(job, &job.display_list(), raster),
+    }
 }
 
 /// The rasterizer in use and its id (0 and `None`: the oracle).
@@ -377,6 +523,8 @@ struct RasterSlot {
 /// rasterizer keeps on the GPU, counted at 4 bytes a pixel.
 pub struct FrameCache {
     map: HashMap<u64, (Arc<FrameImage>, u64)>,
+    preview_keys: HashSet<u64>,
+    preview_images: HashSet<u64>,
     tick: u64,
     bytes: usize,
     native_bytes: usize,
@@ -404,7 +552,7 @@ fn cost(img: &FrameImage) -> (usize, usize) {
 
 impl FrameCache {
     pub fn new(budget_bytes: usize) -> Self {
-        FrameCache { map: HashMap::new(), tick: 0, bytes: 0, native_bytes: 0, budget_bytes, native_budget_bytes: DEFAULT_NATIVE_CACHE_BYTES, hits: 0, misses: 0, cleared: 0, recent: VecDeque::new() }
+        FrameCache { map: HashMap::new(), preview_keys: HashSet::new(), preview_images: HashSet::new(), tick: 0, bytes: 0, native_bytes: 0, budget_bytes, native_budget_bytes: DEFAULT_NATIVE_CACHE_BYTES, hits: 0, misses: 0, cleared: 0, recent: VecDeque::new() }
     }
     pub fn get(&mut self, key: u64) -> Option<Arc<FrameImage>> {
         self.tick += 1;
@@ -440,9 +588,7 @@ impl FrameCache {
         self.recent.truncate(KEEP_SETS);
         let gone: Vec<u64> = self.map.iter().filter(|(_, (i, _))| !self.recent.contains(&i.set)).map(|(&k, _)| k).collect();
         for k in &gone {
-            if let Some((old, _)) = self.map.remove(k) {
-                self.forget(&old);
-            }
+            self.remove(*k);
         }
         gone.len()
     }
@@ -472,9 +618,61 @@ impl FrameCache {
             }
             let victim = self.map.iter().filter(|(_, (i, _))| !over_gpu || i.native.is_some()).min_by_key(|(_, (_, t))| *t).map(|(&k, _)| k);
             let Some(victim) = victim else { break };
-            if let Some((old, _)) = self.map.remove(&victim) {
-                self.forget(&old);
+            self.remove(victim);
+        }
+    }
+
+    fn accepts(&self, job: &FrameJob) -> bool {
+        !job.preview || self.preview_keys.contains(&job.key)
+    }
+
+    /// Whether the worker should still draw `job`, which it took when the cache had been
+    /// cleared `cleared` times: not after another clear, nor a superseded preview tile, nor a
+    /// picture of a set that is no longer kept, nor one already there.
+    fn needs_render(&self, cleared: u64, job: &FrameJob) -> bool {
+        cleared == self.cleared && self.accepts(job) && self.keeps(job.set) && !self.contains(job.key)
+    }
+
+    fn insert_job(&mut self, job: &FrameJob, img: Arc<FrameImage>) {
+        if !self.accepts(job) {
+            return;
+        }
+        self.insert(img);
+        if job.preview && self.contains(job.key) {
+            self.preview_images.insert(job.key);
+        }
+        if !job.preview {
+            self.preview_images.remove(&job.key);
+        }
+    }
+
+    /// Inserts `images` (in the order of `jobs`, possibly fewer) unless the cache was cleared
+    /// since `cleared` was read.
+    fn insert_batch(&mut self, cleared: u64, jobs: &[FrameJob], images: impl IntoIterator<Item = Arc<FrameImage>>) {
+        if cleared == self.cleared {
+            for (job, img) in jobs.iter().zip(images) {
+                self.insert_job(job, img);
             }
+        }
+    }
+
+    fn prepare_preview(&mut self, keys: &[u64]) -> bool {
+        if keys.len() == self.preview_keys.len() && keys.iter().all(|key| self.preview_keys.contains(key)) {
+            return false;
+        }
+        self.preview_keys.clear();
+        self.preview_keys.extend(keys.iter().copied());
+        let stale: Vec<_> = self.preview_images.difference(&self.preview_keys).copied().collect();
+        for key in stale {
+            self.remove(key);
+        }
+        true
+    }
+
+    fn remove(&mut self, key: u64) {
+        self.preview_images.remove(&key);
+        if let Some((old, _)) = self.map.remove(&key) {
+            self.forget(&old);
         }
     }
 
@@ -486,6 +684,8 @@ impl FrameCache {
     /// Forgets every picture (the document they show is no longer on screen, ADR 0112).
     pub fn clear(&mut self) {
         self.map.clear();
+        self.preview_images.clear();
+        self.preview_keys.clear();
         self.bytes = 0;
         self.native_bytes = 0;
         self.cleared += 1;
@@ -616,6 +816,15 @@ impl RenderService {
         make_job_for(self.raster_id(), state, doc, frame, view, onion)
     }
 
+    /// Keep exact tiles of the current preview. Superseded results that finish on the worker
+    /// are discarded, while unchanged tile keys and regular document renders stay reusable.
+    pub fn prepare_preview(&self, keys: &[u64]) {
+        let changed = self.cache().prepare_preview(keys);
+        if changed && self.worker.is_some() {
+            self.queue().urgent.retain(|job| !job.preview || keys.contains(&job.key));
+        }
+    }
+
     /// Images that are ready, in order; the missing ones become the new urgent batch
     /// (replacing any older pending batch).
     pub fn request_batch(&self, jobs: Vec<FrameJob>) -> Vec<Option<Arc<FrameImage>>> {
@@ -633,7 +842,7 @@ impl RenderService {
     fn request_some(&self, jobs: Vec<FrameJob>, budget: Option<std::time::Duration>) -> Vec<Option<Arc<FrameImage>>> {
         let mut out = Vec::with_capacity(jobs.len());
         let mut missing = Vec::new();
-        {
+        let cleared = {
             let mut cache = self.cache();
             for j in jobs {
                 match cache.get(j.key) {
@@ -644,7 +853,8 @@ impl RenderService {
                     }
                 }
             }
-        }
+            cache.cleared
+        };
         if missing.is_empty() {
             return out;
         }
@@ -654,10 +864,7 @@ impl RenderService {
                 None => render_batch_by(&missing, &self.slot()).into_iter().map(Arc::new).collect(),
                 Some(budget) => self.render_within(&missing, budget),
             };
-            let mut cache = self.cache();
-            for img in &imgs {
-                cache.insert(img.clone());
-            }
+            self.cache().insert_batch(cleared, &missing, imgs.iter().cloned());
             // In order: the ones the budget left out stay `None`.
             let mut it = imgs.into_iter();
             for slot in out.iter_mut().filter(|s| s.is_none()) {
@@ -666,6 +873,9 @@ impl RenderService {
             return out;
         }
         let mut q = self.queue();
+        if cleared != self.cache().cleared {
+            return out;
+        }
         let busy = q.busy.clone();
         q.urgent = missing.into_iter().filter(|j| !busy.contains(&j.key)).collect();
         if !q.urgent.is_empty() {
@@ -706,10 +916,15 @@ impl RenderService {
         self.request_batch(vec![job]).into_iter().next().flatten()
     }
 
+    /// Read a finished image without scheduling work or replacing the urgent batch.
+    pub fn cached(&self, key: u64) -> Option<Arc<FrameImage>> {
+        self.cache().get(key)
+    }
+
     /// Renders on the calling thread (one scene evaluation, tiles in parallel) and caches the
     /// results: for edits, where showing the change in this frame matters most.
     pub fn render_now_batch(&self, jobs: Vec<FrameJob>) -> Vec<Arc<FrameImage>> {
-        let (mut out, missing): (Vec<Option<Arc<FrameImage>>>, Vec<FrameJob>) = {
+        let (mut out, missing, cleared): (Vec<Option<Arc<FrameImage>>>, Vec<FrameJob>, u64) = {
             let mut cache = self.cache();
             let mut missing = Vec::new();
             let out = jobs
@@ -722,15 +937,10 @@ impl RenderService {
                     hit
                 })
                 .collect();
-            (out, missing)
+            (out, missing, cache.cleared)
         };
         let fresh: Vec<Arc<FrameImage>> = render_batch_by(&missing, &self.slot()).into_iter().map(Arc::new).collect();
-        {
-            let mut cache = self.cache();
-            for img in &fresh {
-                cache.insert(img.clone());
-            }
-        }
+        self.cache().insert_batch(cleared, &missing, fresh.iter().cloned());
         let mut it = fresh.into_iter();
         for slot in out.iter_mut().filter(|s| s.is_none()) {
             *slot = it.next();
@@ -752,11 +962,14 @@ impl RenderService {
         if self.worker.is_none() {
             return;
         }
-        let jobs: VecDeque<FrameJob> = {
+        let (jobs, cleared): (VecDeque<FrameJob>, u64) = {
             let cache = self.cache();
-            jobs.into_iter().filter(|j| !cache.contains(j.key)).collect()
+            (jobs.into_iter().filter(|j| !cache.contains(j.key)).collect(), cache.cleared)
         };
         let mut q = self.queue();
+        if cleared != self.cache().cleared {
+            return;
+        }
         q.prefetch = jobs;
         if !q.prefetch.is_empty() {
             self.shared.wake.notify_one();
@@ -798,7 +1011,7 @@ impl RenderService {
     pub fn wait_for(&self, key: u64, ms: u64) -> Option<Arc<FrameImage>> {
         let deadline = Instant::now() + std::time::Duration::from_millis(ms);
         while Instant::now() < deadline {
-            if let Some(img) = self.cache().get(key) {
+            if let Some(img) = self.cached(key) {
                 return Some(img);
             }
             std::thread::sleep(std::time::Duration::from_millis(1));
@@ -819,6 +1032,23 @@ impl Drop for RenderService {
         if let Some(w) = self.worker.take() {
             let _ = w.join();
         }
+    }
+}
+
+/// Draws one tile of a worker batch and publishes it at once, unless the cache no longer wants
+/// it (cleared since the batch was taken, a superseded preview tile, a set that went).
+fn render_worker_tile(s: &Shared, cleared: u64, job: &FrameJob, slot: &RasterSlot, scenes: &Scenes) {
+    // The preview can be replaced while an older batch evaluates the scene or works through
+    // its tiles. Skip tiles that have not reached rasterization.
+    if !s.cache.lock().unwrap_or_else(PoisonError::into_inner).needs_render(cleared, job) {
+        return;
+    }
+    let image = Arc::new(render_tile(job, slot, scenes));
+    // Publish each tile as it finishes, so a discarded native image is dropped immediately
+    // instead of waiting for the rest of the parallel batch.
+    let mut cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
+    if cache.cleared == cleared {
+        cache.insert_job(job, image);
     }
 }
 
@@ -857,21 +1087,14 @@ fn worker_loop(s: &Shared) {
         };
         let todo: Vec<FrameJob> = {
             let cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            // Not what is cached already, nor what the cache would not keep (its set went).
-            jobs.iter().filter(|j| !cache.contains(j.key) && cache.keeps(j.set)).cloned().collect()
+            // Use the generation captured at dequeue, even if the preview wants the key again.
+            jobs.iter().filter(|j| cache.needs_render(cleared, j)).cloned().collect()
         };
         let slot = s.raster.lock().unwrap_or_else(PoisonError::into_inner).clone();
-        let (imgs, evaluated) = render_batch_from(&todo, &slot, &scenes);
-        scenes = evaluated;
-        {
-            let mut cache = s.cache.lock().unwrap_or_else(PoisonError::into_inner);
-            // Cleared meanwhile (`forget_pictures`): these show a document put aside.
-            if cache.cleared == cleared {
-                for img in imgs {
-                    cache.insert(Arc::new(img));
-                }
-            }
-        }
+        // Cleared meanwhile (`forget_pictures`): the tiles show a document put aside and are
+        // not kept (`render_worker_tile`).
+        scenes = batch_scenes(&todo, &scenes);
+        todo.par_iter().for_each(|job| render_worker_tile(s, cleared, job, &slot, &scenes));
         {
             let mut q = s.queue.lock().unwrap_or_else(PoisonError::into_inner);
             for j in &jobs {
@@ -897,6 +1120,185 @@ mod tests {
     fn job(doc: &Document, state: u64, frame: u32) -> FrameJob {
         let view = View { transform: Affine::scale(0.25, 0.25), width: 320, height: 180, background: Some(doc.stage.background) };
         make_job(state, doc, frame, view, None)
+    }
+
+    #[test]
+    fn superseded_preview_tiles_are_removed_and_late_results_are_discarded() {
+        let document = Document::default();
+        let stable = job(&document, 0, 0);
+        let first = job(&document, 1, 0).preview_tile(true);
+        let second = job(&document, 2, 0).preview_tile(true);
+        let mut cache = FrameCache::new(DEFAULT_CACHE_BYTES);
+        let raster = |job: &FrameJob| Arc::new(render_job(job));
+        cache.insert_job(&stable, raster(&stable));
+        cache.prepare_preview(&[first.key]);
+        let fake_native_texture = Arc::new(());
+        let released = Arc::downgrade(&fake_native_texture);
+        let mut native_frame = render_job(&first);
+        native_frame.native = Some(fake_native_texture);
+        native_frame.rgba_premul.clear();
+        let late = Arc::new(native_frame);
+        cache.insert_job(&first, late.clone());
+        assert!(cache.contains(first.key));
+        assert!(cache.native_bytes > 0);
+        cache.prepare_preview(&[second.key]);
+        assert_eq!(cache.native_bytes, 0);
+        assert!(released.upgrade().is_some(), "a holder can still present the old tile");
+        cache.insert_job(&first, late);
+        assert!(released.upgrade().is_none(), "late native results release their texture");
+        cache.insert_job(&second, raster(&second));
+        assert!(!cache.contains(first.key));
+        assert!(cache.contains(second.key) && cache.contains(stable.key));
+        cache.prepare_preview(&[]);
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains(stable.key));
+    }
+
+    #[test]
+    fn a_superseded_preview_tile_skips_rasterization_even_after_batch_preparation() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let service = RenderService::new(DEFAULT_CACHE_BYTES, None);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        service.set_rasterizer(Some(Arc::new(move |_, view| {
+            counted.fetch_add(1, Ordering::Relaxed);
+            Ok((Raster::Native { image: Arc::new(()), width: view.width, height: view.height }, RenderStats::default()))
+        })));
+        let doc = Document::default();
+        let view = job(&doc, 0, 0).view;
+        let old = service.job(1, &doc, 0, view, None).preview_tile(true);
+        let new = service.job(2, &doc, 0, view, None).preview_tile(true);
+        service.prepare_preview(&[old.key]);
+        let generation = service.cache().cleared;
+        let scenes = batch_scenes(&[old.clone(), new.clone()], &Scenes::new());
+        service.prepare_preview(&[new.key]);
+        let slot = service.slot();
+        render_worker_tile(&service.shared, generation, &old, &slot, &scenes);
+        render_worker_tile(&service.shared, generation, &new, &slot, &scenes);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        assert!(service.cached(old.key).is_none());
+        assert!(service.cached(new.key).unwrap().native.is_some());
+        service.prepare_preview(&[]);
+        assert_eq!(service.cache().native_bytes(), 0);
+    }
+
+    #[test]
+    fn filter_budget_fallback_draws_the_authored_high_quality_stack() {
+        use serde_json::json;
+        let mut session = crate::Session::default();
+        session.execute("draw.rect", &json!({"x": 8, "y": 8, "w": 18, "h": 14, "fill": "#a60c32"})).unwrap();
+        session.execute("modify.convert_to_symbol", &json!({"name": "Filtered", "kind": "movie_clip"})).unwrap();
+        let filters = |quality| json!({"filters": [
+            {"type": "drop_shadow", "color": "#233385", "blur_x": 10, "blur_y": 7, "quality": quality},
+            {"type": "glow", "color": "#e58c1f", "blur_x": 12, "blur_y": 9, "quality": quality}
+        ]});
+        let view = View { transform: Affine::IDENTITY, width: 50, height: 50, background: None };
+        session.execute("element.set_filters", &filters(1)).unwrap();
+        let low = render_job(&make_job(session.state, &session.doc, 0, view, None));
+        session.execute("element.set_filters", &filters(3)).unwrap();
+        let svc = RenderService::new(64 << 20, None);
+        svc.set_rasterizer(Some(Arc::new(|_, _| Err("filtered scratch budget exceeded".into()))));
+        let fallback = svc.render_now(svc.job(session.state, &session.doc, 0, view, None));
+        let oracle = render_job(&make_job(session.state, &session.doc, 0, view, None));
+        assert!(!fallback.gpu && fallback.error.is_none());
+        assert_eq!(fallback.fallback.as_deref(), Some("filtered scratch budget exceeded"));
+        assert_eq!(fallback.rgba_premul, oracle.rgba_premul);
+        assert_ne!(fallback.rgba_premul, low.rgba_premul, "the oracle still uses three blur passes");
+    }
+
+    #[test]
+    fn forgetting_a_document_discards_its_in_flight_preview_even_if_the_key_is_wanted_again() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+        let service = RenderService::new(DEFAULT_CACHE_BYTES, None);
+        let (entered, wait_for_render) = mpsc::sync_channel(1);
+        let (release, wait_for_release) = mpsc::channel();
+        let wait_for_release = Mutex::new(wait_for_release);
+        service.set_rasterizer(Some(Arc::new(move |_, view| {
+            let _ = entered.try_send(());
+            let _ = wait_for_release.lock().unwrap().recv_timeout(Duration::from_secs(3));
+            Ok((Raster::Premul8(vec![0; (view.width * view.height * 4) as usize]), RenderStats::default()))
+        })));
+        let document = Document::default();
+        let view = job(&document, 0, 0).view;
+        let discarded = service.job(0, &document, 0, view, None).preview_tile(true);
+        service.prepare_preview(&[discarded.key]);
+        assert!(service.request(discarded.clone()).is_none());
+        wait_for_render.recv_timeout(Duration::from_secs(3)).unwrap();
+        service.forget_pictures();
+        // Returning to the same preview makes its key eligible again. Only the generation
+        // check can prevent the old raster from publishing after the clear.
+        service.prepare_preview(&[discarded.key]);
+        release.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while service.busy() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert!(!service.busy());
+        assert!(service.cached(discarded.key).is_none());
+
+        release.send(()).unwrap();
+        assert!(service.request(discarded.clone()).is_none());
+        assert!(service.wait_for(discarded.key, 3_000).is_some());
+    }
+
+    #[test]
+    fn array_focus_dims_unrelated_artwork_in_a_shared_layer_group() {
+        use serde_json::json;
+        let mut session = crate::Session::default();
+        session.execute("draw.rect", &json!({"x": 20, "y": 20, "w": 60, "h": 60, "fill": "#0000ff", "stroke": null})).unwrap();
+        let unrelated = session.selection.first().unwrap().1;
+        session.execute("draw.rect", &json!({"x": 160, "y": 20, "w": 60, "h": 60, "fill": "#ff0000", "stroke": null})).unwrap();
+        session.execute("modify.convert_to_symbol", &json!({"name": "Source"})).unwrap();
+        session.execute("layer.set_opacity", &json!({"opacity": 60})).unwrap();
+        session.preview_array(&json!({"count": 3, "dx": 75})).unwrap();
+        let mut ids: Vec<_> = session.selection.ids().collect();
+        ids.sort_unstable();
+        let preview = session.doc.clone();
+        let plain = job(&preview, session.state, 0);
+        let dimmed = plain.clone().dim_around(Some(Arc::from(ids.clone())));
+        assert_ne!((plain.key, plain.scene), (dimmed.key, dimmed.scene));
+        let plain_list = plain.display_list();
+        let dimmed_list = dimmed.display_list();
+        let opacity = |list: &DisplayList, id| {
+            let item = list.items.iter().find(|item| item.element == id).unwrap();
+            list.effective_alpha(item)
+        };
+        assert!(opacity(&dimmed_list, unrelated) < opacity(&plain_list, unrelated) * 0.5);
+        for id in ids {
+            assert_eq!(opacity(&dimmed_list, id), opacity(&plain_list, id));
+        }
+        assert!(session.doc == preview && session.array_preview_active());
+    }
+
+    #[test]
+    fn array_focus_foregrounds_preview_without_changing_baked_or_export_pixels() {
+        use serde_json::json;
+        let mut s = crate::Session::default();
+        s.execute("draw.rect", &json!({"x": 10, "y": 10, "w": 40, "h": 40, "fill": "#ff0000", "stroke": null})).unwrap();
+        s.execute("modify.convert_to_symbol", &json!({"name": "Source"})).unwrap();
+        let (_, source) = s.selection.first().unwrap();
+        s.execute("draw.rect", &json!({"x": 20, "y": 20, "w": 80, "h": 40, "fill": "#0000ff", "stroke": null})).unwrap();
+        let (_, cover) = s.selection.first().unwrap();
+        s.select_only([source]);
+        s.preview_array(&json!({"count": 2, "dx": 45})).unwrap();
+        let ids: Vec<_> = s.selection.ids().collect();
+        let view = View { transform: Affine::IDENTITY, width: 112, height: 66, background: Some(s.doc.stage.background) };
+        let plain = make_job(s.state, &s.doc, 0, view, None);
+        let focused = plain.clone().dim_around(Some(Arc::from(ids.clone())));
+        let order = |job: &FrameJob| job.display_list().items.iter().map(|item| item.element).collect::<Vec<_>>();
+        assert_eq!(order(&plain), [ids[0], ids[1], cover]);
+        assert_eq!(order(&focused), [cover, ids[0], ids[1]]);
+        let ordinary = render_job(&plain).rgba_premul;
+        let foreground = render_job(&focused).rgba_premul;
+        for x in [30, 70] {
+            let at = (30 * 112 + x) * 4;
+            assert_eq!(&ordinary[at..at + 4], &[0, 0, 255, 255]);
+            assert_eq!(&foreground[at..at + 4], &[255, 0, 0, 255]);
+        }
+        s.finish_array_preview(true);
+        let exported = render(&anicraft_doc::evaluate(&s.doc, 0), &view).unwrap().0.to_premul_rgba8();
+        assert_eq!(exported, ordinary);
     }
 
     #[test]

@@ -101,6 +101,30 @@ pub fn plan(forced: Option<WindowBackend>, chosen: WindowBackend, platform: &[(W
     out
 }
 
+/// A replacement window uses the CPU stage. Try a healthy OpenGL window first after a wgpu
+/// loss, then explicit alternatives before automatic selection can choose the failed API again.
+pub fn recovery_plan(failed: WindowBackend, platform: &[(WindowBackend, bool)], supported: &[WindowBackend], last: &[String]) -> Vec<Attempt> {
+    let mut candidates = platform.to_vec();
+    for backend in supported.iter().copied().filter(|b| *b != WindowBackend::Auto) {
+        if !candidates.iter().any(|&(b, _)| b == backend) { candidates.push((backend, false)); }
+    }
+    let mut attempts = plan(None, WindowBackend::Auto, &candidates, last);
+    attempts.sort_by_key(|a| {
+        if a.backend == failed {
+            4
+        } else if a.backend == WindowBackend::Auto {
+            3
+        } else if last.contains(&a.label()) {
+            2
+        } else if a.backend == WindowBackend::OpenGl {
+            0
+        } else {
+            1
+        }
+    });
+    attempts
+}
+
 /// Starts the record of a mid-session loss counts for: that many starts try another way first,
 /// then the fastest way gets its chance again (the driver may have been updated, or the load
 /// that brought it down gone).
@@ -226,8 +250,8 @@ struct Log {
 
 static LOG: Mutex<Option<Log>> = Mutex::new(None);
 static FRAMES: AtomicU32 = AtomicU32::new(0);
-/// The attempt the window runs on now (for the record a mid-session loss leaves).
-static CURRENT: Mutex<Option<String>> = Mutex::new(None);
+/// The current attempt and the actual API it opened (automatic may choose any available API).
+static CURRENT: Mutex<Option<(Attempt, WindowBackend)>> = Mutex::new(None);
 /// The window closed to open again another way (ADR 0092), with the document to open then.
 static REOPEN: Mutex<Option<Option<PathBuf>>> = Mutex::new(None);
 
@@ -264,6 +288,8 @@ pub fn begin(dir: Option<PathBuf>) -> Vec<String> {
     std::panic::set_hook(Box::new(move |info| {
         // Never waits: the panic may have happened while the log was being written.
         write(&format!("panic: {info}"), false);
+        #[cfg(not(target_arch = "wasm32"))]
+        crate::gpu_watch::recover_painter_panic(info);
         previous(info);
     }));
     let unix = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
@@ -312,7 +338,7 @@ pub fn lost_mid_session() {
 
 /// The attempt the window runs on now.
 pub fn current() -> Option<String> {
-    CURRENT.lock().ok().and_then(|g| g.clone())
+    CURRENT.lock().ok().and_then(|g| (*g).map(|(attempt, _)| attempt.label()))
 }
 
 /// The window is closing to open again another way, then with `file` (the app asks this when
@@ -326,6 +352,37 @@ pub fn ask_reopen(file: Option<PathBuf>) {
 /// Whether the window that just closed asked to open again, and with which document.
 pub fn take_reopen() -> Option<Option<PathBuf>> {
     REOPEN.lock().ok().and_then(|mut g| g.take())
+}
+
+/// The replacement's stdin waits for the failing process to exit. Its recovery locks are
+/// then gone and the replacement can open the same log and recovery directory.
+#[cfg(not(target_arch = "wasm32"))]
+const GPU_REOPEN_PIPE: &str = "ANICRAFT_GPU_REOPEN_PIPE";
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn wait_for_failed_window() -> Option<WindowBackend> {
+    let failed = std::env::var_os(GPU_REOPEN_PIPE)?;
+    let _ = std::io::copy(&mut std::io::stdin().lock(), &mut std::io::sink());
+    Some(crate::platform::forced_backend(Some(&failed.to_string_lossy())).unwrap_or_default())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub fn replace_lost_window(file: Option<&std::path::Path>, shot: Option<&std::path::Path>) -> std::io::Result<std::process::Child> {
+    if std::env::var_os(GPU_REOPEN_PIPE).is_some() {
+        return Err(std::io::Error::other("the replacement window also lost its device")); // i18n-exempt: startup diagnostic
+    }
+    let backend = CURRENT.lock().ok().and_then(|g| (*g).map(|(_, backend)| backend)).unwrap_or_default();
+    let failed = match backend {
+        WindowBackend::Auto => "auto", WindowBackend::Vulkan => "vulkan", WindowBackend::Dx12 => "dx12",
+        WindowBackend::Metal => "metal", WindowBackend::OpenGl => "gl",
+    };
+    let mut child = std::process::Command::new(std::env::current_exe()?);
+    child.env("ANICRAFT_STAGE_RENDERER", "cpu")
+        .env(GPU_REOPEN_PIPE, failed)
+        .stdin(std::process::Stdio::piped());
+    if let Some(file) = file { child.arg(file); }
+    if let Some(shot) = shot { child.arg("--screenshot").arg(shot); }
+    child.spawn()
 }
 
 /// Whether a failure after the window was up came from the graphics (wgpu, its surface, the
@@ -365,7 +422,7 @@ pub fn log_path() -> Option<PathBuf> {
 pub fn trying(a: &Attempt, n: usize, of: usize) {
     line(&format!("opening the window with {} (attempt {n} of {of})", a.label()));
     if let Ok(mut g) = CURRENT.lock() {
-        *g = Some(a.label());
+        *g = Some((*a, a.backend));
     }
     let marker = LOG.lock().ok().and_then(|g| g.as_ref().map(|l| l.dir.join(MARKER_NAME)));
     if let Some(m) = marker {
@@ -413,6 +470,16 @@ pub fn log_adapter(rs: Option<&eframe::egui_wgpu::RenderState>) {
     match rs {
         Some(rs) => {
             let i = rs.adapter.get_info();
+            use eframe::wgpu::Backend;
+            if let Ok(mut current) = CURRENT.lock() && let Some((_, backend)) = current.as_mut() {
+                *backend = match i.backend {
+                    Backend::Vulkan => WindowBackend::Vulkan,
+                    Backend::Dx12 => WindowBackend::Dx12,
+                    Backend::Metal => WindowBackend::Metal,
+                    Backend::Gl => WindowBackend::OpenGl,
+                    _ => *backend,
+                };
+            }
             line(&format!("window graphics: {} ({:?}, {:?}), driver {} {}", i.name, i.backend, i.device_type, i.driver, i.driver_info));
         }
         None => line("window graphics: OpenGL"), // i18n-exempt: log text
@@ -442,6 +509,23 @@ pub fn give_up(why: &str) {
 mod tests {
     use super::*;
     use WindowBackend::*;
+
+    #[test]
+    fn recovery_tries_explicit_alternatives_before_the_failed_api() {
+        let available = [Auto, Vulkan, Dx12, OpenGl];
+        let order = recovery_plan(Vulkan, WINDOWS, &available, &[]);
+        assert_eq!(order.iter().map(|a| a.backend).collect::<Vec<_>>(), [OpenGl, Dx12, Auto, Vulkan]);
+        // OpenGL startup can fail. The next attempt can still open on a Vulkan-free machine.
+        assert_eq!(order.iter().find(|a| a.backend == Dx12).map(|a| a.low_power), Some(true));
+        let no_gl = recovery_plan(Vulkan, &[(Auto, false), (Dx12, true)], &[Auto, Vulkan, Dx12], &[]);
+        assert_eq!(no_gl.iter().map(|a| a.backend).collect::<Vec<_>>(), [Dx12, Auto, Vulkan]);
+        let old_gl = recovery_plan(OpenGl, WINDOWS, &available, &[]);
+        assert_eq!(old_gl.iter().map(|a| a.backend).collect::<Vec<_>>(), [Dx12, Vulkan, Auto, OpenGl]);
+        let old_dx12 = recovery_plan(Dx12, WINDOWS, &available, &[Attempt { backend: OpenGl, low_power: false }.label()]);
+        assert_eq!(old_dx12.iter().map(|a| a.backend).collect::<Vec<_>>(), [Vulkan, OpenGl, Auto, Dx12]);
+        let mac_like = recovery_plan(OpenGl, &[(Auto, false), (Metal, true), (OpenGl, false)], &[Auto, Metal, OpenGl], &[]);
+        assert_eq!(mac_like.iter().map(|a| a.backend).collect::<Vec<_>>(), [Metal, Auto, OpenGl]);
+    }
 
     /// An order with whatever wgpu finds first (as macOS and Linux have; the plan is the same
     /// for any order).

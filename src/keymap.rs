@@ -100,6 +100,7 @@ fn view_label(id: &str) -> &'static str {
         "view.panel.output" => tr_noop!("Output Panel"),
         "view.panel.swatches" => tr_noop!("Swatches Panel"),
         "view.panel.tools" => tr_noop!("Tools Panel"),
+        "view.panel.array" => tr_noop!("Array Panel"),
         "view.hide_panels" => tr_noop!("Hide Panels / Show Panels"),
         "view.close_document" => tr_noop!("Close Document"),
         "view.close_all_documents" => tr_noop!("Close All Documents"),

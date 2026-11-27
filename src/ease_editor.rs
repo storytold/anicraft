@@ -1,4 +1,4 @@
-//! Eases (ADR 0081): the ease menu every tween shows, and the Custom Ease window.
+//! Eases (ADR 0081): the shared preset grid, tween ease menu, and Custom Ease window.
 //!
 //! The menu offers what Animate's ease presets do: No Ease, Classic Ease (one strength slider),
 //! and the families Quad, Cubic, Quart, Quint, Sine, Back, Circ, Bounce and Elastic, each In,
@@ -172,16 +172,8 @@ pub fn picker(app: &App, ui: &mut egui::Ui, menu: &str, current: &Easing, width:
             out = Some(Picked::Ease(json!({"classic": -50})));
         }
         ui.separator();
-        for f in EaseFamily::ALL {
-            ui.horizontal(|ui| {
-                ui.add_sized([60.0, THUMB.y], egui::Label::new(text(Type::Label, crate::i18n::t(f.label()))));
-                for d in EaseDir::ALL {
-                    let e = Easing::preset(f, d);
-                    if thumb(ui, &e, *current == e, &preset_name(f, d)).clicked() {
-                        out = Some(Picked::Ease(easing_json(&e)));
-                    }
-                }
-            });
+        if let Some(ease) = named_thumbnails(ui, current) {
+            out = Some(Picked::Ease(easing_json(&ease)));
         }
         if !app.s.doc.eases.is_empty() {
             ui.separator();
@@ -208,6 +200,36 @@ pub fn picker(app: &App, ui: &mut egui::Ui, menu: &str, current: &Easing, width:
     }
     r.response.set_name(name);
     out
+}
+
+/// Pick a named preset using the same grid as the tween menu.
+pub fn named_picker(ui: &mut egui::Ui, menu: &str, current: &Easing, width: f32, name: &str) -> Option<Easing> {
+    let selected = current.family().map_or_else(|| tr!("Linear").to_string(), |(f, d)| preset_name(f, d));
+    let response = egui::ComboBox::from_id_salt(menu).width(width).height(560.0).truncate().selected_text(selected)
+        .show_ui(ui, |ui| {
+            ui.set_min_width(4.0 * THUMB.x + 80.0);
+            let linear = ui.selectable_label(*current == Easing::Linear, tr!("Linear")).clicked();
+            ui.separator();
+            named_thumbnails(ui, current).or(linear.then_some(Easing::Linear))
+        });
+    response.response.set_name(name);
+    response.inner.flatten()
+}
+
+fn named_thumbnails(ui: &mut egui::Ui, current: &Easing) -> Option<Easing> {
+    let mut picked = None;
+    for family in EaseFamily::ALL {
+        ui.horizontal(|ui| {
+            ui.add_sized([60.0, THUMB.y], egui::Label::new(text(Type::Label, crate::i18n::t(family.label()))));
+            for direction in EaseDir::ALL {
+                let ease = Easing::preset(family, direction);
+                if thumb(ui, &ease, *current == ease, &preset_name(family, direction)).clicked() {
+                    picked = Some(ease);
+                }
+            }
+        });
+    }
+    picked
 }
 
 /// The installed ease plug-ins' eases, as curves to click under each plug-in's name.

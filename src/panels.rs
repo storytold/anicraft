@@ -5,7 +5,7 @@ use crate::icons::{self, Icon};
 use crate::theme::{Section, T, TARGET, TOOL_BUTTON, TOOL_ICON, Type, color, section, text, to_color32, with_type};
 use anicraft_engine::doc::{ColorEffect, ColorStyle, ElementKind, LibraryItem, LineType, MAX_PATH_OFFSET, Paint, Rgba, SymbolKind, TextKind, evaluate_layer_elements};
 use crate::a11y::{self, Named};
-use egui::{Color32, Rect, Sense, Stroke, StrokeKind, Role, pos2, vec2};
+use egui::{Color32, Id, Rect, Sense, Stroke, StrokeKind, Role, pos2, vec2};
 use serde_json::{Value, json};
 
 // ----- tools --------------------------------------------------------------------------------
@@ -540,12 +540,12 @@ fn renderer_tag(app: &App) -> Option<String> {
 
 // ----- right dock ---------------------------------------------------------------------------
 
-fn rgb(c: Rgba) -> [u8; 3] {
+pub(crate) fn rgb(c: Rgba) -> [u8; 3] {
     let c = c.sanitized();
     [(c.r * 255.0).round() as u8, (c.g * 255.0).round() as u8, (c.b * 255.0).round() as u8]
 }
 
-fn hex(c: [u8; 3]) -> String {
+pub(crate) fn hex(c: [u8; 3]) -> String {
     format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
 }
 
@@ -983,7 +983,7 @@ const STROKE_HAIRLINE: f32 = 0.1;
 /// A degenerate old axis (near zero) cannot divide, so the other axis follows the new value
 /// instead. Both sizes are clamped to 1–10000 %, so a typed extreme cannot produce a zero
 /// scale; a negative scale is a mirror (#116) and each axis keeps its own direction.
-fn linked_scale(old: (f32, f32), now: (f32, f32), x_changed: bool) -> (f32, f32) {
+pub(crate) fn linked_scale(old: (f32, f32), now: (f32, f32), x_changed: bool) -> (f32, f32) {
     const MIN: f32 = 1.0;
     const MAX: f32 = 10000.0;
     // The size follows in proportion; each axis keeps its own direction (a mirrored axis stays
@@ -1019,6 +1019,35 @@ impl EffectOf {
     }
 }
 
+pub(crate) fn colour_style_picker(ui: &mut egui::Ui, id: &str, name: &str, current: ColorStyle, allow_alpha: bool) -> Option<ColorStyle> {
+    let mut selected = None;
+    egui::ComboBox::from_id_salt(id).selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
+        for style in ColorStyle::ALL.into_iter().filter(|style| allow_alpha || *style != ColorStyle::Alpha) {
+            if ui.selectable_label(style == current, crate::i18n::t(style.label())).clicked() {
+                selected = Some(style);
+            }
+        }
+    }).response.set_name(name);
+    selected
+}
+
+pub(crate) fn advanced_colour_channels() -> [(&'static str, &'static str, &'static str, &'static str); 4] {
+    [
+        (tr!("Red"), tr!("Red multiplier"), tr!("Red offset"), "red"),
+        (tr!("Green"), tr!("Green multiplier"), tr!("Green offset"), "green"),
+        (tr!("Blue"), tr!("Blue multiplier"), tr!("Blue offset"), "blue"),
+        (tr!("Alpha"), tr!("Alpha multiplier"), tr!("Alpha offset"), "alpha"),
+    ]
+}
+
+pub(crate) fn advanced_colour_fields(ui: &mut egui::Ui, multiplier: &mut f32, offset: &mut f32, mul_name: &str, off_name: &str) -> (bool, bool) {
+    with_type(ui, Type::Data, |ui| {
+        let mul = ui.add(egui::DragValue::new(multiplier).suffix(" %").speed(0.5).range(-100.0..=100.0).max_decimals(0)).named(mul_name);
+        let add = ui.add(egui::DragValue::new(offset).custom_formatter(|v, _| format!("{v:+.0}")).speed(1.0).range(-255.0..=255.0).max_decimals(0)).named(off_name);
+        (mul.changed(), add.changed())
+    })
+}
+
 /// The colour effect (ADR 0056): Animate's Style menu, then the chosen style's controls. Each
 /// change sets that value on every selected element (ADR 0053), or on the camera, as one undo
 /// step per drag.
@@ -1027,15 +1056,13 @@ fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: cra
     let cmd = of.command();
     let camera = of == EffectOf::Camera;
     row_prose(ui, tr!("Colour effect"), |ui| {
-        egui::ComboBox::from_id_salt(if camera { "prop_camera_color_style" } else { "prop_color_style" }).selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
-            for st in ColorStyle::ALL.into_iter().filter(|st| !camera || *st != ColorStyle::Alpha) {
-                if ui.selectable_label(st == current, crate::i18n::t(st.label())).clicked() && (st != current || m.style) {
-                    app.run(cmd, json!({"style": st.key()}));
-                }
-            }
-        })
-        .response
-        .set_name(if camera { tr!("Camera colour effect style") } else { tr!("Colour effect style") });
+        let id = if camera { "prop_camera_color_style" } else { "prop_color_style" };
+        let name = if camera { tr!("Camera colour effect style") } else { tr!("Colour effect style") };
+        if let Some(style) = colour_style_picker(ui, id, name, current, !camera)
+            && (style != current || m.style)
+        {
+            app.run(cmd, json!({"style": style.key()}));
+        }
         mixed(ui, m.style);
     });
     let pct = a11y::SliderLook { suffix: " %", max_decimals: Some(0), ..Default::default() };
@@ -1079,16 +1106,16 @@ fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: cra
         }
         ColorEffect::Advanced(t) => {
             // Each channel: its multiplier in percent, then the offset added (−255..255).
-            let channels = [(tr!("Red"), tr!("Red multiplier"), tr!("Red offset"), "red"), (tr!("Green"), tr!("Green multiplier"), tr!("Green offset"), "green"), (tr!("Blue"), tr!("Blue multiplier"), tr!("Blue offset"), "blue"), (tr!("Alpha"), tr!("Alpha multiplier"), tr!("Alpha offset"), "alpha")];
             // The camera has no opacity: its Advanced effect has no alpha channel.
-            for (i, (label, mul_name, off_name, key)) in channels.into_iter().enumerate().take(if camera { 3 } else { 4 }) {
+            for (i, (label, mul_name, off_name, key)) in advanced_colour_channels().into_iter().enumerate().take(if camera { 3 } else { 4 }) {
                 let mut mv = t.mul.get(i).copied().unwrap_or(1.0) * 100.0;
                 let mut ov = t.add.get(i).copied().unwrap_or(0.0) * 255.0;
                 row(ui, label, |ui| {
-                    if ui.add(egui::DragValue::new(&mut mv).suffix(" %").speed(0.5).range(-100.0..=100.0).max_decimals(0)).named(mul_name).changed() {
+                    let (mul, add) = advanced_colour_fields(ui, &mut mv, &mut ov, mul_name, off_name);
+                    if mul {
                         set(app, json!({format!("{key}_multiplier"): mv}));
                     }
-                    if ui.add(egui::DragValue::new(&mut ov).custom_formatter(|v, _| format!("{v:+.0}")).speed(1.0).range(-255.0..=255.0).max_decimals(0)).named(off_name).changed() {
+                    if add {
                         set(app, json!({format!("{key}_offset"): ov}));
                     }
                     mixed(ui, m.advanced.get(i).copied().unwrap_or(false) || m.advanced.get(i + 4).copied().unwrap_or(false));
@@ -1784,6 +1811,139 @@ fn filter_grip(ui: &mut egui::Ui, fname: &str, i: usize, n: usize, act: &mut Opt
     resp.on_hover_text(tr!("Drag to change the order (filters apply from the top down)"))
 }
 
+pub(crate) fn filter_blur_fields(ui: &mut egui::Ui, fname: &str, blur_x: &mut f32, blur_y: &mut f32) -> bool {
+    let max = anicraft_engine::doc::MAX_BLUR;
+    with_type(ui, Type::Data, |ui| {
+        let x = ui.add(egui::DragValue::new(blur_x).prefix("X ").suffix(" px").speed(0.25).range(0.0..=max).max_decimals(1))
+            .named(&tr!("{filter} blur X", filter = fname));
+        let y = ui.add(egui::DragValue::new(blur_y).prefix("Y ").suffix(" px").speed(0.25).range(0.0..=max).max_decimals(1))
+            .named(&tr!("{filter} blur Y", filter = fname));
+        x.changed() || y.changed()
+    })
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum FilterRows {
+    Properties,
+    Array,
+}
+
+impl FilterRows {
+    fn show(self, ui: &mut egui::Ui, label: &str, add: impl FnOnce(&mut egui::Ui)) {
+        match self {
+            Self::Properties => row_prose(ui, label, add),
+            // A stop card is already inset. Keep its rows within that width, with stable
+            // widget positions before the first frame and as the numeric text changes.
+            Self::Array => {
+                ui.label(text(Type::Label, label));
+                ui.horizontal_wrapped(add);
+            }
+        }
+    }
+}
+
+fn blur_quality_rows(ui: &mut egui::Ui, layout: FilterRows, fname: &str, bx: &mut f32, by: &mut f32, quality: &mut u8, changed: &mut Option<&'static str>) {
+    layout.show(ui, tr!("Blur"), |ui| {
+        if filter_blur_fields(ui, fname, bx, by) {
+            *changed = Some(tr_noop!("Filter blur"));
+        }
+    });
+    layout.show(ui, tr!("Quality"), |ui| {
+        for (q, name) in (1..).zip([tr!("Low"), tr!("Medium"), tr!("High")]) {
+            if ui.selectable_label(*quality == q, name).named(&tr!("{filter} quality {quality}", filter = fname, quality = name)).clicked() {
+                *quality = q;
+                *changed = Some(tr_noop!("Filter quality"));
+            }
+        }
+    });
+}
+
+/// Shared effect settings. The caller owns history and the filter stack.
+pub(crate) fn effect_filter_rows(ui: &mut egui::Ui, layout: FilterRows, fname: &str, filter: &mut anicraft_engine::doc::Filter, changed: &mut Option<&'static str>) -> Option<Id> {
+    use anicraft_engine::doc::Filter;
+    let pin = anicraft_engine::doc::pinned_stop(filter);
+    match filter {
+        Filter::DropShadow { blur_x, blur_y, strength, quality, angle, distance, color, inner, knockout, hide_object } => {
+            blur_quality_rows(ui, layout, fname, blur_x, blur_y, quality, changed);
+            let picker = shadow_rows(ui, layout, fname, strength, color, changed);
+            offset_row(ui, layout, fname, angle, distance, tr_noop!("Shadow offset"), changed);
+            filter_options_row(ui, layout, fname, [(inner, tr!("Inner")), (knockout, tr!("Knockout")), (hide_object, tr!("Hide object"))], tr_noop!("Shadow options"), changed);
+            picker
+        }
+        Filter::Glow { blur_x, blur_y, strength, quality, color, inner, knockout } => {
+            blur_quality_rows(ui, layout, fname, blur_x, blur_y, quality, changed);
+            let picker = shadow_rows(ui, layout, fname, strength, color, changed);
+            filter_options_row(ui, layout, fname, [(inner, tr!("Inner")), (knockout, tr!("Knockout"))], tr_noop!("Glow options"), changed);
+            picker
+        }
+        Filter::Bevel { blur_x, blur_y, strength, quality, angle, distance, shadow_color, highlight_color, side, knockout } => {
+            blur_quality_rows(ui, layout, fname, blur_x, blur_y, quality, changed);
+            strength_row(ui, layout, fname, strength, changed);
+            let mut picker = None;
+            layout.show(ui, tr!("Colours"), |ui| {
+                let colours = [
+                    (shadow_color, tr!("Shadow"), tr!("{filter} shadow colour", filter = fname), tr_noop!("Bevel shadow colour")),
+                    (highlight_color, tr!("Highlight"), tr!("{filter} highlight colour", filter = fname), tr_noop!("Bevel highlight colour")),
+                ];
+                for (c, label, name, undo) in colours {
+                    ui.label(label);
+                    let swatch = alpha_swatch(ui, c, &name);
+                    if swatch.changed() {
+                        *changed = Some(undo);
+                        picker = Some(crate::colour::swatch_popup_id(swatch.id));
+                    }
+                }
+            });
+            offset_row(ui, layout, fname, angle, distance, tr_noop!("Bevel offset"), changed);
+            side_rows(ui, layout, fname, side, knockout, changed);
+            picker
+        }
+        Filter::GradientGlow { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout }
+        | Filter::GradientBevel { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout } => {
+            let picker = ramp_editor(ui, layout, fname, stops, pin, changed);
+            blur_quality_rows(ui, layout, fname, blur_x, blur_y, quality, changed);
+            strength_row(ui, layout, fname, strength, changed);
+            offset_row(ui, layout, fname, angle, distance, tr_noop!("Filter offset"), changed);
+            side_rows(ui, layout, fname, side, knockout, changed);
+            picker
+        }
+        Filter::AdjustColor { brightness, contrast, saturation, hue } => {
+            for (value, label, limit, unit) in [
+                (brightness, tr!("Brightness"), 100.0, ""), (contrast, tr!("Contrast"), 100.0, ""),
+                (saturation, tr!("Saturation"), 100.0, ""), (hue, tr!("Hue"), 180.0, "°"),
+            ] {
+                layout.show(ui, label, |ui| with_type(ui, Type::Data, |ui| {
+                    let response = match layout {
+                        FilterRows::Properties => a11y::slider(ui, value, -limit..=limit, label, a11y::SliderLook {
+                            max_decimals: Some(0),
+                            ..Default::default()
+                        }),
+                        FilterRows::Array => {
+                            let name = tr!("{filter} {parameter}", filter = fname, parameter = label);
+                            ui.add(egui::DragValue::new(value).range(-limit..=limit).suffix(unit).speed(limit / 100.0).max_decimals(0)).named(&name)
+                        }
+                    };
+                    if response.changed() {
+                        *changed = Some(tr_noop!("Adjust colour"));
+                    }
+                }));
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn filter_options_row<const N: usize>(ui: &mut egui::Ui, layout: FilterRows, fname: &str, options: [(&mut bool, &str); N], undo: &'static str, changed: &mut Option<&'static str>) {
+    layout.show(ui, tr!("Options"), |ui| {
+        for (v, label) in options {
+            if crate::theme::checkbox(ui, v, label).named(&tr!("{filter} {option}", filter = fname, option = label)).changed() {
+                *changed = Some(undo);
+            }
+        }
+    });
+}
+
 /// The Filters rows of a movie clip or button instance, as Animate's Filters section: Add,
 /// Presets and an options menu (copy, paste, all on or off, remove all), then each filter with
 /// its grip (drag, or Alt+arrows, to reorder), its on/off switch, its name and Remove, and its
@@ -1936,7 +2096,6 @@ fn filter_rows(app: &mut App, ui: &mut egui::Ui, current: &[anicraft_engine::doc
         }
     }
     app.filter_naming.name = naming;
-    let quality_names = [tr!("Low"), tr!("Medium"), tr!("High")];
     // Dragging a filter by its grip: which one, and where each header row starts (last frame's,
     // for the drop: rows don't move while one is dragged).
     let drag_id = egui::Id::unique("anicraft.filters.drag");
@@ -2010,83 +2169,10 @@ fn filter_rows(app: &mut App, ui: &mut egui::Ui, current: &[anicraft_engine::doc
                     return;
                 }
                 let f = &mut entry.filter;
-                let blur_rows = |ui: &mut egui::Ui, bx: &mut f32, by: &mut f32, quality: &mut u8, changed: &mut Option<&'static str>| {
-                    row(ui, tr!("Blur"), |ui| {
-                        let a = ui.add(egui::DragValue::new(bx).prefix("X ").suffix(" px").speed(0.25).range(0.0..=255.0).max_decimals(1)).named(&tr!("{filter} blur X", filter = fname));
-                        let b = ui.add(egui::DragValue::new(by).prefix("Y ").suffix(" px").speed(0.25).range(0.0..=255.0).max_decimals(1)).named(&tr!("{filter} blur Y", filter = fname));
-                        if a.changed() || b.changed() {
-                            *changed = Some(tr_noop!("Filter blur"));
-                        }
-                    });
-                    row_prose(ui, tr!("Quality"), |ui| {
-                        for (q, name) in quality_names.iter().enumerate() {
-                            if ui.selectable_label(usize::from(*quality) == q + 1, *name).named(&tr!("{filter} quality {quality}", filter = fname, quality = name)).clicked() {
-                                *quality = q as u8 + 1;
-                                *changed = Some(tr_noop!("Filter quality"));
-                            }
-                        }
-                    });
-                };
-                let pin = anicraft_engine::doc::pinned_stop(f);
                 match f {
-                    Filter::Blur { blur_x, blur_y, quality } => blur_rows(ui, blur_x, blur_y, quality, &mut changed),
-                    Filter::DropShadow { blur_x, blur_y, strength, quality, angle, distance, color, inner, knockout, hide_object } => {
-                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                        shadow_rows(ui, fname, strength, color, &mut changed);
-                        offset_row(ui, fname, angle, distance, tr_noop!("Shadow offset"), &mut changed);
-                        row_prose(ui, tr!("Options"), |ui| {
-                            for (v, label) in [(inner, tr!("Inner")), (knockout, tr!("Knockout")), (hide_object, tr!("Hide object"))] {
-                                if crate::theme::checkbox(ui, v, label).changed() {
-                                    changed = Some(tr_noop!("Shadow options"));
-                                }
-                            }
-                        });
-                    }
-                    Filter::Glow { blur_x, blur_y, strength, quality, color, inner, knockout } => {
-                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                        shadow_rows(ui, fname, strength, color, &mut changed);
-                        row_prose(ui, tr!("Options"), |ui| {
-                            for (v, label) in [(inner, tr!("Inner")), (knockout, tr!("Knockout"))] {
-                                if crate::theme::checkbox(ui, v, label).changed() {
-                                    changed = Some(tr_noop!("Glow options"));
-                                }
-                            }
-                        });
-                    }
-                    Filter::Bevel { blur_x, blur_y, strength, quality, angle, distance, shadow_color, highlight_color, side, knockout } => {
-                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                        strength_row(ui, fname, strength, &mut changed);
-                        row_prose(ui, tr!("Colours"), |ui| {
-                            let colours = [
-                                (shadow_color, tr!("Shadow"), tr!("{filter} shadow colour", filter = fname), tr_noop!("Bevel shadow colour")),
-                                (highlight_color, tr!("Highlight"), tr!("{filter} highlight colour", filter = fname), tr_noop!("Bevel highlight colour")),
-                            ];
-                            for (c, label, name, undo) in colours {
-                                ui.label(label);
-                                if alpha_swatch(ui, c, &name) {
-                                    changed = Some(undo);
-                                }
-                            }
-                        });
-                        offset_row(ui, fname, angle, distance, tr_noop!("Bevel offset"), &mut changed);
-                        side_rows(ui, fname, side, knockout, &mut changed);
-                    }
-                    Filter::GradientGlow { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout } | Filter::GradientBevel { blur_x, blur_y, strength, quality, angle, distance, stops, side, knockout } => {
-                        // The ramp first: it is what makes the filter.
-                        ramp_editor(ui, fname, stops, pin, &mut changed);
-                        blur_rows(ui, blur_x, blur_y, quality, &mut changed);
-                        strength_row(ui, fname, strength, &mut changed);
-                        offset_row(ui, fname, angle, distance, tr_noop!("Filter offset"), &mut changed);
-                        side_rows(ui, fname, side, knockout, &mut changed);
-                    }
-                    Filter::AdjustColor { brightness, contrast, saturation, hue } => {
-                        for (v, label, range) in [(brightness, tr!("Brightness"), 100.0), (contrast, tr!("Contrast"), 100.0), (saturation, tr!("Saturation"), 100.0), (hue, tr!("Hue"), 180.0)] {
-                            row(ui, label, |ui| {
-                                if a11y::slider(ui, v, -range..=range, label, a11y::SliderLook { max_decimals: Some(0), ..Default::default() }).changed() {
-                                    changed = Some(tr_noop!("Adjust colour"));
-                                }
-                            });
-                        }
+                    Filter::Blur { blur_x, blur_y, quality } => blur_quality_rows(ui, FilterRows::Properties, fname, blur_x, blur_y, quality, &mut changed),
+                    _ => {
+                        effect_filter_rows(ui, FilterRows::Properties, fname, f, &mut changed);
                     }
                 }
             });
@@ -2153,35 +2239,37 @@ fn filter_rows(app: &mut App, ui: &mut egui::Ui, current: &[anicraft_engine::doc
 }
 
 /// Strength and colour rows of a drop shadow or glow.
-fn shadow_rows(ui: &mut egui::Ui, fname: &str, strength: &mut f32, color: &mut Rgba, changed: &mut Option<&'static str>) {
-    row(ui, tr!("Strength"), |ui| {
-        let mut pct = *strength * 100.0;
-        if ui.add(egui::DragValue::new(&mut pct).suffix(" %").speed(1.0).range(0.0..=1000.0).max_decimals(0)).named(&tr!("{filter} strength", filter = fname)).changed() {
-            *strength = pct / 100.0;
-            *changed = Some(tr_noop!("Filter strength"));
-        }
+fn shadow_rows(ui: &mut egui::Ui, layout: FilterRows, fname: &str, strength: &mut f32, color: &mut Rgba, changed: &mut Option<&'static str>) -> Option<Id> {
+    let mut picker = None;
+    layout.show(ui, tr!("Strength"), |ui| {
+        with_type(ui, Type::Data, |ui| strength_field(ui, fname, strength, changed));
         let mut c = rgb(*color);
-        if crate::colour::button(ui, &mut c).named(&tr!("{filter} colour", filter = fname)).on_hover_text(tr!("Colour")).changed() {
+        let swatch = crate::colour::button(ui, &mut c).named(&tr!("{filter} colour", filter = fname)).on_hover_text(tr!("Colour"));
+        if swatch.changed() {
             *color = Rgba::new(f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0, color.a);
             *changed = Some(tr_noop!("Filter colour"));
+            picker = Some(crate::colour::swatch_popup_id(swatch.id));
         }
     });
+    picker
 }
 
 /// The Strength row of a bevel or gradient filter.
-fn strength_row(ui: &mut egui::Ui, fname: &str, strength: &mut f32, changed: &mut Option<&'static str>) {
-    row(ui, tr!("Strength"), |ui| {
-        let mut pct = *strength * 100.0;
-        if ui.add(egui::DragValue::new(&mut pct).suffix(" %").speed(1.0).range(0.0..=1000.0).max_decimals(0)).named(&tr!("{filter} strength", filter = fname)).changed() {
-            *strength = pct / 100.0;
-            *changed = Some(tr_noop!("Filter strength"));
-        }
-    });
+fn strength_row(ui: &mut egui::Ui, layout: FilterRows, fname: &str, strength: &mut f32, changed: &mut Option<&'static str>) {
+    layout.show(ui, tr!("Strength"), |ui| with_type(ui, Type::Data, |ui| strength_field(ui, fname, strength, changed)));
+}
+
+fn strength_field(ui: &mut egui::Ui, fname: &str, strength: &mut f32, changed: &mut Option<&'static str>) {
+    let mut pct = *strength * 100.0;
+    if ui.add(egui::DragValue::new(&mut pct).suffix(" %").speed(1.0).range(0.0..=1000.0).max_decimals(0)).named(&tr!("{filter} strength", filter = fname)).changed() {
+        *strength = pct / 100.0;
+        *changed = Some(tr_noop!("Filter strength"));
+    }
 }
 
 /// Angle and distance of a shadow, bevel or gradient filter.
-fn offset_row(ui: &mut egui::Ui, fname: &str, angle: &mut f32, distance: &mut f32, undo: &'static str, changed: &mut Option<&'static str>) {
-    row(ui, tr!("Offset"), |ui| {
+fn offset_row(ui: &mut egui::Ui, layout: FilterRows, fname: &str, angle: &mut f32, distance: &mut f32, undo: &'static str, changed: &mut Option<&'static str>) {
+    layout.show(ui, tr!("Offset"), |ui| with_type(ui, Type::Data, |ui| {
         let a = ui
             .add(egui::DragValue::new(angle).prefix(format!("{} ", tr!("Angle"))).suffix("°").speed(1.0).range(0.0..=360.0).max_decimals(0))
             .named(&tr!("{filter} angle", filter = fname))
@@ -2190,13 +2278,13 @@ fn offset_row(ui: &mut egui::Ui, fname: &str, angle: &mut f32, distance: &mut f3
         if a.changed() || b.changed() {
             *changed = Some(undo);
         }
-    });
+    }));
 }
 
 /// The Type (inner, outer, full) and Knockout rows of a bevel or gradient filter.
-fn side_rows(ui: &mut egui::Ui, fname: &str, side: &mut anicraft_engine::doc::FilterSide, knockout: &mut bool, changed: &mut Option<&'static str>) {
+fn side_rows(ui: &mut egui::Ui, layout: FilterRows, fname: &str, side: &mut anicraft_engine::doc::FilterSide, knockout: &mut bool, changed: &mut Option<&'static str>) {
     use anicraft_engine::doc::FilterSide;
-    row_prose(ui, tr!("Type"), |ui| {
+    layout.show(ui, tr!("Type"), |ui| {
         for (v, tip) in [(FilterSide::Inner, tr!("Inside the artwork's edge")), (FilterSide::Outer, tr!("Outside the artwork's edge")), (FilterSide::Full, tr!("Inside and outside the edge"))] {
             let label = crate::i18n::t(v.label());
             if ui.selectable_label(*side == v, label).named(&tr!("{filter} type {kind}", filter = fname, kind = label)).on_hover_text(tip).clicked() && *side != v {
@@ -2205,15 +2293,15 @@ fn side_rows(ui: &mut egui::Ui, fname: &str, side: &mut anicraft_engine::doc::Fi
             }
         }
     });
-    row_prose(ui, tr!("Options"), |ui| {
+    layout.show(ui, tr!("Options"), |ui| {
         if crate::theme::checkbox(ui, knockout, tr!("Knockout")).named(&tr!("{filter} knockout", filter = fname)).on_hover_text(tr!("Show only the effect, not the artwork")).changed() {
             *changed = Some(tr_noop!("Filter options"));
         }
     });
 }
 
-/// A colour swatch with opacity (Animate's bevel colours carry alpha). True when changed.
-pub(crate) fn alpha_swatch(ui: &mut egui::Ui, c: &mut Rgba, name: &str) -> bool {
+/// A colour swatch with opacity, including its response for picker gesture tracking.
+pub(crate) fn alpha_swatch(ui: &mut egui::Ui, c: &mut Rgba, name: &str) -> egui::Response {
     let s = c.sanitized();
     let b = |v: f32| (v * 255.0).round() as u8;
     let mut px = [b(s.r), b(s.g), b(s.b), b(s.a)];
@@ -2221,19 +2309,22 @@ pub(crate) fn alpha_swatch(ui: &mut egui::Ui, c: &mut Rgba, name: &str) -> bool 
     if r.changed() {
         *c = Rgba::new(f32::from(px[0]) / 255.0, f32::from(px[1]) / 255.0, f32::from(px[2]) / 255.0, f32::from(px[3]) / 255.0);
     }
-    r.changed()
+    r
 }
 
 /// A gradient filter's ramp, as Animate's: a strip of its colours over a checkerboard, a
-/// marker under it per stop. Click a marker to pick that stop (its colour, position and Remove
-/// below), drag it to move it (between its neighbours), click the strip to add a stop there.
+/// marker under it per stop. Click to select a marker, or drag it between its neighbours.
+/// The Properties editor also lets the user add and remove stops.
 /// The pinned stop (Gradient Glow's start, Gradient Bevel's middle) can't move or go, and
 /// stays transparent.
-fn ramp_editor(ui: &mut egui::Ui, fname: &str, stops: &mut Vec<anicraft_engine::doc::GradientStop>, pin: Option<f32>, changed: &mut Option<&'static str>) {
+fn ramp_editor(ui: &mut egui::Ui, layout: FilterRows, fname: &str, stops: &mut Vec<anicraft_engine::doc::GradientStop>, pin: Option<f32>, changed: &mut Option<&'static str>) -> Option<Id> {
     use anicraft_engine::doc::{GradientStop, MAX_RAMP_STOPS, REST_SNAP, ramp_at};
+    let edits_topology = matches!(layout, FilterRows::Properties);
     let sel_id = ui.scope_id().with("ramp_stop");
-    let mut sel: usize = ui.data(|d| d.get_temp(sel_id)).unwrap_or(0);
     let is_pinned = |s: &GradientStop| pin.is_some_and(|p| (s.offset - p).abs() < 1e-4);
+    let mut sel: usize = ui.data(|d| d.get_temp(sel_id)).unwrap_or_else(|| {
+        if edits_topology { 0 } else { stops.iter().position(|stop| !is_pinned(stop)).unwrap_or(0) }
+    });
     // Where each stop may move (the ramp is in order): between its neighbours, and clear of the
     // pinned stop, so stops keep their order (and the pick, and a drag, stay on the same stop).
     let clear = 2.0 * REST_SNAP;
@@ -2247,12 +2338,16 @@ fn ramp_editor(ui: &mut egui::Ui, fname: &str, stops: &mut Vec<anicraft_engine::
             if lo <= hi { (lo, hi) } else { (here, here) }
         })
         .collect();
-    row_prose(ui, tr!("Gradient"), |ui| {
+    layout.show(ui, tr!("Gradient"), |ui| {
         ui.vertical(|ui| {
             let w = ui.available_width().clamp(80.0, 200.0);
-            let (strip, resp) = ui.allocate_exact_size(vec2(w, 16.0), Sense::click());
-            a11y::control(ui, &resp, Role::Button, &tr!("{filter} gradient: add a colour stop", filter = fname), None);
-            let resp = resp.on_hover_text(tr!("Click to add a colour stop"));
+            let (strip, resp) = ui.allocate_exact_size(vec2(w, 16.0), if edits_topology { Sense::click() } else { Sense::hover() });
+            let resp = if edits_topology {
+                a11y::control(ui, &resp, Role::Button, &tr!("{filter} gradient: add a colour stop", filter = fname), None);
+                resp.on_hover_text(tr!("Click to add a colour stop"))
+            } else {
+                resp.on_hover_text(tr!("The source filter sets the number and order of colour stops"))
+            };
             let p = ui.painter();
             // A checkerboard under the ramp shows its opacity.
             let cell = 4.0;
@@ -2305,7 +2400,7 @@ fn ramp_editor(ui: &mut egui::Ui, fname: &str, stops: &mut Vec<anicraft_engine::
                 let edge = if i == sel { T.accent } else if r.hovered() { T.text } else { T.control_edge };
                 ui.painter().add(egui::Shape::convex_polygon(body.to_vec(), to_color32(st.color.with_alpha(1.0)), Stroke::new(if i == sel { 2.0 } else { 1.0 }, edge)));
             }
-            if resp.clicked() && stops.len() < MAX_RAMP_STOPS {
+            if edits_topology && resp.clicked() && stops.len() < MAX_RAMP_STOPS {
                 // Where the pointer clicked; from the keyboard or a screen reader, the middle of
                 // the widest gap. Never on the pinned stop.
                 let gap = stops.windows(2).filter_map(|w| if let [a, b] = w { Some((b.offset - a.offset, (a.offset + b.offset) / 2.0)) } else { None }).max_by(|a, b| a.0.total_cmp(&b.0)).map_or(0.5, |g| g.1);
@@ -2325,19 +2420,25 @@ fn ramp_editor(ui: &mut egui::Ui, fname: &str, stops: &mut Vec<anicraft_engine::
     });
     sel = sel.min(stops.len().saturating_sub(1));
     let mut remove = false;
+    let mut picker = None;
     let count = stops.len();
     if let Some(st) = stops.get_mut(sel) {
         let pinned = is_pinned(st);
-        row(ui, tr!("Stop"), |ui| {
-            if pinned {
+        layout.show(ui, tr!("Stop"), |ui| with_type(ui, Type::Data, |ui| {
+            let swatch = if pinned {
                 // Colour only: this stop stays transparent.
                 let mut c = rgb(st.color);
-                if crate::colour::button(ui, &mut c).named(&tr!("{filter} stop colour", filter = fname)).on_hover_text(tr!("Stop colour (this stop stays transparent)")).changed() {
+                let swatch = crate::colour::button(ui, &mut c).named(&tr!("{filter} stop colour", filter = fname)).on_hover_text(tr!("Stop colour (this stop stays transparent)"));
+                if swatch.changed() {
                     st.color = Rgba::new(f32::from(c[0]) / 255.0, f32::from(c[1]) / 255.0, f32::from(c[2]) / 255.0, 0.0);
-                    *changed = Some(tr_noop!("Colour stop"));
                 }
-            } else if alpha_swatch(ui, &mut st.color, &tr!("{filter} stop colour", filter = fname)) {
+                swatch
+            } else {
+                alpha_swatch(ui, &mut st.color, &tr!("{filter} stop colour", filter = fname))
+            };
+            if swatch.changed() {
                 *changed = Some(tr_noop!("Colour stop"));
+                picker = Some(crate::colour::swatch_popup_id(swatch.id));
             }
             let mut pct = st.offset * 100.0;
             let r = ui.add_enabled(!pinned, egui::DragValue::new(&mut pct).suffix(" %").speed(0.5).range(0.0..=100.0).max_decimals(0)).named(&tr!("{filter} stop position", filter = fname));
@@ -2346,10 +2447,10 @@ fn ramp_editor(ui: &mut egui::Ui, fname: &str, stops: &mut Vec<anicraft_engine::
                 st.offset = (pct / 100.0).clamp(lo, hi);
                 *changed = Some(tr_noop!("Move colour stop"));
             }
-            if ui.add_enabled(!pinned && count > 2, egui::Button::new(tr!("Remove")).small()).named(&tr!("Remove {filter} colour stop", filter = fname)).on_hover_text(tr!("Remove this colour stop")).clicked() {
+            if edits_topology && ui.add_enabled(!pinned && count > 2, egui::Button::new(tr!("Remove")).small()).named(&tr!("Remove {filter} colour stop", filter = fname)).on_hover_text(tr!("Remove this colour stop")).clicked() {
                 remove = true;
             }
-        });
+        }));
     }
     if remove && sel < stops.len() {
         stops.remove(sel);
@@ -2357,6 +2458,7 @@ fn ramp_editor(ui: &mut egui::Ui, fname: &str, stops: &mut Vec<anicraft_engine::
         *changed = Some(tr_noop!("Remove colour stop"));
     }
     ui.data_mut(|d| d.insert_temp(sel_id, sel));
+    picker
 }
 
 /// Which of the text style rows' values differ across the characters (or paragraphs) they show

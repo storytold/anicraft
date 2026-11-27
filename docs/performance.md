@@ -285,6 +285,283 @@ The CPU stage (the oracle through the render service's 256 px tiles, `onion_timi
 frames 12, 30 and 48) with hairlines: onion ±5 outlines **17.1 ms** against 14.8 tinted at
 1080p (was 34–39 against 16.2–17.2).
 
+### Filtered Array preview
+
+Run these manual benchmarks on an otherwise idle machine. They use the normal Cargo test
+profile and report timings without imposing a machine-dependent pass threshold.
+
+```sh
+cargo test --workspace --locked array_panel::tests::measure_filtered_preview -- --ignored --nocapture --test-threads=1
+cargo test --workspace --locked array_panel::tests::measure_cached_blur_translation -- --ignored --nocapture --test-threads=1
+```
+
+The first benchmark drives the real Array editor with pointer events and the CPU stage renderer.
+It uses the `array-blur` fixture, a 640 × 400 stage in a 1600 × 940 window at 65% zoom, with
+Dim Stage on, three authored stops, and one enabled Medium Blur on each copy. Counts include
+the original. Immediate mode renders each change synchronously. Six warm-up moves precede 30
+timed moves for each interaction. Frame time includes editor updates and painting commands.
+Stage time measures the synchronous tile batch, before texture upload. The benchmark checks
+that each measured move changes document state and produces a complete, fresh stage image.
+
+Baseline on Windows x86-64, Intel Core Ultra 9 185H, 22 logical processors available to the
+test. Each pair is p50 / p95 in milliseconds.
+
+| Instances | Interaction | Frame ms | Stage batch ms |
+|---:|---|---:|---:|
+| 10 | End on stage | 10.77 / 13.08 | 5.34 / 8.05 |
+| 10 | End on pasteboard | 10.59 / 13.59 | 5.60 / 8.33 |
+| 10 | Blur X field | 11.18 / 13.08 | 6.38 / 7.93 |
+| 50 | End on stage | 14.44 / 19.13 | 9.58 / 12.85 |
+| 50 | End on pasteboard | 14.84 / 17.97 | 9.63 / 12.14 |
+| 50 | Blur X field | 17.65 / 56.41 | 12.54 / 43.48 |
+| 200 | End on stage | 106.12 / 147.28 | 90.06 / 130.79 |
+| 200 | End on pasteboard | 80.62 / 99.18 | 68.15 / 85.47 |
+| 200 | Blur X field | 116.77 / 191.47 | 99.42 / 171.60 |
+
+At 200 copies the stage batch dominates frame time. A separate run put the onstage End
+median at 95.58 ms and the Blur X median at 98.54 ms, which gives a sense of run-to-run
+variation on this machine.
+
+The Auto probe starts from the same fixture and moves the Linear End handle onstage at a
+target cadence of 60 Hz. It asks for one repaint between pointer moves. A complete update
+shows the current document state while the button is still down. A partial update has some
+current stage tiles available. Missing tiles retain their previous pictures. The probe pauses
+with the button held and polls for the current image. It then moves once more and measures
+catch-up from button release at the new position.
+
+| Instances | Complete or partial updates during 30 moves | Catch-up with button held | Catch-up after release on next move |
+|---:|---:|---:|---:|
+| 10 | 0 | 24.63 ms | 4.14 ms |
+| 50 | 0 | 30.97 ms | 2.53 ms |
+| 200 | 0 | 139.35 ms | 74.46 ms |
+
+The sustained drag displayed older artwork in both runs. Each count caught up while the
+button was still held once the pointer paused. Auto can switch to the background renderer
+when a synchronous stage batch exceeds 12 ms. Each pointer edit can then replace the pending
+batch, so a completed render of an earlier state may miss its chance to appear.
+
+The cache probe uses the same 34 × 15 shape and a constant Medium Blur of X 22 px, Y 3 px
+for every copy. It renders one padded transparent image at 100% and composites translated
+copies in document order over a transparent 640 × 400 surface. It times the composite and
+compares every whole-pixel result with a fresh CPU render of the same Array. A half-pixel
+move tests whether the same cached sample can stand in for the exact result. The probe
+measures composition plus canvas clear with a warm cache. It excludes editor work, cache
+lookup, texture upload, and GPU presentation.
+
+| Instances | Fresh render p50 | Cached composite p50 | Pixels differing after half-pixel move |
+|---:|---:|---:|---:|
+| 10 | 4.03 ms | 0.41 ms | 8,930 |
+| 50 | 15.56 ms | 1.52 ms | 1,584 |
+| 200 | 165.27 ms | 13.69 ms | 1,181 |
+
+All 108 whole-pixel placements, including warm-up, matched byte for byte in RGBA8. The
+half-pixel oracle differed at every tested count. These timings characterize the isolated
+composition opportunity on this fixture with a shared raster per copy.
+
+When a filtered Array moves, the engine keeps its position-only preview generation. The
+stage falls back to state-based keys for every visible tile because its current position cache
+uses path bounds, and a filter can draw beyond them. This invalidates even tiles outside the
+affected region. The footprint check also builds a position map before it discovers filters
+and falls back. A Blur value change takes the full preview command path and creates a new
+generation on each measured field update. The renderer still quantizes blur widths to device
+pixels, so an eventual pixel cache could reuse resolved widths across edits that land on the
+same rasterized value.
+
+The original proposal was to reuse a padded image on translations at the same
+device-pixel phase. It would need to key the artwork frame, view scale, transform basis,
+resolved filters and effective colour, retain correct clipping and stacking, and composite
+with the current backdrop. Rotation, scale, filter edits that change the resolved effect,
+or a change in device-pixel phase require a suitable fresh raster. For fractional drags,
+a translated image could serve as a transient preview while the ordinary renderer draws
+the exact current image and the final released state. The probe covers isolated normal-blend
+copies with no masks. It does not exercise a GPU layer cache.
+
+#### Provisional Linear drag preview
+
+Auto now uses the position-only Array generation to keep a bounded warm set of
+premultiplied textures. The normal render service draws the backdrop tiles and the
+isolated Blur copies off the input path once the view and Array have been still for
+100 ms. The warm texture set holds one generation and view, up to 8 Mi pixels (32 MiB of
+RGBA8 textures), with a 2048-pixel patch edge limit and 32 texture uploads per UI frame.
+The render service accounts for the CPU images in its existing cache budget.
+
+During an eligible gizmo move, the stage draws the backdrop and places the warmed
+copy textures in stacking order. The ordinary exact tile batch resumes after 65 ms
+without motion or on release. The provisional frame stays visible until the whole
+current exact batch is ready. Texture interpolation at fractional offsets and separate
+8-bit layer composition can differ from fresh rasterization. The stage keeps the provisional
+pictures in their own cache, and the existing exact path renders the document and exports.
+
+Eligibility requires Linear geometry, stable realized transforms, an enabled source Blur,
+and an independent normal-blend foreground stack. Dim Stage can supply that order. The
+cache defers to standard rendering for cold starts, over-budget scenes, other active
+filter types, masks, shared groups, camera or onion previews, and unsupported stacking.
+Numerical edits, including Blur X/Y, use the exact stage path. Changing properties,
+renderers, or the view scale invalidates the warm set. Stage clipping is applied while
+drawing, so a prepared copy can cross onto the pasteboard without being cropped to its old
+position.
+
+The same `measure_filtered_preview` command now also runs paired Auto trials with the
+cache disabled and enabled in the same binary. Each trial starts with the same fixture,
+uses a wall-clock egui input clock, and samples 30 moves after six warm-up moves. Pointer
+time measures the UI frame that consumes each event. The probe counts current exact,
+provisional, and partial frames on the event frame and one intervening repaint. These are
+editor frame timings on the CPU stage, before display presentation.
+
+| Instances | Auto drag | Original pointer ms p50 / p95 | Warm-cache pointer ms p50 / p95 | Fresh frames out of 30, original → enabled |
+|---:|---|---:|---:|---:|
+| 10 | End on stage | 4.51 / 7.96 | 2.85 / 4.59 | 0 → 30 |
+| 10 | End crossing stage edge | 3.13 / 5.07 | 2.33 / 4.65 | 0 → 30 |
+| 10 | Translate bar | 3.86 / 5.62 | 2.33 / 4.72 | 0 → 30 |
+| 10 | Blur X field | 4.36 / 8.51 | 9.85 / 21.98 | 2 → 19 |
+| 50 | End on stage | 3.35 / 7.38 | 2.79 / 4.80 | 0 → 30 |
+| 50 | End crossing stage edge | 4.58 / 9.83 | 2.71 / 4.32 | 0 → 30 |
+| 50 | Translate bar | 2.90 / 5.34 | 2.93 / 4.40 | 0 → 30 |
+| 50 | Blur X field | 3.58 / 6.45 | 3.64 / 6.53 | 0 → 0 |
+| 200 | End on stage | 5.22 / 6.11 | 3.16 / 5.26 | 0 → 30 |
+| 200 | End crossing stage edge | 4.28 / 5.67 | 1.07 / 2.61 | 0 → 30 |
+| 200 | Translate bar | 2.51 / 3.08 | 2.70 / 4.13 | 0 → 30 |
+| 200 | Blur X field | 3.64 / 4.58 | 2.94 / 4.22 | 0 → 0 |
+
+Every fresh geometry frame in the enabled trials used provisional pictures. The original
+geometry trials in the table showed no fresh full or partial tiles during the sampled moves, consistent
+with the checkpoint. The 200-copy End drag still took 102.23 ms p50 in Immediate, compared
+with 106.12 ms at the checkpoint. Immediate continues to rasterize each edit synchronously.
+All Blur-field samples took the ordinary stage path in both Auto trials. At 10 copies, the
+trial with the cache enabled showed more exact updates and longer pointer frames. Auto's
+12 ms scheduling threshold depends on the preceding render, and both trials showed zero
+cache reuse on Blur-field edits.
+
+The textures were ready in 121–197 ms, including the 100 ms dwell. Across the enabled
+geometry trials, exact catch-up took 77–159 ms from the end of the timed motion with the
+button held, and 22–90 ms from release on the next move. The original geometry trials took
+19–183 ms held and 3–98 ms after release. The enabled trials kept the current artwork
+visible while waiting for exact tiles. The paired numbers are one run on Windows x86-64
+with the Intel Core Ultra 9 185H and 22 logical processors.
+
+A repeat run with the final texture cap produced the same 30/30 provisional updates in each
+geometry trial and zero during Blur edits. For 200 copies, End measured 4.78 → 2.08 ms p50
+on stage and 4.56 → 1.07 ms while crossing the stage edge. The 10-copy bar trial showed how
+Auto can vary with render cost: the original path drew 27/30 exact updates at 17.30 ms p50,
+and the warm cache drew 30/30 provisional updates at 2.50 ms p50.
+
+### Filtered Array GPU pressure
+
+On Intel Arc integrated graphics with Vulkan on Windows, the 2×-scale tile probe draws ten
+64 px shapes in 20 tiles of 512 × 512 px. It measures 30 batches, alternating translations
+in both directions. The switch variant starts with a radial batch and then translates the
+linear arrangement. The allocator report distinguishes live allocations from reserved blocks
+and covers wgpu's allocator for the test device.
+
+```powershell
+$env:WGPU_BACKEND = 'vulkan'
+cargo test -p anicraft-gpu --locked measure_filtered_tile_pressure -- --ignored --nocapture --test-threads=1
+cargo test --locked high_quality_shadow_glow_gpu_drag_lifecycle -- --ignored --nocapture --test-threads=1
+```
+
+In the original path, the probe held up to 384 completed textures, matching the render service's
+native tile budget. High quality increases filter reach and runs more blur passes. The passes
+reuse the same buffers, but the extra padding increases each layer's area. Each tile draws the
+filtered instances that touch it, so tiles can repeat the same padded layer work. Separate tile
+submissions can retain all those intermediates concurrently. New pointer updates replace the
+pending batch already, but prior submissions and finished textures can still consume memory.
+
+Exact preview pictures expire when their keys leave the visible preview. The background worker
+checks again before rasterizing each tile and releases stale results as they finish. The stage
+keeps one displayed replacement per missing tile while newer tiles arrive. The display owns its
+texture handle independently of the render cache.
+
+Filtered window textures and headless readbacks share an allowance of 64 MiB on integrated,
+virtual, and unclassified devices, or 128 MiB when the adapter reports a discrete GPU. A scoped
+allocation failure brings the discrete allowance back to 64 MiB for that renderer. The estimate
+counts float layers, coverage, paints, tile lists, edges, per-pass parameters and ramps, GPU
+binning buffers, and the output texture or both readback buffers. Small buffers are charged
+at least one 4 KiB page to account for allocation overhead. Bitmap and finished tile caches
+have their own bounds. Driver allocation policy, window resources and other applications can
+add pressure beyond those estimates. Allocator
+reports are optional diagnostics. Per-resource texture and buffer limits are checked
+independently, and no driver ID or reported VRAM size sets the allowance.
+
+The accounting retires submissions after their queue fence completes on native wgpu backends.
+The browser stage uses the CPU, and the budget rejects filtered GPU work on browser WebGPU,
+where a blocking poll cannot fence a submission. A tile that exceeds the allowance renders on
+the CPU with the same filter stack and quality. The GPU probe holds up to 40 textures to model
+one visible set and one incoming set. Blur's isolated provisional pictures retain their separate
+cache and exact redraw after the gesture.
+
+| Ten instances at 2× | Peak live MiB, before → after | Filter scratch MiB, before → after |
+|---|---:|---:|
+| Drop Shadow, Low | 421 → 53 | 15 → 8 |
+| Drop Shadow, High | 440 → 106 | 28 → 47 |
+| Glow, High | 456 → 120 | 39 → 49 |
+| Drop Shadow + Glow, Low | 447 → 112 | 33 → 51 |
+| Drop Shadow + Glow, High | 528 → 113 | 102 → 55 |
+| Drop Shadow + Glow, High, Radial to Linear | 532 → 113 | 102 → 55 |
+
+The mixed High switch case reserved 768 MiB before and 256 MiB after. Its live peak in the
+latter half of the fixed run was 111 MiB. Individual scratch readings reflect where the driver
+was in the queue when sampled, so a lighter trial can report more live scratch after the change.
+The original memory probe completed successfully. The reported device loss therefore remains
+dependent on the actual graphics budget and concurrent use of the window device.
+The switch case's median tile-batch call time was 27 ms before and 81–119 ms in two fixed runs.
+The fixed runs also overlapped other validation work, and their call times include waits for
+room in the GPU queue. The timings cover the synthetic batch calls, whose submissions can
+queue ahead of painting.
+
+The separate editor regression used the real shared Vulkan device with default Array settings.
+It ran eight Radial-to-Linear switches and 80 bar pointer moves with reversals and stage-boundary
+crossings. Over two runs, pointer frames took 2.42–2.78 ms p50 and 3.85–5.14 ms p95. The driver
+reported live peaks of 14.1–15.9 MiB, with the same peaks in the latter halves of the runs. Exact
+tiles settled after each release, including after Undo/Redo, Cancel and Commit. The tile probe
+above is a separate, higher-pressure workload.
+
+The portability review repeated the same 2× pressure probe on this Intel Arc adapter with
+Vulkan and Direct3D 12. The mixed High switch case peaked at 114 MiB live on Vulkan and
+82 MiB on Direct3D 12. Each reported 256 MiB in reserved allocator blocks. Their median
+batch calls took 72 ms and 238 ms respectively in these runs. The measurements describe
+these two driver paths on one Windows machine. Discrete and unknown adapter policies are
+covered by mocked budgets. An OpenGL window also displayed the mixed-filter Array using
+readback from a separate Vulkan device on the same adapter.
+
+The 80-move editor regression passed on both APIs. Vulkan pointer frames measured 3.06 ms p50
+and 5.56 ms p95, and driver-reported live allocations peaked at 12.5 MiB both overall and in
+the latter half. Direct3D 12 measured 2.43 ms p50 and 5.73 ms p95, with a 46.9 MiB overall peak
+and a 34.2 MiB latter-half peak. The test waits for GPU startup separately, so these timings
+start once the stage is rendering on the selected device.
+
+The Bevel milestone adds a repeat of the editor regression with ten instances, each with
+High-quality Blur, Drop Shadow, Glow, and Bevel. On the same Windows Intel Arc adapter,
+Vulkan measured 4.06 ms p50 and 7.99 ms p95, with a 39.5 MiB live allocation peak overall and
+in the latter half. Direct3D 12 measured 3.98 ms p50 and 6.03 ms p95, with 112.2 MiB overall and
+106.9 MiB in the latter half. Both runs settled to exact stage tiles after each drag. Set
+`WGPU_BACKEND` to `vulkan` or `dx12` and run
+`cargo test --locked high_quality_bevel_stack_gpu_drag_lifecycle -- --ignored --nocapture --test-threads=1`
+to repeat the test.
+
+The Gradient Bevel review repeated the editor workload with ten instances, each with High-quality
+Blur, Drop Shadow, Glow, Bevel, Gradient Glow, and Gradient Bevel. On the Windows Intel Arc adapter,
+the first Direct3D 12 run exceeded the test's 15-second stage-settle deadline. Two reruns on the
+same adapter completed all eight Radial-to-Linear switches and 80 pointer moves, including one
+after the other verification workloads had finished. Pointer-frame p95 was 10.51 ms on the first
+successful rerun and 6.91 ms on the isolated rerun. The Vulkan run completed with a 15.97 ms
+pointer-frame p95. The cause of the initial timeout remains undetermined.
+
+During Circle and Spiral UI verification, `stage_work_is_submitted_only_inside_the_frame`
+failed in the parallel workspace run at the assertion that submissions wait between frames.
+The test passed in a process by itself. The rest of the workspace suite and the exhaustive
+command fuzzer passed separately.
+
+To exercise the failing paint path separately, run a **debug build** with isolated logs and
+recovery files. The fixture destroys AniCraft's test device just before the painter runs.
+The replacement process should open the **Recover unsaved work** dialog. The Vulkan and
+Direct3D 12 runs showed the staging-buffer panic, followed by the handoff before cleanup could
+unwind further. The recovery copy contains the source artwork and its filters.
+
+```powershell
+$env:ANICRAFT_LOG_DIR = "$pwd\target\array-gpu-loss-logs"
+$env:ANICRAFT_RECOVERY_DIR = "$pwd\target\array-gpu-loss-recovery"
+cargo run --locked -- --renderer vulkan --open array-gpu-loss-probe --screenshot shots/array-gpu-recovery.png
+```
 ### Gradient selection stipple (#295)
 
 The selection overlay inverts the artwork's 256-entry gradient ramp with alpha ignored. It

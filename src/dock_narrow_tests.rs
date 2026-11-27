@@ -81,3 +81,15 @@ fn every_panel_fits_the_narrowest_dock() {
     }
     assert!(found.is_empty(), "{} widgets past a panel's edge at {MIN_SIDE} pt:\n{}", found.len(), found.join("\n"));
 }
+
+#[test]
+fn active_array_controls_fit_the_narrowest_dock() {
+    for pseudo in [false, true] {
+        for view in ["array", "array-easing-global", "array-easing-segment"] {
+            let (mut app, ctx) = app(pseudo);
+            crate::array_panel::screenshot(&mut app, view);
+            let found = overflow(&mut app, &ctx, Panel::Array);
+            assert!(found.is_empty(), "Array {view}, pseudo={pseudo}: {found:?}");
+        }
+    }
+}

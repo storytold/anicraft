@@ -699,9 +699,12 @@ mod tests {
         frame(&mut app);
         assert!(app.status.as_ref().is_some_and(|s| s.error && s.text.contains("notes.txt")));
         assert!(app.confirm.is_none());
-        // The Dock's Quit closes the editor's window, which the close guard intercepts.
-        app.allow_close = true;
+        // The Dock's Quit asks about unsaved work before closing the editor's window.
         push_request(SystemRequest::Quit);
+        frame(&mut app);
+        assert!(app.tabs.asking() && !app.allow_close);
+        assert_eq!(crate::tabs::asked_about(&app), ["walk.anicraft"]);
+        crate::tabs::answer(&mut app, crate::tabs::Answer::Discard);
         let out = frame(&mut app);
         let closes = out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.commands.contains(&egui::ViewportCommand::Close));
         assert!(closes, "a quit request closes the editor's window");

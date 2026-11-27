@@ -36,7 +36,14 @@ pub fn specs() -> Vec<CommandSpec> {
 /// A filter list from command params (`element.set_filters`, `filter.preset_save`): colours may
 /// be "#rrggbb" or "#rrggbbaa", values are brought into range, at most [`MAX_FILTERS`].
 pub(crate) fn parse_list(list: Option<&Value>) -> Result<Vec<FilterEntry>> {
-    let mut list = list.cloned().ok_or_else(|| EngineError::Param("param 'filters' is required (a list; [] removes them)".into()))?;
+    let list = list.ok_or_else(|| EngineError::Param("param 'filters' is required (a list; [] removes them)".into()))?;
+    Ok(parse_entries(list, MAX_FILTERS)?.iter().map(FilterEntry::sanitized).collect())
+}
+
+/// Decode before sanitizing. Array validates ramp order first and may edit an existing stack
+/// that exceeds the limit for creating one.
+pub(crate) fn parse_entries(list: &Value, max: usize) -> Result<Vec<FilterEntry>> {
+    let mut list = list.clone();
     fn hex_colors(v: &mut Value, keys: &[&str]) -> Result<()> {
         for k in keys {
             if v.get(*k).is_some_and(Value::is_string) {
@@ -46,8 +53,8 @@ pub(crate) fn parse_list(list: Option<&Value>) -> Result<Vec<FilterEntry>> {
         }
         Ok(())
     }
-    if list.as_array().is_some_and(|a| a.len() > MAX_FILTERS) {
-        return Err(EngineError::Param(format!("at most {MAX_FILTERS} filters per instance")));
+    if list.as_array().is_some_and(|a| a.len() > max) {
+        return Err(EngineError::Param(format!("at most {max} filters per instance")));
     }
     for f in list.as_array_mut().into_iter().flatten() {
         hex_colors(f, &["color", "shadow_color", "highlight_color"])?;
@@ -60,8 +67,7 @@ pub(crate) fn parse_list(list: Option<&Value>) -> Result<Vec<FilterEntry>> {
             }
         }
     }
-    let filters: Vec<FilterEntry> = serde_json::from_value(list).map_err(|e| EngineError::Param(format!("'filters' must be a list of {{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool}}: {e}")))?;
-    Ok(filters.iter().map(FilterEntry::sanitized).collect())
+    serde_json::from_value(list).map_err(|e| EngineError::Param(format!("'filters' must be a list of {{type: blur|drop_shadow|glow|bevel|gradient_glow|gradient_bevel|adjust_color, …values, enabled?: bool}}: {e}")))
 }
 
 /// What to select for a filter command.

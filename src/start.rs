@@ -53,6 +53,9 @@ pub fn new_params(width: u32, height: u32, fps: f32) -> serde_json::Value {
 
 /// Shows the start screen (File › Start Screen, and at launch).
 pub fn open(app: &mut App) {
+    if crate::array_panel::blocked(app) {
+        return;
+    }
     app.playing = false;
     app.start = Some(StartScreen { fps: app.s.doc.stage.fps, ..StartScreen::default() });
     crate::templates::rescan(app);

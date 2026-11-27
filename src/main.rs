@@ -33,6 +33,8 @@ mod brushtool;
 mod build_flavor;
 mod colour;
 mod colour_panel;
+mod array_gizmo;
+mod array_panel;
 mod envelope;
 mod find_panel;
 mod font_fallback;
@@ -258,7 +260,13 @@ fn run(attempt: startup::Attempt, file: Option<&Path>, shot: Option<PathBuf>, op
             if let Some(port) = control {
                 remote::start(&mut a, &cc.egui_ctx, port);
             }
-            a.open_panel(open.as_deref());
+            let open = open.as_deref();
+            #[cfg(debug_assertions)]
+            let open = if open == Some("array-gpu-loss-probe") && a.shot.is_some() && platform::recovery_dir_overridden() {
+                cc.egui_ctx.data_mut(|data| data.insert_temp(egui::Id::unique("array-gpu-loss-probe"), true));
+                Some("array-shadow-glow")
+            } else { open };
+            a.open_panel(open);
             match report {
                 // An imported document says what came across, as opening it from the menu does.
                 Opened::Imported(r) => a.status_ok(tr!("{report} Save to keep it as an AniCraft document.", report = r)),
@@ -370,7 +378,7 @@ const HELP: &str = "anicraft [file.anicraft|file.fla|file.xfl] [--version] [--sc
      --renderer   the window's graphics (also ANICRAFT_RENDERER); default automatic, falling back to OpenGL\n\
      --theme      a built-in look, or a theme file of your own, for this run only\n\
      --check-theme  says whether a theme file would be used (exit 0) or why it is refused (exit 1)\n\
-     --open       shows a panel at start (handy with --screenshot for visual checks)\n\
+     --open       shows a panel at start (try --open array with --screenshot)\n\
      --shot-width scales the screenshot down to this width (the user guide's pictures)\n\
      ANICRAFT_STAGE_RENDERER=gpu|cpu  stage renderer (default gpu, falling back to cpu; ADR 0032)\n\
      --theme      the interface palette for this run (not saved)\n\
@@ -486,6 +494,8 @@ fn control_port(flag: Option<u16>) -> Option<u16> {
 #[cfg(not(target_arch = "wasm32"))]
 fn main() -> eframe::Result {
     let Some(arguments) = prepare_launch() else { return Ok(()) };
+    // A replacement window (ADR 0092) waits here until the window that lost its device exits.
+    let failed_backend = startup::wait_for_failed_window();
     // Nightly has no updater: the Launcher owns its version (`docs/nightly-release-preparation.md`).
     if platform::stable_services_allowed()
         && let Some(result) = updates::finish_helper()
@@ -592,7 +602,12 @@ fn main() -> eframe::Result {
     let result: eframe::Result = 'attempts: {
         while opening {
             opening = false;
-            let attempts = startup::plan(forced, prefs::Prefs::load().window_backend, &platform::window_attempts(platform::OS), &last);
+            let platform_attempts = platform::window_attempts(platform::OS);
+            let attempts = if let Some(failed) = failed_backend {
+                startup::recovery_plan(failed, &platform_attempts, platform::window_backends(platform::OS), &last)
+            } else {
+                startup::plan(forced, prefs::Prefs::load().window_backend, &platform_attempts, &last)
+            };
             for (n, attempt) in attempts.iter().enumerate() {
                 startup::trying(attempt, n + 1, attempts.len());
                 let mut unwound = false;
@@ -616,7 +631,20 @@ fn main() -> eframe::Result {
                         startup::line("closed");
                         break 'attempts Ok(());
                     }
-                Ok(Err(e)) => e.to_string(),
+                Ok(Err(e)) => {
+                    if attempt.backend == prefs::WindowBackend::OpenGl && startup::started() && failed_backend.is_none()
+                        && matches!(e, eframe::Error::Glutin(_) | eframe::Error::OpenGL(_))
+                    {
+                        // eframe's returned graphics error ran on_exit and saved the open tabs.
+                        startup::line(&format!("the OpenGL window failed mid-session ({e}); trying another API"));
+                        startup::lost_mid_session();
+                        match startup::replace_lost_window(file.as_deref(), shot.as_deref()) {
+                            Ok(_replacement) => std::process::exit(0),
+                            Err(reopen_error) => startup::give_up(&reopen_error.to_string()),
+                        }
+                    }
+                    e.to_string()
+                }
                 Err(p) => {
                     unwound = true;
                     format!("{} panicked: {}", attempt.label(), startup::panic_text(p.as_ref())) // i18n-exempt: a log line

@@ -175,6 +175,7 @@ pub fn panel_icon(p: Panel) -> Icon {
     match p {
         Panel::Properties => Icon::PanelProperties,
         Panel::Align => Icon::AlignLeft,
+        Panel::Array => Icon::DistributeH,
         Panel::Colour => Icon::Ink,
         Panel::Swatches => Icon::PanelSwatches,
         Panel::Library => Icon::PanelLibrary,
@@ -943,6 +944,9 @@ pub(crate) fn panel_menu(ui: &mut egui::Ui, at: Where, p: Panel, layout: &Layout
 
 /// The shown panel's contents, wherever it is.
 pub fn panel_body(app: &mut App, ui: &mut egui::Ui, p: Panel) {
+    if p != Panel::Array && app.s.array_preview_active() {
+        ui.disable();
+    }
     // A vertical scroll area grows to its widest row and remembers it; held to the panel's
     // width, a row that can't fit can't widen every other one (ADR 0087).
     let width = ui.available_width();
@@ -960,6 +964,12 @@ pub fn panel_body(app: &mut App, ui: &mut egui::Ui, p: Panel) {
             scroll("align").show(ui, |ui| {
                 held(ui);
                 pad(12, 8).show(ui, |ui| crate::panels::align_panel(app, ui))
+            });
+        }
+        Panel::Array => {
+            scroll("array").show(ui, |ui| {
+                held(ui);
+                pad(12, 8).show(ui, |ui| crate::array_panel::panel(app, ui))
             });
         }
         Panel::Colour => {
@@ -1142,7 +1152,8 @@ fn flyout(app: &mut App, ctx: &egui::Context, auto: (f32, f32), layout: &Layout,
     });
     // Esc closes it (after a drag's own Esc), focus going back to its icon.
     let popup = egui::Popup::is_any_open(ctx);
-    if app.dock_view.drag.is_none() && !popup && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+    let text_escape = app.s.array_preview_active() && crate::array_panel::text_had_escape(ctx);
+    if app.dock_view.drag.is_none() && !popup && !text_escape && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
         acts.push(Act::Flyout(None));
         let icon = Id::unique(("dock_icon", p.id()));
         ctx.memory_mut(|m| m.request_focus(icon));

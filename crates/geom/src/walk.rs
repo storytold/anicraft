@@ -108,6 +108,14 @@ impl CurveWalk {
         (b.seg as usize, ta + (b.t - ta) * f)
     }
 
+    /// The measured path command, local cubic parameter and distance at each sample.
+    /// Uses the same table as distance-to-parameter playback.
+    pub fn distance_samples(&self) -> impl Iterator<Item = (usize, f32, f32)> + '_ {
+        self.samples.iter().filter_map(|sample| {
+            self.segs.get(sample.seg as usize).map(|&(cmd, _)| (cmd, sample.t, sample.s))
+        })
+    }
+
     /// The distance along the path to the anchor that ends path command `cmd`, or 0 for the
     /// start (a command before the first segment). `None` when `cmd` ends no segment the walk
     /// measured.

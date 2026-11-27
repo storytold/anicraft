@@ -14,7 +14,8 @@
 //! * **the device lost**, or the surface failing for [`STUCK_SECS`] on end: nothing can draw on
 //!   this device again (eframe can't make a new one), so the work is autosaved one last time,
 //!   the startup record ([`crate::startup::lost_mid_session`]) makes the next starts try another
-//!   way first, and the window closes and opens again on that way, offering the work back.
+//!   way first. A stuck surface can close normally. A confirmed device loss reopens in a fresh
+//!   process, since eframe paints again before processing Close and can panic on the lost device.
 //!
 //! The GPU stage hears of the device's loss through [`lost`] (a renderer sharing the window's
 //! device can't install callbacks of its own: one per device), and drops to the CPU.
@@ -22,6 +23,80 @@
 use std::sync::Mutex;
 use std::sync::PoisonError;
 use std::time::{Duration, Instant};
+
+struct PaintRecovery {
+    file: Option<std::path::PathBuf>,
+    shot: Option<std::path::PathBuf>,
+    checkpoints: Vec<anicraft_engine::recovery::Checkpoint>,
+}
+
+thread_local! {
+    /// The current window thread's last complete document state, kept across the call to paint.
+    static BEFORE_PAINT: std::cell::RefCell<Option<PaintRecovery>> = const { std::cell::RefCell::new(None) };
+}
+
+fn recovery_state(app: &crate::app::App) -> PaintRecovery {
+    PaintRecovery {
+        file: app.s.path.clone().filter(|_| !app.s.is_dirty()),
+        shot: app.shot.as_ref().map(|shot| shot.path.clone()),
+        checkpoints: crate::tabs::graphics_checkpoints(app),
+    }
+}
+
+pub fn prepare_paint(app: &crate::app::App) {
+    BEFORE_PAINT.with(|slot| slot.replace(Some(recovery_state(app))));
+}
+
+pub fn finished_window() {
+    BEFORE_PAINT.with(|slot| slot.take());
+}
+
+fn handoff(why: &str, recovery: PaintRecovery) -> ! {
+    crate::startup::line(&format!("reopening in a fresh process after graphics device loss ({why})"));
+    for checkpoint in recovery.checkpoints {
+        if let Err(e) = checkpoint.flush() {
+            crate::startup::line(&format!("could not flush a graphics recovery copy: {e}"));
+        }
+    }
+    crate::startup::lost_mid_session();
+    let _replacement = match crate::startup::replace_lost_window(recovery.file.as_deref(), recovery.shot.as_deref()) {
+        Ok(child) => child,
+        Err(e) => {
+            crate::startup::give_up(&format!("the graphics device was lost and the recovery window could not open: {e}")); // i18n-exempt: startup diagnostic wrapped by give_up
+            std::process::exit(1);
+        }
+    };
+    // Do not unwind through a failed renderer and its surface. The OS releases the process's
+    // graphics resources and recovery locks before the replacement's startup pipe closes.
+    std::process::exit(0);
+}
+
+/// An isolated screenshot fixture can destroy its own test device just before egui paints.
+#[cfg(debug_assertions)]
+pub fn loss_probe(ctx: &egui::Context, device: &eframe::wgpu::Device) {
+    if crate::startup::started() && ctx.data_mut(|data| data.remove_temp(egui::Id::unique("array-gpu-loss-probe"))) == Some(true) {
+        record_lost("injected graphics device loss before egui-wgpu paint"); // i18n-exempt: debug fixture log
+        device.destroy();
+        ctx.request_repaint();
+    }
+}
+
+/// eframe paints after the app returns. A loss first reported during that paint can trigger
+/// a staging-buffer panic before the app sees another frame. Recover before unwinding into HAL.
+pub fn recover_painter_panic(info: &std::panic::PanicHookInfo<'_>) {
+    let Some(why) = HEALTH.try_lock().ok().and_then(|health| health.as_ref()?.lost.clone()) else { return };
+    let file = info.location().map_or("", |location| location.file());
+    if !lost_painter_panic(file, &crate::startup::panic_text(info.payload())) { return; }
+    if let Some(recovery) = BEFORE_PAINT.try_with(|slot| slot.try_borrow_mut().ok()?.take()).ok().flatten() {
+        handoff(&why, recovery);
+    }
+}
+
+fn lost_painter_panic(file: &str, message: &str) -> bool {
+    file.contains("egui-wgpu-") || (file.contains("wgpu-hal-") && file.contains("swapchain"))
+        // Packaged builds can remap dependency source paths.
+        || message.starts_with("Failed to create staging buffer for ") // i18n-exempt: matching a dependency's English panic
+}
 
 /// Errors written to the log in full; after that, one in [`LOG_EVERY`] (a driver can report one
 /// a frame).
@@ -154,6 +229,9 @@ pub fn surface_action(s: Surface, in_a_row: u32) -> eframe::egui_wgpu::SurfaceEr
 
 /// eframe's surface-status callback (set on every wgpu attempt, [`crate::startup::Attempt::options`]).
 pub fn on_surface_status(status: &eframe::wgpu::CurrentSurfaceTexture) -> eframe::egui_wgpu::SurfaceErrorAction {
+    if lost().is_some() {
+        return eframe::egui_wgpu::SurfaceErrorAction::SkipFrame;
+    }
     use eframe::wgpu::CurrentSurfaceTexture as C;
     let s = match status {
         C::Timeout => Surface::Timeout,
@@ -197,9 +275,14 @@ pub fn on_surface_status(status: &eframe::wgpu::CurrentSurfaceTexture) -> eframe
 /// Installs our handlers on the window's device: errors and the device's loss are written down
 /// (and the window woken to act on them) instead of panicking.
 pub fn watch(device: &eframe::wgpu::Device, ctx: &egui::Context) {
+    with(|health| *health = Health::default());
     let c = ctx.clone();
     device.on_uncaptured_error(std::sync::Arc::new(move |e: eframe::wgpu::Error| {
-        record_error(&e.to_string());
+        if matches!(e, eframe::wgpu::Error::OutOfMemory { .. }) {
+            record_lost(&e.to_string());
+        } else {
+            record_error(&e.to_string());
+        }
         c.request_repaint();
     }));
     let c = ctx.clone();
@@ -240,6 +323,9 @@ fn notice_due(at: f64) -> bool {
 /// it can open again another way ([`crate::startup::ask_reopen`]).
 pub fn tick(app: &mut crate::app::App, ctx: &egui::Context) {
     let news = take_news();
+    if let Some(why) = lost() {
+        handoff(&why, recovery_state(app));
+    }
     if news.error.is_some() || news.failing {
         app.recovery.doc.write_now(&app.s);
     }
@@ -269,6 +355,14 @@ pub static TEST_LOCK: Mutex<()> = Mutex::new(());
 mod tests {
     use super::*;
     use eframe::egui_wgpu::SurfaceErrorAction as A;
+
+    #[test]
+    fn a_lost_painter_can_be_identified_after_source_path_remapping() {
+        assert!(lost_painter_panic("src/renderer.rs", "Failed to create staging buffer for index data."));
+        assert!(lost_painter_panic("egui-wgpu-0.36.2/src/renderer.rs", "driver failure"));
+        assert!(lost_painter_panic("wgpu-hal-30.0.1/src/vulkan/swapchain/native.rs", "driver failure"));
+        assert!(!lost_painter_panic("src/renderer.rs", "an unrelated bug"));
+    }
 
     /// The surface policy: a failed configure (the error of #255) is retried by reconfiguring,
     /// then by a new surface; a hidden window or a busy GPU skips the frame.

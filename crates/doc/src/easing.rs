@@ -387,6 +387,8 @@ impl Easing {
             Easing::CubicBezier(x1, y1, x2, y2) => cubic_bezier(t, *x1, *y1, *x2, *y2),
             Easing::Custom(c) => c.apply(t),
             Easing::Sampled(s) => s.apply(t),
+            // Return exact endpoints even when a named polynomial accumulates rounding error.
+            _ if t == 0.0 || t == 1.0 => t,
             named => match named.family() {
                 Some((f, d)) => eval_named(f, d, f64::from(t)) as f32,
                 None => t,

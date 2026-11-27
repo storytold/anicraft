@@ -3,8 +3,8 @@
 //!
 //! The stage is cut into `TILE`-pixel tiles on a device-pixel grid at the current zoom. Each
 //! frame asks for the visible tiles as one batch (plus a one-tile margin as look-ahead), keeps
-//! finished tiles as textures, and draws any older tiles that cover a gap (previous zoom or
-//! state, scaled) underneath, so panning and zooming never reveal an empty stage.
+//! finished tiles as textures, and uses older tiles as placeholders while the current ones
+//! render. Only a missing transparent tile can use a placeholder at the same location.
 //!
 //! Memory and frame time stay flat (ADR 0132). The pictures of a document state and zoom that
 //! are no longer on screen go as soon as the view is drawn again, here and in the render
@@ -24,6 +24,10 @@ use anicraft_engine::cmds_raw::Grab;
 use egui::{Color32, CursorIcon, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
+mod filtered_array;
+#[cfg(test)]
+mod playback_tile_tests;
+
 /// Frames rendered ahead of the playhead during playback.
 const LOOKAHEAD: u32 = 12;
 /// In Auto mode, edits render on the UI thread when the visible tiles last took at most this
@@ -41,12 +45,39 @@ const INLINE_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
 /// A finished tile on the GPU.
 struct TileTex {
     key: u64,
+    frame: u32,
     /// The picture set it is of (a document state at a zoom, ADR 0132).
     set: u64,
     /// Stage-space rectangle `[x0, y0, x1, y1]` this tile covers.
     rect: [f32; 4],
     tex: TileImage,
     used: u64,
+    opaque: bool,
+    array: bool,
+}
+
+#[derive(PartialEq)]
+struct PlaybackView {
+    state: anicraft_engine::StateId,
+    scene: usize,
+    raster: u64,
+    scale: f32,
+    viewport: [f32; 4],
+    camera: bool,
+    pasteboard: bool,
+    grid_under: bool,
+}
+
+struct Playback {
+    view: PlaybackView,
+    /// The frame still being filled while the playhead advances.
+    pending: Option<u32>,
+    presented: Option<PresentedFrame>,
+}
+
+struct PresentedFrame {
+    frame: u32,
+    keys: Vec<u64>,
 }
 
 /// A tile's texture: uploaded from the CPU's bytes, or drawn there by the GPU stage (ADR 0029).
@@ -81,6 +112,7 @@ pub struct Cache {
     pub shown_state: Option<anicraft_engine::StateId>,
     /// Movie frame of the picture on screen (playing or scrubbing makes it differ).
     shown_frame: Option<u32>,
+    playback: Option<Playback>,
     /// The device scale the stage was laid out at last frame: while it differs from this
     /// frame's the zoom is still changing, and no tiles are asked for.
     last_scale: Option<f32>,
@@ -90,11 +122,18 @@ pub struct Cache {
     pub drawn_by: Option<(bool, Option<String>)>,
     /// The selection pattern's texture and the colour it was made in (`selection_pattern`).
     pattern: Option<(Color32, egui::TextureHandle)>,
+    array_tiles: Option<crate::array_gizmo::TileBounds>,
+    filtered_array: filtered_array::Cache,
+    #[cfg(test)]
+    pub(crate) disable_filtered_array: bool,
 }
 
 impl Default for Cache {
     fn default() -> Self {
-        Cache { tiles: Vec::new(), tick: 0, ms: 0.0, ready: (0, 0), canvas: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), canvas_pixels_per_point: 1.0, laid_out: false, service: None, shown_state: None, shown_frame: None, last_scale: None, gpu: Default::default(), drawn_by: None, pattern: None }
+        Cache { tiles: Vec::new(), tick: 0, ms: 0.0, ready: (0, 0), canvas: Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0)), canvas_pixels_per_point: 1.0, laid_out: false, service: None, shown_state: None, shown_frame: None, playback: None, last_scale: None, gpu: Default::default(), drawn_by: None, pattern: None, array_tiles: None, filtered_array: Default::default(),
+            #[cfg(test)]
+            disable_filtered_array: false,
+        }
     }
 }
 
@@ -113,8 +152,11 @@ impl Cache {
     /// memory.
     pub fn forget_document(&mut self) {
         self.tiles.clear();
+        self.array_tiles = None;
+        self.filtered_array = Default::default();
         self.shown_state = None;
         self.shown_frame = None;
+        self.playback = None;
         self.last_scale = None;
         self.ready = (0, 0);
         if let Some(s) = &self.service {
@@ -140,7 +182,13 @@ impl Cache {
         }
     }
 
-    fn upload(&mut self, ctx: &egui::Context, img: &FrameImage, rect: [f32; 4], keep: &[u64]) -> Option<String> {
+    #[cfg(test)]
+    pub(crate) fn filtered_array_warmed(&self) -> bool { self.filtered_array.warmed() }
+
+    #[cfg(test)]
+    pub(crate) fn filtered_array_presented(&self) -> Option<anicraft_engine::StateId> { self.filtered_array.presented }
+
+    fn upload(&mut self, ctx: &egui::Context, img: &FrameImage, spec: &TileSpec, keep: &[u64], array: bool) -> Option<String> {
         if let Some(e) = &img.error {
             return Some(e.clone());
         }
@@ -160,7 +208,7 @@ impl Cache {
             }
         };
         self.tick += 1;
-        self.tiles.push(TileTex { key: img.key, set: img.set, rect, tex, used: self.tick });
+        self.tiles.push(TileTex { key: img.key, frame: img.frame, set: img.set, rect: spec.rect, tex, used: self.tick, opaque: spec.opaque(), array });
         // Evict least recently used tiles that are not on screen.
         while self.tiles.len() > MAX_TILE_TEXTURES {
             let victim = self.tiles.iter().enumerate().filter(|(_, t)| !keep.contains(&t.key)).min_by_key(|(_, t)| t.used).map(|(i, _)| i);
@@ -179,6 +227,12 @@ impl Cache {
 struct TileSpec {
     rect: [f32; 4],
     view: View,
+}
+
+impl TileSpec {
+    fn opaque(&self) -> bool {
+        self.view.background.is_some_and(|color| color.a >= 1.0)
+    }
 }
 
 /// Most tiles along one side: a screen's worth and the look-ahead ring, many times over.
@@ -267,6 +321,9 @@ fn note_left_out(app: &mut App) {
 }
 
 pub fn show(app: &mut App, ui: &mut egui::Ui) {
+    let array_active = app.s.array_preview_active();
+    #[cfg(test)]
+    { app.stage_cache.filtered_array.presented = None; }
     // View › Rulers along the top and the left (ADR 0076); the stage view in what is left.
     let (canvas, bars) = crate::rulers::layout(app, ui.max_rect());
     let now = ui.input(|i| i.time);
@@ -281,7 +338,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // While a colour picker popup is open the stage is its eyedropper (ADR 0109): a click
     // picks the colour there instead of using the tool, so the tools get no presses.
     let picker = crate::colour::picking(ui.ctx());
-    let resp = ui.allocate_rect(canvas, if picker.is_some() { Sense::hover() } else { Sense::click_and_drag() });
+    let resp = ui.allocate_rect(canvas, if array_active || picker.is_some() { Sense::hover() } else { Sense::click_and_drag() });
     // The drawing surface: Ctrl+F6 lands here, and screen readers hear the tool in hand.
     crate::a11y::anchor(ui, crate::a11y::Region::Stage, canvas, &resp);
     let show_edges = !app.s.aids.hide_edges;
@@ -313,12 +370,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     // ---- camera input -------------------------------------------------------------------
-    if resp.hovered() {
+    if resp.hovered() || (array_active && resp.contains_pointer()) {
         let (zoom_delta, scroll) = ui.input(|i| (i.zoom_delta(), i.smooth_scroll_delta));
-        if let Some(p) = resp.hover_pos() {
+        if let Some(p) = ui.input(|i| i.pointer.hover_pos()) {
             if (zoom_delta - 1.0).abs() > 1e-4 {
                 app.zoom_by(canvas, p, zoom_delta, ppp);
-            } else if app.tool == Tool::Camera && scroll.y != 0.0 {
+            } else if !array_active && app.tool == Tool::Camera && scroll.y != 0.0 {
                 // With the Camera tool the wheel zooms the camera, not the view.
                 crate::camera_tool::wheel(app, scroll.y, now);
             } else if scroll != egui::Vec2::ZERO {
@@ -375,10 +432,27 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // stage space, not where it shows).
     let preview = crate::camera_tool::previewing(app);
     let cam_geo = crate::camera_tool::Geo { origin: st_origin, zoom: st_zoom, stage_rect, preview };
+    let array_projection = if array_active {
+        let stage_to_screen = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
+        if preview && app.s.editing.is_empty() && app.s.timeline().camera_at(app.s.frame, &app.s.doc.stage).is_some() {
+            app.s.camera_view(app.s.layer).map(|camera| stage_to_screen.mul(&camera))
+        } else {
+            Some(stage_to_screen)
+        }
+    } else {
+        None
+    };
+    let before_gizmo = app.s.state;
+    let array_gizmo = if array_active { crate::array_gizmo::input(app, ui, canvas, array_projection) } else { None };
+    let moved_array = before_gizmo != app.s.state;
+    let array_generation = (!preview && edit_view.is_none()).then(|| app.s.array_translation_generation()).flatten();
+    let array_instances = if app.array_panel.shows_registrations() || array_generation.is_some() { app.s.selected_elements() } else { Vec::new() };
     // Library items dragged onto the stage land at the pointer (ADR 0053).
-    crate::library::stage_drop(app, ui, &resp, to_stage, preview);
-    // Files dropped from the desktop land here too (ADR 0059).
-    app.drop.stage = Some(crate::drop::StageGeo { canvas, origin, zoom, paused: preview });
+    if !array_active {
+        crate::library::stage_drop(app, ui, &resp, to_stage, preview);
+        // Files dropped from the desktop land here too (ADR 0059).
+        app.drop.stage = Some(crate::drop::StageGeo { canvas, origin, zoom, paused: preview });
+    }
 
 
     // ---- tools ----------------------------------------------------------------------------
@@ -390,7 +464,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // The Selection tool on the movie's picture: points there are the picture's (ADR 0082).
     let through = preview && !panning && app.tool == Tool::Select;
     // A drag from a ruler makes a guide (ADR 0076).
-    crate::rulers::input(app, ui, &bars, geo, preview);
+    if !array_active {
+        crate::rulers::input(app, ui, &bars, geo, preview);
+    }
     let guide_hot = if app.drag == Drag::None && !panning && !preview { pointer.and_then(|p| crate::rulers::guide_at(app, geo, p)) } else { None };
     if paused && (resp.drag_started() || resp.clicked()) {
         app.status_ok(tr!("Previewing through the camera: the Selection tool picks and moves artwork here; other tools wait. Turn off View › Preview Through Camera to draw."));
@@ -403,10 +479,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // the transformation point (ADR 0111).
     crate::xform::sync(app);
     let xf_frame = if app.tool == Tool::Transform && !multi && !preview { crate::xform::frame(app) } else { None };
-    let sel_bounds = if multi { crate::onion::selection_bounds(app) } else { bounds_arr(app.s.selection_bounds()) };
+    let sel_bounds = if array_active { None } else if multi { crate::onion::selection_bounds(app) } else { bounds_arr(app.s.selection_bounds()) };
     let sel_rect = sel_bounds.map(|b| Rect::from_min_max(to_screen(Vec2::new(b[0], b[1])), to_screen(Vec2::new(b[2], b[3]))));
     // Shape hint markers take the pointer first with the selection tools (ADR 0023).
-    let hint_tools = matches!(app.tool, Tool::Select | Tool::Transform | Tool::Subselect) && !panning && !preview;
+    let hint_tools = !array_active && matches!(app.tool, Tool::Select | Tool::Transform | Tool::Subselect) && !panning && !preview;
     let hint_marks = if hint_tools { crate::shape_hints::markers(app) } else { Vec::new() };
     let hint_at = |p: Pos2| crate::shape_hints::hit(&hint_marks, p, to_screen);
     let hint_hot = pointer.and_then(hint_at);
@@ -419,7 +495,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let now = ui.input(|i| i.time);
     // The motion path takes the pointer with the selection tools (ADR 0030): its ends and
     // handles before the object under them, the path itself only where no object is.
-    let mp_tools = matches!(app.tool, Tool::Select | Tool::Subselect) && !panning && !preview;
+    let mp_tools = !array_active && matches!(app.tool, Tool::Select | Tool::Subselect) && !panning && !preview;
     let mp_grab = |app: &App, p: Pos2| {
         let shown = crate::motion_path::shown(app)?;
         let open = app.s.hit_test(to_v(to_stage(p)), 3.0 / zoom).is_none();
@@ -432,7 +508,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let pen_hot = if app.tool == Tool::Pen && alt && !panning && !preview && app.drag == Drag::None { pointer.and_then(|p| crate::motion_path::pen_hot(app, p, xf)) } else { None };
     // The open symbol's 9-slice guides take the Selection tool's press first (ADR 0055).
     let slice_hot = if app.drag == Drag::None && !panning && !preview { pointer.and_then(|p| crate::scale_grid::hit(app, p, xf)) } else { None };
-    if resp.hovered() {
+    if resp.hovered() && !array_active {
         let icon = match app.tool {
             _ if panning => CursorIcon::Grab,
             _ if let Drag::Guide { index, .. } = app.drag => crate::rulers::cursor(app, index),
@@ -507,7 +583,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         // Ctrl+X/C/V go back to artwork.
         app.timeline_focus = false;
     }
-    if app.tool == Tool::Pen && !panning && !paused {
+    if !array_active && app.tool == Tool::Pen && !panning && !paused {
         crate::pathtools::pen_input(app, ui, &resp, xf);
     }
 
@@ -1066,12 +1142,80 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         // Render jobs take movie frames: the current scene starts at `start`.
         let start = app.s.doc.scene_start(app.s.scene);
         let frame = app.s.frame;
+        let dim = array_active && app.array_panel.dim_stage();
+        let focus = if dim {
+            let mut ids: Vec<_> = app.s.selection.ids().collect();
+            ids.sort_unstable();
+            Some(std::sync::Arc::from(ids))
+        } else {
+            None
+        };
+        let tile_generation = array_generation.filter(|_| onion.is_none_or(|o| !o.shows()));
+        if let Some(generation) = tile_generation
+            && app.stage_cache.array_tiles.is_none_or(|bounds| bounds.generation != generation)
+        {
+            app.stage_cache.array_tiles = Some(crate::array_gizmo::TileBounds::new(generation, &app.s.display_list(), &array_instances));
+        }
+        let array_tiles = app.stage_cache.array_tiles.filter(|bounds| Some(bounds.generation) == tile_generation);
         // Inside a symbol open in place, onion skin composes the symbol's own frames (ADR 0051).
         // Reference videos (ADR 0116): their pictures for this frame, on the stage alone. The
         // ones not decoded yet are on their way, and bring a repaint.
         let reference = crate::video_import::stage_frames(app, ui.ctx(), &pic.doc, pic.frame, true);
-        let jobs: Vec<(TileSpec, FrameJob)> = visible.into_iter().map(|t| { let j = make_job_for(raster, state, &pic.doc, pic.frame, t.view, onion).through_camera(preview).inside(pic.front.clone()).with_reference(reference.clone()); (t, j) }).collect();
+        let job_for_frame = |t: &TileSpec, frame, reference| {
+            make_job_for(raster, state, &pic.doc, frame, t.view, onion)
+                .through_camera(preview).inside(pic.front.clone()).with_reference(reference).dim_around(focus.clone())
+        };
+        let tile_job = |t: &TileSpec| {
+            let mut job = job_for_frame(t, pic.frame, reference.clone());
+            if let Some(bounds) = array_tiles {
+                job.key = bounds.key(&job, t.rect, z.recip(), dim, &array_instances);
+            }
+            job.preview_tile(array_active)
+        };
+        let mut jobs: Vec<(TileSpec, FrameJob)> = visible.into_iter().map(|t| { let j = tile_job(&t); (t, j) }).collect();
+        let playing = app.playing && !array_active;
+        let mut playback = (!array_active && onion.is_none()).then(|| {
+            let view = PlaybackView { state, scene: app.s.scene, raster, scale: z, viewport: px, camera: preview, pasteboard, grid_under };
+            app.stage_cache.playback.take().filter(|p| p.view == view)
+                .unwrap_or(Playback { view, pending: None, presented: None })
+        });
+        let mut target_frame = pic.frame;
+        if playing && let Some(pending) = playback.as_ref().and_then(|p| p.pending).filter(|f| *f != pic.frame) {
+            // Give the previous request time to finish even if the clock has moved on. A
+            // complete playhead frame from look-ahead can still take priority immediately.
+            let playhead_ready = jobs.iter().all(|(_, job)| {
+                app.stage_cache.tiles.iter().any(|tile| tile.key == job.key)
+                    || app.stage_cache.service.as_ref().and_then(|svc| svc.cached(job.key)).is_some_and(|img| img.error.is_none())
+            });
+            if !playhead_ready {
+                target_frame = pending;
+                let reference = anicraft_engine::video::shown(&app.video, &pic.doc, pending, false).frames;
+                for (spec, job) in &mut jobs {
+                    *job = job_for_frame(spec, pending, reference.clone());
+                }
+            }
+        }
+        let allow_filtered = app.prefs.render_mode == RenderMode::Auto && !app.playing
+            && matches!(app.array_panel.gizmo_geometry(), Some(crate::array_gizmo::Geometry::Linear(_)));
+        #[cfg(test)]
+        let allow_filtered = allow_filtered && !app.stage_cache.disable_filtered_array;
+        let provisional = if allow_filtered && let Some(generation) = tile_generation
+            && array_instances.first().and_then(|(_, el)| el.kind.filters()).is_some_and(|filters| {
+                filters.iter().any(|entry| entry.enabled && matches!(entry.filter, anicraft_engine::doc::Filter::Blur { .. }))
+            })
+            && let Some(svc) = &app.stage_cache.service
+        {
+            let cache = &mut app.stage_cache.filtered_array;
+            cache.update(ui.ctx(), svc, filtered_array::Scene { generation, state, dim, scale: z, jobs: &jobs, instances: &array_instances }, moved_array);
+            cache.provisional(ui.ctx(), state, app.array_panel.gizmo_drag.is_some())
+        } else {
+            app.stage_cache.filtered_array = Default::default();
+            None
+        };
         let keys: Vec<u64> = jobs.iter().map(|(_, j)| j.key).collect();
+        if let Some(svc) = &app.stage_cache.service {
+            svc.prepare_preview(if array_active { &keys } else { &[] });
+        }
         let missing: Vec<usize> = (0..jobs.len()).filter(|&i| !app.stage_cache.has(keys[i])).collect();
         let set = jobs.first().map(|(_, j)| j.set);
         // A zoom that is still changing draws nothing new: this frame's zoom level is gone by
@@ -1089,8 +1233,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             svc.show(set);
         }
 
+        let mut render_failed = false;
         if !missing.is_empty()
             && !zooming
+            && provisional != Some(true)
             && let Some(svc) = &app.stage_cache.service
         {
             // Latency vs throughput (ADR 0006): an edit (the document changed under the picture
@@ -1104,13 +1250,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 && match app.prefs.render_mode {
                     RenderMode::Immediate => true,
                     RenderMode::Background => false,
-                    RenderMode::Auto => app.stage_cache.ms <= IMMEDIATE_BUDGET_MS,
+                    RenderMode::Auto => provisional.is_none() && app.stage_cache.ms <= IMMEDIATE_BUDGET_MS,
                 };
             let batch: Vec<FrameJob> = missing.iter().map(|&i| jobs[i].1.clone()).collect();
             // Moving around the picture already on screen (a pan, a zoom come to rest): with
             // no render thread the tiles come a few a frame, nearest the centre first, so the
             // frame stays short. An edit or another frame is one whole picture, drawn at once.
-            let moving = app.stage_cache.shown_state == Some(state) && app.stage_cache.shown_frame == Some(pic.frame);
+            let moving = app.stage_cache.shown_state == Some(state) && app.stage_cache.shown_frame == Some(target_frame);
             let started = web_time::Instant::now();
             let results: Vec<Option<std::sync::Arc<FrameImage>>> = if immediate {
                 svc.render_now_batch(batch).into_iter().map(Some).collect()
@@ -1128,7 +1274,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     if img.error.is_none() {
                         app.stage_cache.drawn_by = Some((img.gpu, img.fallback.clone()));
                     }
-                    if let Some(e) = app.stage_cache.upload(ui.ctx(), &img, jobs[i].0.rect, &keys) {
+                    if let Some(e) = app.stage_cache.upload(ui.ctx(), &img, &jobs[i].0, &keys, array_active) {
                         error = Some(e);
                     }
                 }
@@ -1141,17 +1287,34 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let cores = std::thread::available_parallelism().map_or(1, |n| n.get()) as f32;
                 let tiles = missing.len().max(1) as f32;
                 let batch_ms = if immediate { wall } else { ms / cores.min(tiles) };
-                app.stage_cache.ms = batch_ms * keys.len() as f32 / tiles;
+                app.stage_cache.ms = if array_active { batch_ms } else { batch_ms * keys.len() as f32 / tiles };
             }
             if let Some(e) = error {
                 app.status_err(crate::i18n::t_dyn(&e).into_owned());
+                render_failed = true;
             }
         }
         let ready = keys.iter().filter(|k| app.stage_cache.tiles.iter().any(|t| t.key == **k)).count();
+        // A current transparent tile cannot hide older pixels underneath it. Use at most
+        // one same-rectangle placeholder, and only until the current tile is ready.
+        let mut placeholders = Vec::new();
+        if !playing && ready < keys.len() {
+            for (spec, job) in &jobs {
+                if (array_active || !spec.opaque())
+                    && !app.stage_cache.tiles.iter().any(|t| t.key == job.key)
+                    && let Some(old) = app.stage_cache.tiles.iter()
+                        .filter(|t| t.rect == spec.rect && (array_active || (!t.array && !t.opaque)))
+                        .max_by_key(|t| t.used)
+                {
+                    placeholders.push(old.key);
+                }
+            }
+        }
+        app.stage_cache.tiles.retain(|tile| !tile.array || (array_active && (keys.contains(&tile.key) || placeholders.contains(&tile.key))));
         app.stage_cache.ready = (ready, keys.len());
         if ready == keys.len() {
             app.stage_cache.shown_state = Some(state);
-            app.stage_cache.shown_frame = Some(pic.frame);
+            app.stage_cache.shown_frame = Some(target_frame);
             // The view is whole: tiles of other states and zooms were only standing in for
             // it, so their textures go now instead of when 192 newer ones have pushed them out.
             if let Some(set) = set {
@@ -1174,30 +1337,59 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     let then = anicraft_engine::video::shown(&app.video, &app.s.doc, start + f, false).frames;
                     ahead.extend(jobs.iter().map(|(t, _)| make_job_for(raster, state, &app.s.doc, start + f, t.view, None).through_camera(preview).with_reference(then.clone())));
                 }
+            } else if !array_active {
+                ahead.extend(tiles_for(z, stage_px, px, 1, bg, pasteboard).into_iter().filter(|t| !jobs.iter().any(|(v, _)| v.rect == t.rect)).map(|t| tile_job(&t)));
             } else {
-                ahead.extend(tiles_for(z, stage_px, px, 1, bg, pasteboard).into_iter().filter(|t| !jobs.iter().any(|(v, _)| v.rect == t.rect)).map(|t| make_job_for(raster, state, &pic.doc, pic.frame, t.view, onion).through_camera(preview).with_reference(reference.clone())));
+                ahead = app.stage_cache.filtered_array.pending();
             }
             svc.prefetch(ahead);
         }
 
-        // Draw: tiles from earlier zooms/states that cover the view go first (scaled, as a
-        // placeholder), then the current tiles on top.
-        let view_rect = [(vis.min.x - st_origin.x) / st_zoom, (vis.min.y - st_origin.y) / st_zoom, (vis.max.x - st_origin.x) / st_zoom, (vis.max.y - st_origin.y) / st_zoom];
-        let overlaps = |r: &[f32; 4]| r[0] < view_rect[2] && r[2] > view_rect[0] && r[1] < view_rect[3] && r[3] > view_rect[1];
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        let mut stale: Vec<&TileTex> = app.stage_cache.tiles.iter().filter(|t| !keys.contains(&t.key) && overlaps(&t.rect)).collect();
-        if ready < keys.len() {
-            stale.sort_by_key(|t| t.used);
-            for t in stale.iter().rev().take(96).rev() {
-                let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
-                painter.image(t.tex.id(), r, uv, Color32::WHITE);
-            }
-        }
-        for t in app.stage_cache.tiles.iter().filter(|t| keys.contains(&t.key)) {
+        let paint_tile = |painter: &egui::Painter, t: &TileTex| {
             let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
             painter.image(t.tex.id(), r, uv, Color32::WHITE);
+        };
+        let whole = !keys.is_empty() && ready == keys.len();
+        if playing {
+            let presented = if whole {
+                Some((target_frame, keys.as_slice()))
+            } else {
+                playback.as_ref().and_then(|p| p.presented.as_ref()).filter(|prior| {
+                    // Reference frames can finish decoding independently of the document state.
+                    let reference = anicraft_engine::video::shown(&app.video, &pic.doc, prior.frame, false).frames;
+                    prior.keys.len() == keys.len()
+                        && jobs.iter().zip(&prior.keys).all(|((spec, _), key)| job_for_frame(spec, prior.frame, reference.clone()).key == *key)
+                        && prior.keys.iter().all(|key| app.stage_cache.tiles.iter().any(|t| t.key == *key && t.frame == prior.frame))
+                }).map(|p| (p.frame, p.keys.as_slice()))
+            };
+            if let Some((frame, paint_keys)) = presented {
+                for t in app.stage_cache.tiles.iter().filter(|t| t.frame == frame && paint_keys.contains(&t.key)) {
+                    paint_tile(&painter, t);
+                }
+            }
+        } else if ready < keys.len() && provisional.is_some() {
+            app.stage_cache.filtered_array.paint(&painter.with_clip_rect(vis), state, &array_instances, st_screen);
+        } else {
+            if ready < keys.len() && !array_active && bg.is_some_and(|color| color.a >= 1.0) {
+                // The opaque stage still uses scaled placeholders from earlier zoom levels.
+                // Keep their coverage inside the current stage boundary.
+                let stage_painter = painter.with_clip_rect(stage_rect);
+                let view_rect = [(vis.min.x - st_origin.x) / st_zoom, (vis.min.y - st_origin.y) / st_zoom, (vis.max.x - st_origin.x) / st_zoom, (vis.max.y - st_origin.y) / st_zoom];
+                let overlaps = |r: &[f32; 4]| r[0] < view_rect[2] && r[2] > view_rect[0] && r[1] < view_rect[3] && r[3] > view_rect[1];
+                let mut stale: Vec<&TileTex> = app.stage_cache.tiles.iter().filter(|t| t.opaque && !t.array && !keys.contains(&t.key) && overlaps(&t.rect)).collect();
+                stale.sort_by_key(|t| t.used);
+                for t in stale.iter().rev().take(96).rev() {
+                    paint_tile(&stage_painter, t);
+                }
+            }
+            for old in app.stage_cache.tiles.iter().filter(|tile| placeholders.contains(&tile.key)) {
+                paint_tile(&painter, old);
+            }
+            for t in app.stage_cache.tiles.iter().filter(|t| keys.contains(&t.key)) {
+                paint_tile(&painter, t);
+            }
         }
-
         // While a background render catches up with a drag, outline where the selection is now,
         // so the artwork never seems to lag the pointer.
         if show_edges && ready < keys.len() && !preview && matches!(app.drag, Drag::Move { .. } | Drag::SnapMove { .. } | Drag::Transform { .. } | Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. }) {
@@ -1211,6 +1403,13 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 }
             }
         }
+        if let Some(playback) = &mut playback {
+            playback.pending = (playing && !whole && !render_failed && !zooming).then_some(target_frame);
+            if whole {
+                playback.presented = Some(PresentedFrame { frame: target_frame, keys });
+            }
+        }
+        app.stage_cache.playback = playback;
     }
     painter.rect_stroke(stage_rect, 0.0, Stroke::new(1.0, T.stage_edge), StrokeKind::Outside);
     // The grid over the artwork, and the guides (ADR 0076): the stage's, not the camera's.
@@ -1222,6 +1421,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     }
 
     // ---- overlays -------------------------------------------------------------------------
+    if array_active {
+        if let Some(gizmo) = array_gizmo {
+            gizmo.paint(&painter);
+        }
+        if app.array_panel.shows_registrations() && let Some(projection) = array_projection {
+            let show_custom_pivot = !matches!(app.array_panel.gizmo_geometry(), Some(crate::array_gizmo::Geometry::Grid(_)));
+            crate::array_gizmo::paint_registrations(&painter, projection, &array_instances, show_custom_pivot);
+        }
+        let badge = format!("{:.0}%", st_zoom * 100.0);
+        painter.text(canvas.right_bottom() + vec2(-10.0, -8.0), egui::Align2::RIGHT_BOTTOM, badge, crate::theme::font(crate::theme::Type::Data), T.text_dim);
+        crate::a11y::surface(ui, &resp, tr!("Stage · Array preview"));
+        crate::rulers::paint(ui, &bars, geo, ui.input(|i| i.pointer.latest_pos()));
+        return;
+    }
     // The camera frame (or, previewing, the Camera tool's handle) comes first, under the
     // selection.
     crate::camera_tool::draw(app, &painter, &cam_geo, pointer);
@@ -1426,7 +1639,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         }
         // registration point
         let o = to_screen(e.transform.translation());
-        painter.circle(o, 3.5, Color32::WHITE, Stroke::new(1.0, Color32::BLACK));
+        crate::theme::registration_mark(&painter, o);
     }
     // Free transform box: recomputed every frame so it follows the artwork while you drag.
     // One element shows its own box, turned, scaled and skewed as it is (ADR 0111, #175);
@@ -5261,6 +5474,144 @@ mod pasteboard_tests {
         // Clipped (#251), nothing is drawn off the stage.
         assert!(clipped.iter().all(|t| t.rect[0] >= 0.0 && t.rect[1] >= 0.0 && t.rect[2] <= 1280.0 && t.rect[3] <= 720.0));
         covered_once(&clipped, z, [0.0, 0.0, 1280.0, 720.0]);
+    }
+
+    fn drag_across_stage_edge(app: &mut App, ctx: &egui::Context, gpu: bool) {
+        use egui::{Event, PointerButton};
+        use std::time::{Duration, Instant};
+
+        app.view.fit = false;
+        app.view.zoom = 0.65;
+        app.view.clip_to_stage = false;
+        app.prefs.render_mode = RenderMode::Immediate;
+        app.s.execute("draw.rect", &json!({"x": 110, "y": 130, "w": 96, "h": 72, "fill": "#e84539", "stroke": null})).unwrap();
+        app.s.execute("modify.convert_to_symbol", &json!({"name": "Stage edge fixture"})).unwrap();
+        app.s.execute("symbol.set_kind", &json!({"kind": "movie_clip"})).unwrap();
+        let frame = |app: &mut App, events| {
+            app.shot.as_mut().unwrap().frames = 0;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out
+        };
+        let started = Instant::now();
+        loop {
+            frame(app, vec![]);
+            if app.stage_cache.ready.0 == app.stage_cache.ready.1 && app.stage_cache.drawn_by.as_ref().is_some_and(|(used_gpu, _)| *used_gpu == gpu) {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(90), "stage renderer did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let zoom = app.view.zoom;
+        let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
+        let raw = app.stage_cache.canvas.center() + app.view.pan - size * zoom * 0.5;
+        let origin = pos2(raw.x.round(), raw.y.round());
+        let at = |x, y| origin + vec2(x, y) * zoom;
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let exterior = |t: &TileTex| t.rect[2] == 0.0 && t.rect[1] == 0.0;
+        let glow = json!({"type": "glow", "blur_x": 18, "blur_y": 18, "strength": 2, "quality": 3});
+        let shadow = json!({"type": "drop_shadow", "blur_x": 16, "blur_y": 16, "distance": 20, "angle": 180, "quality": 3});
+        for (label, filters) in [
+            ("unfiltered", vec![]), ("glow", vec![glow.clone()]), ("shadow", vec![shadow.clone()]), ("both", vec![glow.clone(), shadow]),
+        ] {
+            app.stage_cache.forget_document();
+            app.prefs.render_mode = RenderMode::Immediate;
+            app.s.execute("element.set_filters", &json!({"filters": filters})).unwrap();
+            frame(app, vec![]);
+            let steps = app.s.history_len();
+            let mut previous_exterior = None;
+            let mut frame_ms = Vec::new();
+            let mut pending_frames = 0;
+            for (x, y) in [(8.0, 130.0), (230.0, 285.0), (8.0, 380.0), (220.0, 220.0)] {
+                let from = app.s.selection_bounds().center();
+                let from = at(from.x, from.y);
+                let to = at(x, y);
+                assert!(app.stage_cache.canvas.contains(from) && app.stage_cache.canvas.contains(to));
+                frame(app, vec![Event::PointerMoved(from)]);
+                frame(app, vec![button(from, true)]);
+                app.prefs.render_mode = RenderMode::Auto;
+                for fraction in [0.25, 0.5, 0.75, 1.0] {
+                    let now = Instant::now();
+                    frame(app, vec![Event::PointerMoved(from.lerp(to, fraction))]);
+                    frame_ms.push(now.elapsed().as_secs_f64() * 1000.0);
+                    pending_frames += usize::from(app.stage_cache.ready.0 < app.stage_cache.ready.1);
+                }
+                // Settle each drag so we can inspect the rendered exterior tile.
+                app.prefs.render_mode = RenderMode::Immediate;
+                frame(app, vec![button(to, false)]);
+                assert!(!app.s.array_preview_active() && app.s.selection.len() == 1);
+                assert!((app.s.selection_bounds().center().x - x).abs() < 2.0, "{label}: drag did not reach {x}");
+                let slot = app.stage_cache.tiles.iter().enumerate().filter(|(_, t)| exterior(t)).max_by_key(|(_, t)| t.used).unwrap().0;
+                let tile = &app.stage_cache.tiles[slot];
+                let image = app.stage_cache.service.as_ref().unwrap().cached(tile.key).unwrap();
+                assert_eq!(image.gpu, gpu, "{label}: {:?}", image.fallback);
+                if !gpu {
+                    assert_eq!(image.rgba_premul.as_chunks::<4>().0.iter().any(|px| px[3] != 0), x < 10.0, "{label}: exterior tile at x={x}");
+                }
+                if x < 10.0 {
+                    previous_exterior = Some(app.stage_cache.tiles.swap_remove(slot));
+                }
+            }
+            assert_eq!(app.s.history_len(), steps + 4, "{label}: one Undo per drag");
+            let after = app.s.doc.clone();
+            app.s.undo().unwrap();
+            assert_ne!(app.s.doc, after);
+            app.s.redo().unwrap();
+            assert_eq!(app.s.doc, after);
+            frame_ms.sort_by(f64::total_cmp);
+            eprintln!("{label} ({}) Auto pointer frames p50 {:.2} ms, max {:.2} ms, tiles pending on {pending_frames}/16",
+                if gpu { "GPU" } else { "CPU" }, frame_ms[8], frame_ms[15]);
+
+            // Present the previous crossing and the new position as a partial view.
+            // A settled view drops the previous textures, so keep one real tile from
+            // the immediately preceding crossing to control when its replacement arrives.
+            let current_slot = app.stage_cache.tiles.iter().position(exterior).unwrap();
+            let current = app.stage_cache.tiles.swap_remove(current_slot);
+            let previous = previous_exterior.unwrap();
+            assert_eq!(previous.rect, current.rect);
+            assert_ne!(previous.set, current.set);
+            let (old_id, current_id) = (previous.tex.id(), current.tex.id());
+            let inside = app.stage_cache.tiles.iter().position(|t| t.rect[0] == 0.0 && t.rect[1] == 0.0).unwrap();
+            app.stage_cache.tiles.swap_remove(inside);
+            app.stage_cache.tiles.push(previous);
+
+            app.prefs.render_mode = RenderMode::Background;
+            let draws = |out: &egui::FullOutput, id| {
+                out.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Mesh(m) if m.texture_id == id))
+            };
+            app.stage_cache.service.as_ref().unwrap().forget_pictures();
+            let out = frame(app, vec![]);
+            assert!(draws(&out, old_id), "{label}: the missing exterior tile should use its placeholder");
+
+            app.stage_cache.tiles.push(current);
+            app.stage_cache.service.as_ref().unwrap().forget_pictures();
+            let out = frame(app, vec![]);
+            assert!(app.stage_cache.ready.0 < app.stage_cache.ready.1, "test needs a pending interior tile");
+            assert!(draws(&out, current_id), "{label}: the current transparent tile must be painted");
+            assert!(!draws(&out, old_id), "{label}: an old exterior fragment was painted under the current tile");
+        }
+    }
+
+    #[test]
+    fn ordinary_stage_drag_does_not_paint_old_pasteboard_fragments() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.prefs.stage_renderer = crate::prefs::StageRenderer::Cpu;
+        drag_across_stage_edge(&mut app, &ctx, false);
+    }
+
+    #[cfg(gpu_stage)]
+    #[test]
+    #[ignore = "requires a native hardware GPU"]
+    fn ordinary_gpu_stage_drag_does_not_paint_old_pasteboard_fragments() {
+        let textures = crate::array_panel::test_window_device();
+        eprintln!("{} ({:?})", textures.adapter.get_info().name, textures.adapter.get_info().backend);
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.stage_cache.gpu.set_window_device(Some(&textures));
+        app.prefs.stage_renderer = crate::prefs::StageRenderer::Gpu;
+        drag_across_stage_edge(&mut app, &ctx, true);
     }
 
     #[test]

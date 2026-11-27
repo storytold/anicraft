@@ -39,6 +39,7 @@ pub fn panel_topic(p: Panel) -> &'static str {
     match p {
         Panel::Properties => "workspace.md#properties",
         Panel::Align => "drawing.md#align-and-distribute",
+        Panel::Array => "drawing.md#arrays",
         Panel::Colour => "drawing.md#choosing-colours",
         Panel::Library => "symbols-and-library.md#the-library-panel",
         Panel::MovieExplorer => "workspace.md#the-movie-explorer",
@@ -199,6 +200,7 @@ pub const COMMAND_TOPICS: &[(&str, &str)] = &[
     ("actions.", "interactivity.md#the-actions-panel"),
     ("align.", "drawing.md#align-and-distribute"),
     ("arrange.", "drawing.md#stacking-order"),
+    ("array.", "drawing.md#arrays"),
     ("bone.", "masks-guides-camera-bones.md#bones-and-inverse-kinematics"),
     ("brush.", "drawing.md#the-brush"),
     ("camera.", "masks-guides-camera-bones.md#the-camera"),

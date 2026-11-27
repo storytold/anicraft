@@ -274,6 +274,43 @@ Streaming WAV headers and PCM sample blocks now delegate to `craft_audio::wav_st
 AniCraft retains mixing, frame-range limits, temporary-file cleanup and VFS writes.
 This integration depends on craft-libs #1962 and still requires hosted parity validation.
 
+The experimental [Array panel](array-panel-design.md) previews Linear, Grid, and Radial arrays of
+one symbol instance, with a neutral track for Transform and Colour Effect stops. Array mode stays active
+when its dock tab is hidden or closed. Spatial Array commits the preview in one undo step and
+resets the next Array to defaults at its source symbol. Linear Arrays can also commit one
+Symbol instance to native Classic Tween or Hold Keyframes, beginning at the playhead.
+Circle Arrays can commit one native Motion Tween with an editable Bézier path, eased path timing, and animated property stops.
+Spiral Arrays can commit one editable Motion Tween with multiple signed turns and eased angular timing.
+Arbitrary Path conversion remains planned. Cancel, Escape and None retain the unfinished
+configuration while the original instance stays selected. Spatial Array can give each
+instance its own Symbol definition and timeline in the same undo step. The selected-stop card has draggable
+scales and multi-turn rotation in Transform, and Alpha, Brightness, Tint and Advanced channels
+in Colour Effect. The default stops start with the source instance's values. An inserted stop
+copies the prior stop's entire snapshot, including its outbound ease.
+Radial Arrays offer Circle and Spiral buttons. Grid Arrays have a rectangular gizmo, linked or
+independent row and column counts and spacing, and optional artwork mirroring when an axis
+reverses. Grid Property Distribution samples stops across columns, down rows, or in row-major
+order. Stagger supports independent signed row and column offsets with repeating or accumulating placement. Filter cards start collapsed in each Array session.
+Filter stops support all seven families, including signed Adjust Color values. Both gradient filters
+interpolate corresponding ramp positions with a fixed source stop count, order, and transparent pin.
+Quality, Type, and switches hold at the authored stops. Copies preserve the source filter stack and
+on/off states.
+An active Array session has its own undo and redo for geometry and stop edits, coalesced by gesture.
+The Easing section offers global and independent outbound presets for distribution, transform,
+colour and continuous filter parameters. Quit resolves an active Array before asking about unsaved documents.
+Linear arrays have draggable Start and End circles and a movable connecting line. Coordinates,
+direction, length and spacing are editable in the panel. All modes display white instance markers with
+the handles toggle on. Dim Stage foregrounds the preview over dimmed artwork. Geometry-only
+Linear edits reuse the instances and eligible stage tiles. Auto can reposition warmed Blur images
+during eligible Linear stage drags, then draws exact tiles when the pointer pauses or is released.
+Radial distribution supports an explicit
+Closed Loop and open arcs with a signed sweep, spiral offset and two-axis centre drift. Its stage
+controller has Centre, Start, End and Drift handles, a draggable drift bar and a curved guide.
+
+**Future session recovery.** A graphics-backend restart recovers unsaved document edits, but an
+active Array draft and its session Undo/Redo history are lost. Restore the draft and both history
+branches with the original source in the recovered document. See [Array graphics recovery](array-panel-design.md#graphics-backend-restart).
+
 | Dimension | Status |
 |---|---|
 | Architecture | M0 skeleton in place: geom → doc → render → engine → cli → shell, layering enforced by `cargo test` (`src/architecture_tests.rs`: lower layers only, no UI crates below the shell, and the AGENTS.md map must match). |

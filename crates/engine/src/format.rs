@@ -9,19 +9,29 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 /// The newest envelope version this build reads (v1 inline paths; v2 shared path table; v3
-/// named scene timelines; v4 mixed armatures, ADR 0098).
-pub const FORMAT_VERSION: u32 = 4;
+/// named scene timelines; v4 mixed armatures; v5 extended motion paths).
+pub const FORMAT_VERSION: u32 = EXTENDED_MOTION_PATH_VERSION;
 /// The version a document is written as unless it needs a later one: the shared envelope's.
 /// Builds from before ADR 0098 read up to this.
 pub const BASE_VERSION: u32 = craft_anicraft_format::FORMAT_VERSION;
 /// The first version that may hold mixed armatures.
 pub const MIXED_ARMATURES_VERSION: u32 = 4;
+/// The first version that reads explicit path timing and exact affine path evaluation.
+const EXTENDED_MOTION_PATH_VERSION: u32 = 5;
 
 /// The version `doc` is written as: the lowest that can say everything in it, so a document
 /// that uses nothing new still opens in earlier builds, and one that does is refused by them
 /// with a message naming the version instead of opening with parts missing.
 pub fn version_for(doc: &Document) -> u32 {
-    if doc.has_mixed_armatures() { MIXED_ARMATURES_VERSION } else { BASE_VERSION }
+    if doc.timelines().flat_map(|tl| &tl.layers).flat_map(|layer| &layer.keyframes)
+        .filter_map(|key| key.motion.as_ref()).any(anicraft_doc::MotionTween::has_extended_path_options)
+    {
+        EXTENDED_MOTION_PATH_VERSION
+    } else if doc.has_mixed_armatures() {
+        MIXED_ARMATURES_VERSION
+    } else {
+        BASE_VERSION
+    }
 }
 
 /// AniCraft document deserialization uses its own path-table scope while the shared format crate
@@ -324,7 +334,8 @@ pub fn save(doc: &Document, path: &std::path::Path) -> Result<(), EngineError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use anicraft_doc::sample;
+    use anicraft_doc::{Easing, Symbol, SymbolId, evaluate_layer_elements, sample};
+    use serde_json::json;
 
     #[test]
     fn non_finite_element_transform_still_reopens() {
@@ -364,6 +375,69 @@ mod tests {
         let d = sample::demo();
         let back = from_json(&to_json(&d).unwrap()).unwrap();
         assert_eq!(d, back);
+    }
+
+    #[test]
+    fn saved_motion_paths_require_version_5_only_for_the_new_fields() {
+        let mut session = crate::Session::default();
+        for (command, params) in [
+            ("draw.rect", json!({"x": 0, "y": 0, "w": 10, "h": 10})),
+            ("modify.transform", json!({"a": 1, "b": 0, "c": 60, "d": 1, "e": 0, "f": 0})),
+            ("timeline.create_motion_tween", json!({})),
+            ("motion.set_path", json!({"d": "M5 5 L105 5"})),
+        ] {
+            session.execute(command, &params).unwrap();
+        }
+        let pose = |layer: &anicraft_doc::Layer, frame| evaluate_layer_elements(layer, frame).unwrap().1[0].transform;
+        let legacy = pose(&session.doc.timeline(0).layers[0], 12);
+
+        for (timing, exact_affine) in [(false, false), (true, false), (false, true), (true, true)] {
+            for in_library in [false, true] {
+                let mut doc = session.doc.clone();
+                let layer = Arc::make_mut(&mut doc.timeline_mut(0).layers[0]);
+                let key = Arc::make_mut(&mut layer.keyframes[0]);
+                let source = key.elements[0].transform;
+                let motion = key.motion.as_mut().unwrap();
+                if timing {
+                    assert!(motion.set_path_timing(vec![(0.0, Easing::QuadIn)], 0.0));
+                }
+                if exact_affine {
+                    motion.preserve_path_affine();
+                }
+                let authored = motion.clone();
+                let edited = pose(layer, 12);
+                if timing {
+                    assert!(edited.translation().x < legacy.translation().x, "the authored ease slows the first half");
+                }
+                if exact_affine {
+                    assert_eq!(&edited.m[..4], &source.m[..4], "the authored shear survives evaluation");
+                    assert_ne!(&edited.m[..4], &legacy.m[..4]);
+                }
+                if in_library {
+                    // The only tween is now in this unused symbol.
+                    let timeline = std::mem::take(doc.timeline_mut(0));
+                    let id = SymbolId(doc.alloc_id());
+                    doc.library.push(Arc::new(Symbol {
+                        id, name: "Path fixture".into(), kind: Default::default(),
+                        linkage: None, scale_grid: None, scale_grid_kept: None, timeline,
+                    }));
+                }
+
+                let text = to_json(&doc).unwrap();
+                let wire: serde_json::Value = serde_json::from_str(&text).unwrap();
+                let expected = if timing || exact_affine { 5 } else { 3 };
+                assert_eq!(wire["version"], expected, "timing={timing}, exact_affine={exact_affine}, in_library={in_library}");
+                let container = if in_library { &wire["document"]["library"][0] } else { &wire["document"]["scenes"][0] };
+                let saved = &container["timeline"]["layers"][0]["keyframes"][0]["motion"];
+                assert_eq!(saved.get("path_timing").is_some(), timing);
+                assert_eq!(saved.get("exact_path_affine").is_some(), exact_affine);
+
+                let reopened = from_json(&text).unwrap();
+                let timeline = if in_library { &reopened.library[0].timeline } else { reopened.timeline(0) };
+                assert_eq!(timeline.layers[0].keyframes[0].motion.as_ref(), Some(&authored));
+                assert_eq!(pose(&timeline.layers[0], 12), edited);
+            }
+        }
     }
 
     #[test]

@@ -454,9 +454,10 @@ fn mixed_armatures_are_written_as_version_4() {
     assert!(arm["skin"].is_object() && arm.get("skins").is_none(), "the first form: {arm}");
     assert!(arm["bones"].as_array().unwrap().iter().all(|b| b.get("shape").is_none()));
     // A file from a later AniCraft is refused with a message that says why.
-    let later = text.replacen("\"version\": 4", "\"version\": 5", 1);
+    let future = crate::format::FORMAT_VERSION + 1;
+    let later = text.replacen("\"version\": 4", &format!("\"version\": {future}"), 1);
     let e = crate::format::from_json(&later).unwrap_err().to_string();
-    assert!(e.contains("file version 5 is newer than this AniCraft"), "{e}");
+    assert!(e.contains(&format!("file version {future} is newer than this AniCraft")), "{e}");
     // A mixed armature inside a symbol counts too.
     let (s, _) = character();
     let mut d = s.doc.clone();

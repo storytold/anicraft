@@ -15,6 +15,7 @@ pub mod cmds_brush;
 mod cmds_camera;
 mod parenting;
 mod cmds_draw;
+mod cmds_array;
 pub mod cmds_filter;
 pub mod cmds_ease;
 pub mod cmds_envelope;
@@ -102,6 +103,7 @@ pub use anicraft_svg as svg;
 /// Whether a path is an Animate document (`.fla`, `.xfl`, or an XFL folder) that `file.open`
 /// imports.
 pub use cmds_file::{Import, import_package, is_animate};
+pub use cmds_array::{ArrayEaseMode, ArrayEasing, ArrayPropertyStop, CLOSED_SWEEP_LIMIT, GridPropertyDistribution, GridStagger, GridStaggerAxis, MAX_ARRAY_INSTANCES, RadialDistribution, array_timeline_default_duration};
 pub use cmds_modify::{Item as SelectedItem, transform_origins};
 
 #[derive(Debug, thiserror::Error)]
@@ -112,6 +114,8 @@ pub enum EngineError {
     Param(String),
     #[error("{0}")]
     State(String),
+    #[error("{message}")]
+    ArrayDuration { message: String, suggested: Option<u32> },
     #[error("file format: {0}")]
     Format(String),
     #[error("I/O: {0}")]
@@ -178,6 +182,7 @@ pub fn commands() -> Vec<CommandSpec> {
     v.extend(onion::specs());
     v.extend(multi::specs());
     v.extend(cmds_draw::specs());
+    v.extend(cmds_array::specs());
     v.extend(cmds_view::specs());
     v.extend(cmds_group::specs());
     v.extend(cmds_library::specs());
@@ -427,6 +432,9 @@ pub struct Session {
     history: History,
     /// Open gesture (e.g. a drag): commands inside it coalesce into one undo step.
     gesture: Option<Snapshot>,
+    /// Array owns its gesture until the artist explicitly commits or cancels it.
+    array_preview: bool,
+    array_positions: Option<cmds_array::PositionPreview>,
     /// Display list of `(state, scene, frame)`, shared by hit testing, bounds and overlays.
     dl_cache: RefCell<Option<CachedList>>,
     /// Copied elements (and the symbols they use), outside the document so undo leaves it alone.
@@ -593,6 +601,8 @@ impl Session {
             text_style: cmds_text::TextStyle::default(),
             history: History::default(),
             gesture: None,
+            array_preview: false,
+            array_positions: None,
             dl_cache: RefCell::new(None),
             clipboard: cmds_modify::Clipboard::default(),
             frame_clipboard: cmds_frames::FrameClipboard::default(),
@@ -631,7 +641,16 @@ impl Session {
     /// Whether the document differs from the last saved (or opened) state. Undoing back to
     /// the saved state makes it clean again.
     pub fn is_dirty(&self) -> bool {
-        self.saved_state != Some(self.state)
+        self.saved_state != Some(self.committed_document().1)
+    }
+
+    /// The artwork and state to keep in recovery, excluding an uncommitted Array preview.
+    pub fn committed_document(&self) -> (&Document, StateId) {
+        if self.array_preview && let Some(base) = &self.gesture {
+            (&base.doc, base.state)
+        } else {
+            (&self.doc, self.state)
+        }
     }
 
     /// Marks the current state as saved.
@@ -679,6 +698,9 @@ impl Session {
 
     /// Ends the open gesture, recording one undo step if the document changed.
     pub fn end_gesture(&mut self) {
+        if self.array_preview {
+            return;
+        }
         let cut = self.gesture_cut.take();
         let Some(before) = self.gesture.take() else { return };
         if let Some(cut) = &cut {
@@ -767,6 +789,15 @@ impl Session {
 
     /// Runs a command by id. Mutating commands are atomic: on error the document is restored.
     pub fn execute(&mut self, id: &str, params: &Value) -> Result<Value> {
+        self.require_no_array_preview()?;
+        if id == "array.create" {
+            // Reject before command dispatch can settle a provisional edit.
+            self.require_spatial_array_frame()?;
+        }
+        self.execute_command(id, params)
+    }
+
+    fn execute_command(&mut self, id: &str, params: &Value) -> Result<Value> {
         let spec = find_command(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // An agent's command names files inside its automation roots only (ADR 0124); checked
         // first, so neither the confirmation below nor the command looks at a refused file.
@@ -1033,6 +1064,12 @@ impl Session {
     /// Puts the document back where the open gesture started, keeping the gesture open. A
     /// live preview re-runs from the same start on every change, and Cancel leaves no step.
     pub fn revert_gesture(&mut self) {
+        if !self.array_preview {
+            self.restore_gesture();
+        }
+    }
+
+    fn restore_gesture(&mut self) {
         if self.gesture_cut.is_some() {
             // Back to before the marquee's cut: it is gone.
             self.provisional = None;
@@ -1079,6 +1116,7 @@ impl Session {
     }
 
     pub fn undo(&mut self) -> Result<Value> {
+        self.require_no_array_preview()?;
         self.end_gesture();
         self.heal_cut();
         self.rec.clear();
@@ -1092,6 +1130,7 @@ impl Session {
     }
 
     pub fn redo(&mut self) -> Result<Value> {
+        self.require_no_array_preview()?;
         self.end_gesture();
         self.heal_cut();
         self.rec.clear();
@@ -1212,6 +1251,9 @@ impl Session {
     }
 
     pub fn set_frame(&mut self, frame: u32) {
+        if self.array_preview {
+            return;
+        }
         self.frame = frame.min(MAX_FRAME);
         self.fix_selection();
     }

@@ -253,10 +253,10 @@ impl GpuStage {
     /// the status bar.
     #[allow(unused_variables)]
     pub fn sync(&mut self, pref: StageRenderer, svc: &RenderService, ctx: &egui::Context, size: (u32, u32)) -> Option<Notice> {
-        // Unit tests never open a graphics device (as they never open an audio one): a start-up
-        // thread still inside the driver when the test process exits can crash it.
+        // Headless UI tests leave the GPU off unless an explicit hardware test supplies a
+        // device. Those tests wait for GPU startup and rendering before dropping the app.
         #[cfg(gpu_stage)]
-        return self.imp.sync(wanted(pref) == StageRenderer::Gpu && !cfg!(test), svc, ctx, ctx.input(|i| i.time), size);
+        return self.imp.sync(wanted(pref) == StageRenderer::Gpu && (!cfg!(test) || self.imp.window.is_some()), svc, ctx, ctx.input(|i| i.time), size);
         #[cfg(not(gpu_stage))]
         None
     }

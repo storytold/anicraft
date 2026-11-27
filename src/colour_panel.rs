@@ -14,6 +14,7 @@
 use crate::a11y::{self, Named};
 use crate::app::App;
 use crate::theme::{T, Type, text, to_color32, with_type};
+use anicraft_engine::ArrayPropertyStop;
 use anicraft_engine::doc::{ElementKind, GradientStop, MAX_FOCAL, MAX_GRADIENT_STOPS, Paint, Rgba, Spread, ramp_at};
 use egui::{Id, Key, Rect, Response, Sense, Stroke, StrokeKind, Role, pos2, vec2};
 use serde_json::{Value, json};
@@ -22,6 +23,12 @@ use serde_json::{Value, json};
 const TEAR_OFF: f32 = 26.0;
 /// The stop bar's width: the colour picker's swatch grid under it.
 const BAR_WIDTH: f32 = 270.0;
+
+fn focused_stop_id() -> Id { Id::unique("focused_stop_handle") }
+
+pub(crate) fn stop_has_focus(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<Id>(focused_stop_id())).is_some_and(|id| ctx.memory(|m| m.has_focus(id)))
+}
 
 /// What the fill picker asks for.
 #[derive(Clone, Debug, PartialEq)]
@@ -313,41 +320,94 @@ fn gradient(ui: &mut egui::Ui, popup: Id, stops: &[GradientStop], spread: Spread
     out
 }
 
-/// Where stop `i` may move: between its neighbours, so the order (and the pick) stays.
-fn room(stops: &[GradientStop], i: usize) -> (f32, f32) {
-    let lo = i.checked_sub(1).and_then(|j| stops.get(j)).map_or(0.0, |s| s.offset);
-    let hi = stops.get(i + 1).map_or(1.0, |s| s.offset);
+trait TrackStop: Clone + PartialEq {
+    const ARRAY: bool;
+    const LIMIT: usize;
+    fn offset(&self) -> f32;
+    fn set_offset(&mut self, offset: f32);
+    fn alpha(&self) -> f32;
+    fn colour(&self) -> Option<Rgba>;
+    fn sample(stops: &[Self], offset: f32) -> Self;
+    fn marker(&self, index: usize) -> usize { index }
+}
+
+impl TrackStop for GradientStop {
+    const ARRAY: bool = false;
+    const LIMIT: usize = MAX_GRADIENT_STOPS;
+    fn offset(&self) -> f32 { self.offset }
+    fn set_offset(&mut self, offset: f32) { self.offset = offset; }
+    fn alpha(&self) -> f32 { self.color.sanitized().a }
+    fn colour(&self) -> Option<Rgba> { Some(self.color) }
+    fn sample(stops: &[Self], offset: f32) -> Self { Self { offset, color: ramp_at(stops, offset) } }
+}
+
+/// An Array stop has a stable marker so it stays grabbed when it crosses another stop.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PropertyStop {
+    marker: usize,
+    pub value: ArrayPropertyStop,
+}
+
+impl PropertyStop {
+    pub(crate) fn new(marker: usize, offset: f32, alpha: f32) -> Self {
+        Self { marker, value: ArrayPropertyStop::new(offset, alpha) }
+    }
+
+    pub(crate) fn marker_id(&self) -> usize { self.marker }
+}
+
+impl TrackStop for PropertyStop {
+    const ARRAY: bool = true;
+    const LIMIT: usize = ArrayPropertyStop::LIMIT;
+    fn offset(&self) -> f32 { self.value.offset }
+    fn set_offset(&mut self, offset: f32) { self.value.offset = offset; }
+    fn alpha(&self) -> f32 { self.value.alpha }
+    fn colour(&self) -> Option<Rgba> { None }
+    fn sample(stops: &[Self], offset: f32) -> Self {
+        let marker = (0..Self::LIMIT).find(|i| stops.iter().all(|s| s.marker != *i)).unwrap_or(Self::LIMIT);
+        let next = stops.partition_point(|s| s.offset() <= offset);
+        let mut value = stops.get(next.saturating_sub(1)).map_or_else(
+            || ArrayPropertyStop::new(offset, 1.0),
+            |left| left.value.clone(),
+        );
+        value.offset = offset;
+        Self { marker, value }
+    }
+    fn marker(&self, _: usize) -> usize { self.marker }
+}
+
+/// For gradient stops, keep a pointer drag or a key nudge between its neighbours.
+fn room(stops: &[impl TrackStop], i: usize) -> (f32, f32) {
+    let lo = i.checked_sub(1).and_then(|j| stops.get(j)).map_or(0.0, TrackStop::offset);
+    let hi = stops.get(i + 1).map_or(1.0, TrackStop::offset);
     (lo.min(hi), hi.max(lo))
 }
 
-/// Moves stop `i` to `offset`, held between its neighbours.
-fn move_stop(stops: &mut [GradientStop], i: usize, offset: f32) {
-    let (lo, hi) = room(stops, i);
-    if let Some(s) = stops.get_mut(i) {
-        s.offset = if offset.is_finite() { offset.clamp(lo, hi) } else { s.offset };
+fn move_stop<S: TrackStop>(stops: &mut [S], i: usize, offset: f32) {
+    let (lo, hi) = if S::ARRAY { (0.0, 1.0) } else { room(stops, i) };
+    if offset.is_finite() && let Some(s) = stops.get_mut(i) {
+        s.set_offset(offset.clamp(lo, hi));
     }
 }
 
 /// The middle of the widest gap between stops: where the keyboard adds one.
-fn widest_gap(stops: &[GradientStop]) -> f32 {
-    stops.windows(2).filter_map(|w| if let [a, b] = w { Some((b.offset - a.offset, (a.offset + b.offset) / 2.0)) } else { None }).max_by(|a, b| a.0.total_cmp(&b.0)).map_or(0.5, |g| g.1)
+fn widest_gap(stops: &[impl TrackStop]) -> f32 {
+    stops.windows(2).filter_map(|w| if let [a, b] = w { Some((b.offset() - a.offset(), (a.offset() + b.offset()) / 2.0)) } else { None }).max_by(|a, b| a.0.total_cmp(&b.0)).map_or(0.5, |g| g.1)
 }
 
-/// Adds a stop at `t` in the colour the ramp has there; its index, or `None` when the gradient
-/// is full.
-fn add_stop(stops: &mut Vec<GradientStop>, t: f32) -> Option<usize> {
-    if stops.len() >= MAX_GRADIENT_STOPS {
+/// Adds a stop at `t` using the track's inheritance rule.
+fn add_stop<S: TrackStop>(stops: &mut Vec<S>, t: f32) -> Option<usize> {
+    if stops.len() >= S::LIMIT {
         return None;
     }
     let t = if t.is_finite() { t.clamp(0.0, 1.0) } else { 0.5 };
-    let i = stops.iter().position(|s| s.offset > t).unwrap_or(stops.len());
-    let color = ramp_at(stops, t);
-    stops.insert(i, GradientStop { offset: t, color });
+    let i = stops.iter().position(|s| s.offset() > t).unwrap_or(stops.len());
+    stops.insert(i, S::sample(stops, t));
     Some(i)
 }
 
 /// Removes stop `i` unless only two are left. True when it went.
-fn remove_stop(stops: &mut Vec<GradientStop>, i: usize) -> bool {
+fn remove_stop(stops: &mut Vec<impl TrackStop>, i: usize) -> bool {
     if stops.len() <= 2 || i >= stops.len() {
         return false;
     }
@@ -358,53 +418,65 @@ fn remove_stop(stops: &mut Vec<GradientStop>, i: usize) -> bool {
 /// The bar of colour stops, the picked stop's position and its colour (the colour picker,
 /// with opacity). What changed (its undo label), and whether it is live (a drag or typing).
 fn stop_bar(ui: &mut egui::Ui, popup: Id, stops: &mut Vec<GradientStop>) -> Option<(&'static str, bool)> {
+    stop_bar_with(ui, popup, stops, None, |ui, sel, st| {
+        let mut px = bytes(st.color);
+        if crate::colour::picker(ui, popup.with(("stop", sel)), &mut px, true, None, false) {
+            st.color = from_bytes(px);
+            true
+        } else {
+            false
+        }
+    })
+}
+
+pub(crate) fn array_stop_bar(ui: &mut egui::Ui, id: Id, stops: &mut Vec<PropertyStop>, marker: &mut Option<usize>, editor: impl FnOnce(&mut egui::Ui, &mut PropertyStop) -> bool) -> bool {
+    let mut selected = stops.iter().position(|s| Some(s.marker) == *marker).unwrap_or(0);
+    let changed = stop_bar_with(ui, id, stops, Some(&mut selected), |ui, _, stop| editor(ui, stop)).is_some();
+    *marker = stops.get(selected).map(|s| s.marker);
+    changed
+}
+
+/// Shared stop interaction. Each track paints its own marks and edits its selected payload.
+fn stop_bar_with<S: TrackStop>(
+    ui: &mut egui::Ui,
+    popup: Id,
+    stops: &mut Vec<S>,
+    selected: Option<&mut usize>,
+    editor: impl FnOnce(&mut egui::Ui, usize, &mut S) -> bool,
+) -> Option<(&'static str, bool)> {
+    let array = S::ARRAY;
     let sel_id = popup.with("fill_stop");
     let tear_id = popup.with("fill_stop_tear");
-    let mut sel: usize = ui.data(|d| d.get_temp(sel_id)).unwrap_or(0).min(stops.len().saturating_sub(1));
+    let mut sel: usize = selected.as_deref().copied().or_else(|| ui.data(|d| d.get_temp(sel_id)))
+        .unwrap_or(0).min(stops.len().saturating_sub(1));
     let mut changed = None;
     let can_remove = stops.len() > 2;
-    let w = BAR_WIDTH;
+    let w = if array { (ui.available_width() - 6.0).clamp(1.0, BAR_WIDTH) } else { BAR_WIDTH };
     let (strip, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click());
-    a11y::control(ui, &resp, Role::Button, tr!("Gradient: add a colour stop"), None);
-    let resp = resp.on_hover_text(tr!("Click to add a colour stop. Drag a stop to move it, or off the bar to remove it. With a stop focused, the arrow keys move it and Delete removes it."));
+    a11y::control(ui, &resp, Role::Button, if array { tr!("Array: add a property stop") } else { tr!("Gradient: add a colour stop") }, None);
+    let resp = resp.on_hover_text(if array { tr!("Click to add a property stop. Drag a stop to move it, or off the track to remove it. With a stop focused, the arrow keys move it and Delete removes it.") } else { tr!("Click to add a colour stop. Drag a stop to move it, or off the bar to remove it. With a stop focused, the arrow keys move it and Delete removes it.") });
     let p = ui.painter();
-    // A checkerboard under the ramp shows its opacity.
-    let cell = 4.0;
-    let (cols, rows) = ((strip.width() / cell).ceil() as usize, (strip.height() / cell).ceil() as usize);
-    p.rect_filled(strip, 0.0, T.header);
-    for (cx, cy) in (0..cols).flat_map(|x| (0..rows).map(move |y| (x, y))).filter(|(x, y)| (x + y) % 2 == 0) {
-        let r = Rect::from_min_size(pos2(strip.left() + cx as f32 * cell, strip.top() + cy as f32 * cell), vec2(cell, cell)).intersect(strip);
-        p.rect_filled(r, 0.0, T.text_faint);
+    if array {
+        p.hline(strip.x_range(), strip.center().y, Stroke::new(1.0, T.control_edge));
+    } else {
+        paint_gradient_strip(p, strip, |t| S::sample(stops, t).colour().map_or(T.header, to_color32));
     }
-    let mut mesh = egui::Mesh::default();
-    let steps = 64u32;
-    for i in 0..=steps {
-        let t = i as f32 / steps as f32;
-        let c = to_color32(ramp_at(stops, t));
-        let x = strip.left() + t * strip.width();
-        mesh.colored_vertex(pos2(x, strip.top()), c);
-        mesh.colored_vertex(pos2(x, strip.bottom()), c);
-        if i > 0 {
-            let k = 2 * i;
-            mesh.add_triangle(k - 2, k - 1, k);
-            mesh.add_triangle(k - 1, k, k + 1);
-        }
-    }
-    p.add(mesh);
-    p.rect_stroke(strip, 0.0, Stroke::new(1.0, T.border), StrokeKind::Outside);
-    // A marker under the bar per stop: click to pick it, drag to move it, drag off to remove it.
-    let (track, _) = ui.allocate_exact_size(vec2(w, 14.0), Sense::hover());
+    // Gradient handles sit under the colour strip. Property handles sit on the neutral line.
+    let track = if array { strip } else { ui.allocate_exact_size(vec2(w, 14.0), Sense::hover()).0 };
     let mut remove: Option<usize> = None;
     let mut tearing: Option<usize> = ui.data(|d| d.get_temp(tear_id));
     let count = stops.len();
     for i in 0..count {
-        let Some(off) = stops.get(i).map(|s| s.offset) else { continue };
+        let Some(st) = stops.get(i).cloned() else { continue };
+        let off = st.offset();
+        let marker = st.marker(i);
         let x = strip.left() + off.clamp(0.0, 1.0) * strip.width();
-        let hit = Rect::from_center_size(pos2(x, track.center().y), vec2(12.0, 14.0));
-        let r = ui.interact(hit, popup.with(("fill_stop_marker", i)), Sense::click_and_drag());
+        let hit = Rect::from_center_size(pos2(x, track.center().y), vec2(12.0, track.height()));
+        let r = ui.interact(hit, popup.with(("fill_stop_marker", marker)), Sense::click_and_drag());
         let at = format!("{:.0}", off * 100.0);
-        let alpha = stops.get(i).map(|s| format!("{:.0}", s.color.sanitized().a * 100.0)).unwrap_or_else(|| "100".into());
-        a11y::control(ui, &r, Role::Button, &tr!("Colour stop {stop} of {count} at {at}%, alpha {alpha}%", stop = i + 1, count = count, at = at, alpha = alpha), Some(i == sel));
+        let alpha = format!("{:.0}", st.alpha() * 100.0);
+        let accessible_name = if array { tr!("Array stop {stop} of {count} at {at}%, alpha {alpha}%", stop = i + 1, count = count, at = at, alpha = alpha) } else { tr!("Colour stop {stop} of {count} at {at}%, alpha {alpha}%", stop = i + 1, count = count, at = at, alpha = alpha) };
+        a11y::control(ui, &r, Role::Button, &accessible_name, Some(i == sel));
         if r.clicked() || r.drag_started() || r.gained_focus() {
             sel = i;
         }
@@ -414,24 +486,25 @@ fn stop_bar(ui: &mut egui::Ui, popup: Id, stops: &mut Vec<GradientStop>) -> Opti
             sel = i;
             // Far enough above or below the bar: the stop comes off when let go.
             let off_bar = can_remove && (pt.y - track.center().y).abs() > TEAR_OFF && (pt.y - strip.center().y).abs() > TEAR_OFF;
-            tearing = off_bar.then_some(i);
+            tearing = off_bar.then_some(marker);
             if !off_bar {
                 move_stop(stops, i, (pt.x - strip.left()) / strip.width());
-                changed = Some((tr_noop!("Move colour stop"), true));
+                changed = Some((if array { tr_noop!("Move array stop") } else { tr_noop!("Move colour stop") }, true));
             }
         }
-        if r.drag_stopped() && tearing == Some(i) {
+        if r.drag_stopped() && tearing == Some(marker) {
             remove = Some(i);
             tearing = None;
         }
         // The keyboard: arrows move the focused stop (Shift: by 10 %), Delete removes it.
         if r.has_focus() {
+            ui.data_mut(|d| d.insert_temp(focused_stop_id(), r.id));
             let (left, right, shift, del) = ui.input(|inp| (inp.key_pressed(Key::ArrowLeft), inp.key_pressed(Key::ArrowRight), inp.modifiers.shift, inp.key_pressed(Key::Delete) || inp.key_pressed(Key::Backspace)));
             let step = if shift { 0.1 } else { 0.01 };
             let d = if right { step } else if left { -step } else { 0.0 };
             if d != 0.0 {
                 move_stop(stops, i, off + d);
-                changed = Some((tr_noop!("Move colour stop"), true));
+                changed = Some((if array { tr_noop!("Move array stop") } else { tr_noop!("Move colour stop") }, true));
             }
             if del && can_remove {
                 remove = Some(i);
@@ -439,14 +512,18 @@ fn stop_bar(ui: &mut egui::Ui, popup: Id, stops: &mut Vec<GradientStop>) -> Opti
             // Arrow keys stay on the stop rather than moving focus.
             ui.memory_mut(|m| m.set_focus_lock_filter(r.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
         }
-        let Some(st) = stops.get(i) else { continue };
-        let torn = tearing == Some(i);
+        let torn = tearing == Some(marker);
+        let edge = if i == sel { T.accent } else if r.hovered() { T.text } else { T.control_edge };
         let tip = pos2(x, track.top());
         let body = [tip, pos2(x + 6.0, track.top() + 6.0), pos2(x + 6.0, track.bottom()), pos2(x - 6.0, track.bottom()), pos2(x - 6.0, track.top() + 6.0)];
-        let edge = if i == sel { T.accent } else if r.hovered() { T.text } else { T.control_edge };
-        // The marker shows that stop's own alpha, so a fade along the ramp is visible on the handles.
-        let shown = st.color.sanitized();
-        let fill = to_color32(shown.with_alpha(shown.a * if torn { 0.35 } else { 1.0 }));
+        let fill = if let Some(colour) = st.colour() {
+            let shown = colour.sanitized();
+            to_color32(shown.with_alpha(shown.a * if torn { 0.35 } else { 1.0 }))
+        } else {
+            let neutral = if i == sel { T.accent_dim } else { T.panel_alt };
+            if torn { neutral.gamma_multiply(0.35) } else { neutral }
+        };
+        let edge = if array && torn { edge.gamma_multiply(0.35) } else { edge };
         ui.painter().add(egui::Shape::convex_polygon(body.to_vec(), fill, Stroke::new(if i == sel { 2.0 } else { 1.0 }, edge)));
     }
     ui.data_mut(|d| match tearing {
@@ -461,51 +538,83 @@ fn stop_bar(ui: &mut egui::Ui, popup: Id, stops: &mut Vec<GradientStop>) -> Opti
         let t = resp.interact_pointer_pos().map_or_else(|| widest_gap(stops), |at| (at.x - strip.left()) / strip.width());
         if let Some(i) = add_stop(stops, t) {
             sel = i;
-            changed = Some((tr_noop!("Add colour stop"), false));
+            changed = Some((if array { tr_noop!("Add array stop") } else { tr_noop!("Add colour stop") }, false));
         }
     }
     if let Some(i) = remove.take()
         && remove_stop(stops, i)
     {
         sel = sel.min(stops.len().saturating_sub(1));
-        changed = Some((tr_noop!("Remove colour stop"), false));
+        changed = Some((if array { tr_noop!("Remove array stop") } else { tr_noop!("Remove colour stop") }, false));
     }
     // The picked stop: its position, then its colour in the colour picker.
     let n = stops.len();
     if let Some(st) = stops.get_mut(sel) {
         ui.add_space(2.0);
-        ui.horizontal(|ui| {
+        let marker = st.marker(sel);
+        let position = |ui: &mut egui::Ui| {
             ui.label(tr!("Stop {stop} at", stop = sel + 1));
-            let mut pct = st.offset * 100.0;
+            let mut pct = st.offset() * 100.0;
             let r = with_type(ui, Type::Data, |ui| ui.add(egui::DragValue::new(&mut pct).suffix(" %").speed(0.5).range(0.0..=100.0).max_decimals(0)));
-            if r.named(tr!("Colour stop position")).changed() {
-                st.offset = (pct / 100.0).clamp(0.0, 1.0);
-                changed = Some((tr_noop!("Move colour stop"), true));
+            if r.named(if array { tr!("Array stop position") } else { tr!("Colour stop position") }).changed() {
+                st.set_offset((pct / 100.0).clamp(0.0, 1.0));
+                changed = Some((if array { tr_noop!("Move array stop") } else { tr_noop!("Move colour stop") }, true));
             }
-            if ui.add_enabled(n > 2, egui::Button::new(tr!("Remove")).small()).named(tr!("Remove colour stop")).on_hover_text(tr!("Remove this colour stop (or drag it off the bar)")).clicked() {
+            if ui.add_enabled(n > 2, egui::Button::new(tr!("Remove")).small()).named(if array { tr!("Remove array stop") } else { tr!("Remove colour stop") }).on_hover_text(tr!("Remove this stop (or drag it off the bar)")).clicked() {
                 remove = Some(sel);
             }
-        });
+        };
+        if array {
+            ui.push_id(popup.with(marker), |ui| ui.horizontal_wrapped(position));
+        } else {
+            ui.horizontal(position);
+        }
         ui.add_space(4.0);
-        let mut px = bytes(st.color);
-        if crate::colour::picker(ui, popup.with(("stop", sel)), &mut px, true, None, false) {
-            st.color = from_bytes(px);
-            changed = Some((tr_noop!("Colour stop"), true));
+        if editor(ui, sel, st) {
+            changed = Some((if array { tr_noop!("Array stop properties") } else { tr_noop!("Colour stop") }, true));
         }
     }
     if let Some(i) = remove
         && remove_stop(stops, i)
     {
         sel = sel.min(stops.len().saturating_sub(1));
-        changed = Some((tr_noop!("Remove colour stop"), false));
+        changed = Some((if array { tr_noop!("Remove array stop") } else { tr_noop!("Remove colour stop") }, false));
     }
-    // Typed positions may pass a neighbour: keep the stops in order (the pick follows its stop).
-    if let Some(picked) = stops.get(sel).copied() {
-        stops.sort_by(|a, b| a.offset.total_cmp(&b.offset));
+    // Typed positions and Array drags can pass a neighbour. The pick follows its stop.
+    if let Some(picked) = stops.get(sel).cloned() {
+        stops.sort_by(|a, b| a.offset().total_cmp(&b.offset()));
         sel = stops.iter().position(|s| *s == picked).unwrap_or(sel);
     }
-    ui.data_mut(|d| d.insert_temp(sel_id, sel));
+    if let Some(selected) = selected { *selected = sel; }
+    else { ui.data_mut(|d| d.insert_temp(sel_id, sel)); }
     changed
+}
+
+fn paint_gradient_strip(p: &egui::Painter, strip: Rect, colour_at: impl Fn(f32) -> egui::Color32) {
+    // A checkerboard under the ramp shows its opacity.
+    let cell = 4.0;
+    let (cols, rows) = ((strip.width() / cell).ceil() as usize, (strip.height() / cell).ceil() as usize);
+    p.rect_filled(strip, 0.0, T.header);
+    for (cx, cy) in (0..cols).flat_map(|x| (0..rows).map(move |y| (x, y))).filter(|(x, y)| (x + y) % 2 == 0) {
+        let r = Rect::from_min_size(pos2(strip.left() + cx as f32 * cell, strip.top() + cy as f32 * cell), vec2(cell, cell)).intersect(strip);
+        p.rect_filled(r, 0.0, T.text_faint);
+    }
+    let mut mesh = egui::Mesh::default();
+    let steps = 64u32;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let c = colour_at(t);
+        let x = strip.left() + t * strip.width();
+        mesh.colored_vertex(pos2(x, strip.top()), c);
+        mesh.colored_vertex(pos2(x, strip.bottom()), c);
+        if i > 0 {
+            let k = 2 * i;
+            mesh.add_triangle(k - 2, k - 1, k);
+            mesh.add_triangle(k - 1, k, k + 1);
+        }
+    }
+    p.add(mesh);
+    p.rect_stroke(strip, 0.0, Stroke::new(1.0, T.border), StrokeKind::Outside);
 }
 
 #[cfg(test)]
@@ -541,6 +650,139 @@ mod tests {
         assert!(!remove_stop(&mut st, 5));
         assert_eq!(hex(Rgba::new(1.0, 0.0, 0.0, 0.5)), "#ff000080");
         assert_eq!(hex(Rgba::hex(0x00ff00)), "#00ff00");
+    }
+
+    fn track_frame<S: TrackStop>(ctx: &egui::Context, id: Id, stops: &mut Vec<S>, events: Vec<egui::Event>) {
+        let input = egui::RawInput { events, ..Default::default() };
+        ctx.run_ui(input, |ui| {
+            stop_bar_with(ui, id, stops, None, |_, _, _| false);
+        }).textures_delta.clear();
+    }
+
+    fn marker(ctx: &egui::Context, id: Id, key: usize) -> egui::Response {
+        ctx.read_response(id.with(("fill_stop_marker", key))).unwrap()
+    }
+
+    fn track_click(at: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
+    }
+
+    fn drag_track<S: TrackStop>(ctx: &egui::Context, id: Id, stops: &mut Vec<S>, from: egui::Pos2, to: egui::Pos2) {
+        track_frame(ctx, id, stops, vec![egui::Event::PointerMoved(from)]);
+        track_frame(ctx, id, stops, vec![track_click(from, true)]);
+        for i in 1..=5 {
+            track_frame(ctx, id, stops, vec![egui::Event::PointerMoved(from.lerp(to, i as f32 / 5.0))]);
+        }
+        track_frame(ctx, id, stops, vec![track_click(to, false)]);
+        track_frame(ctx, id, stops, vec![]);
+    }
+
+    fn track_key<S: TrackStop>(ctx: &egui::Context, id: Id, stops: &mut Vec<S>, key: Key, modifiers: egui::Modifiers) {
+        let press = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+        track_frame(ctx, id, stops, vec![egui::Event::ModifiersChanged(modifiers), press]);
+    }
+
+    #[test]
+    fn a_property_stop_inherits_before_between_and_after_existing_stops() {
+        use anicraft_engine::doc::Easing;
+        let mut first = PropertyStop::new(0, 0.2, 0.75);
+        first.value.outbound = Some(Easing::QuadOut);
+        let mut last = PropertyStop::new(1, 0.8, 0.5);
+        last.value.outbound = Some(Easing::BounceOut);
+        let mut stops = vec![first.clone(), last.clone()];
+        assert_eq!(add_stop(&mut stops, 0.5), Some(1));
+        assert_eq!(stops[1].value, ArrayPropertyStop { offset: 0.5, ..first.value.clone() });
+        stops[1].value.outbound = Some(Easing::QuadIn);
+        assert!(remove_stop(&mut stops, 1));
+        assert_eq!(add_stop(&mut stops, 1.0), Some(2));
+        assert_eq!(stops[2].value, ArrayPropertyStop { offset: 1.0, ..last.value.clone() });
+        assert_eq!(add_stop(&mut stops, 0.0), Some(0));
+        assert_eq!(stops[0].value, ArrayPropertyStop { offset: 0.0, ..first.value.clone() });
+        assert!(remove_stop(&mut stops, 3) && remove_stop(&mut stops, 0));
+        assert_eq!(stops, [first, last]);
+    }
+
+    #[test]
+    fn property_track_copies_all_values_and_keeps_a_dragged_stop_through_reordering() {
+        let ctx = egui::Context::default();
+        let id = Id::unique("property_stop_test");
+        let mut stops = vec![PropertyStop::new(0, 0.0, 0.75), PropertyStop::new(1, 0.7, 1.0), PropertyStop::new(2, 1.0, 0.03)];
+        stops[1].value.scale = [1.7, 0.3];
+        stops[1].value.rotation = 700.0;
+        track_frame(&ctx, id, &mut stops, vec![]);
+        let start = marker(&ctx, id, 0).rect.center();
+        let end = marker(&ctx, id, 2).rect.center();
+        let at = start.lerp(end, 0.4);
+        track_frame(&ctx, id, &mut stops, vec![egui::Event::PointerMoved(at), track_click(at, true)]);
+        track_frame(&ctx, id, &mut stops, vec![track_click(at, false)]);
+        track_frame(&ctx, id, &mut stops, vec![]);
+        let picked = stops[1].clone();
+        assert!((picked.value.offset - 0.4).abs() < 1e-4);
+        assert_eq!(picked.value, ArrayPropertyStop { offset: picked.value.offset, ..stops[0].value.clone() });
+        drag_track(&ctx, id, &mut stops, at, start.lerp(end, 0.85));
+        assert_eq!(stops[2].marker, picked.marker);
+        assert_eq!(stops[2].value, ArrayPropertyStop { offset: stops[2].value.offset, ..picked.value });
+        assert!((stops[2].value.offset - 0.85).abs() < 1e-4);
+
+        let handle = marker(&ctx, id, picked.marker);
+        ctx.memory_mut(|m| m.request_focus(handle.id));
+        track_frame(&ctx, id, &mut stops, vec![]);
+        track_key(&ctx, id, &mut stops, Key::ArrowLeft, egui::Modifiers::SHIFT);
+        assert!((stops[2].value.offset - 0.75).abs() < 1e-4);
+        track_key(&ctx, id, &mut stops, Key::Delete, egui::Modifiers::NONE);
+        assert_eq!(stops.len(), 3);
+        assert!(stops.iter().all(|stop| stop.marker != picked.marker));
+    }
+
+    #[test]
+    fn gradient_track_keeps_colours_and_neighbour_limits_during_drag_and_tear_off() {
+        let ctx = egui::Context::default();
+        let id = Id::unique("gradient_stop_test");
+        let mut stops = vec![stop(0.0, 0xff0000), stop(0.4, 0x00ff00), stop(0.7, 0x0000ff), stop(1.0, 0xffffff)];
+        track_frame(&ctx, id, &mut stops, vec![]);
+        let at = marker(&ctx, id, 1).rect.center();
+        let end = marker(&ctx, id, 3).rect.center();
+        drag_track(&ctx, id, &mut stops, at, at.lerp(end, 0.75));
+        assert_eq!(stops[1], stop(0.7, 0x00ff00));
+        assert_eq!(stops[2], stop(0.7, 0x0000ff));
+
+        // Move one stop left with the keyboard, then tear off the last stop.
+        let handle = marker(&ctx, id, 1);
+        ctx.memory_mut(|m| m.request_focus(handle.id));
+        track_frame(&ctx, id, &mut stops, vec![]);
+        track_key(&ctx, id, &mut stops, Key::ArrowLeft, egui::Modifiers::SHIFT);
+        assert!((stops[1].offset - 0.6).abs() < 1e-6);
+        assert_eq!(stops[1].color, Rgba::hex(0x00ff00));
+        track_frame(&ctx, id, &mut stops, vec![]);
+        drag_track(&ctx, id, &mut stops, end, end + vec2(0.0, 55.0));
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[2], stop(0.7, 0x0000ff));
+    }
+
+    #[test]
+    fn delete_on_a_focused_gradient_handle_does_not_delete_the_artwork() {
+        use egui::accesskit::{Action, ActionRequest, TreeId};
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(PathBuf::from("unused.png")));
+        app.run("draw.rect", json!({"x": 10, "y": 10, "w": 40, "h": 30, "fill": "#ff0000", "stroke": null}));
+        app.run("paint.set_fill", json!({"type": "linear", "stops": [{"offset": 0, "color": "#ff0000"}, {"offset": 0.5, "color": "#00ff00"}, {"offset": 1, "color": "#0000ff"}]}));
+        app.open_fill_swatch = true;
+        let mut frame = |events| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1600.0, 940.0))), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out.platform_output.accesskit_update.unwrap().nodes
+        };
+        frame(vec![]);
+        let nodes = frame(vec![]);
+        let handle = nodes.iter().find(|(_, n)| n.label().is_some_and(|label| label.starts_with("Colour stop 2 of 3"))).unwrap().0;
+        frame(vec![egui::Event::AccessKitActionRequest(ActionRequest { action: Action::Focus, target_tree: TreeId::ROOT, target_node: handle, data: None })]);
+        assert!(stop_has_focus(&ctx));
+        frame(vec![egui::Event::Key { key: Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }]);
+        let (paint, selected) = current(&app);
+        assert!(selected);
+        assert_eq!(paint.stops().unwrap().len(), 2);
     }
 
     /// Draws a few frames of the whole window.

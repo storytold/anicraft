@@ -834,6 +834,8 @@ fn panic_hunt(only: &str) {
         json!({"id": 3, "profile": [[0, 1e30, -5], ["x"], [0.5, 16, 16]], "index": u64::MAX, "t": -0.5, "left": 1e9, "width": f64::MAX}),
         json!({"id": 3, "profile": "taper_both", "index": 0, "t": 1, "x": 1e30, "y": -1e30, "left": 0, "right": 16}),
         json!({"profile": (0..500).map(|i| json!([f64::from(i) / 500.0, 2, 2])).collect::<Vec<_>>()}),
+        json!({"mode": "grid", "rows": 0, "columns": u64::MAX, "spacing_x": -1e38, "flip_on_reverse": "yes"}),
+        json!({"mode": "grid", "rows": 3, "columns": 2, "spacing_x": -50, "spacing_y": -25}),
         // Brush presets, curves and the Paint Brush (ADR 0068): junk, extremes, both modes.
         json!({"points": [[0, 0, 0.5], [300, 40, 1], [600, 0, 0]], "preset": "chalk", "as_stroke": true, "curve": [[0, 1], [0.5, 0], [1, 1]], "taper_start": 50, "taper_end": 50}),
         json!({"points": [[0, 0], [1e5, 1e5]], "preset": "dotted", "spacing": 5, "jitter": 50, "size": 2000, "name": "x", "to": "y"}),

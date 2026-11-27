@@ -276,6 +276,14 @@ pub fn finish_all(app: &mut App, clean: bool) {
     }
 }
 
+/// Copies of unsaved documents ready to flush if the window painter loses its device.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn graphics_checkpoints(app: &App) -> Vec<anicraft_engine::recovery::Checkpoint> {
+    app.recovery.doc.graphics_checkpoint(&app.s).into_iter().chain(
+        app.tabs.slots.iter().filter_map(|s| s.parked.as_ref()).filter_map(|p| p.saver.graphics_checkpoint(&p.s)),
+    ).collect()
+}
+
 /// Why another document can't be shown right now, if it can't: something is open that belongs
 /// to this one and has to be finished first.
 fn busy(app: &App) -> Option<&'static str> {
@@ -337,6 +345,7 @@ fn settle(app: &mut App) {
 /// (ADR 0112: a document that isn't shown holds no render caches).
 fn arrived(app: &mut App) {
     app.stage_cache.forget_document();
+    app.array_panel.discard_draft();
     app.last_revision = 0;
     app.heard = None;
     app.tl_heard = None;
@@ -352,6 +361,9 @@ pub fn activate(app: &mut App, to: usize) -> bool {
         return true;
     }
     if to >= app.tabs.len() {
+        return false;
+    }
+    if crate::array_panel::blocked(app) {
         return false;
     }
     if let Some(why) = busy(app) {
@@ -449,6 +461,9 @@ fn gives_way(app: &App) -> bool {
 /// When the command fails, the tab made for it goes again and the document that was shown is
 /// back.
 pub fn open(app: &mut App, id: &str, params: Value) -> Option<Value> {
+    if crate::array_panel::blocked(app) {
+        return None;
+    }
     if let Some(i) = already_open(app, id, &params) {
         if activate(app, i) {
             app.start = None;
@@ -556,7 +571,7 @@ fn close_now(app: &mut App, id: u64) -> bool {
 /// File › Close, a tab's × or middle click: closes these tabs, asking about each one that has
 /// unsaved changes (ADR 0004).
 pub fn close(app: &mut App, ids: Vec<u64>) {
-    if app.tabs.closing.is_some() || ids.is_empty() {
+    if app.tabs.closing.is_some() || ids.is_empty() || crate::array_panel::blocked(app) {
         return;
     }
     app.playing = false;
@@ -579,9 +594,13 @@ pub fn close_all(app: &mut App) {
     close(app, ids);
 }
 
-/// The window is closing with unsaved changes somewhere: one question for all of them.
+/// Request application exit. Resolve an Array preview before checking document changes.
 pub fn quit(app: &mut App) {
-    if app.tabs.closing.as_ref().is_some_and(|f| f.quit) {
+    if app.allow_close || app.tabs.closing.as_ref().is_some_and(|f| f.quit) {
+        return;
+    }
+    if app.s.array_preview_active() {
+        app.array_quit_pending = true;
         return;
     }
     app.playing = false;

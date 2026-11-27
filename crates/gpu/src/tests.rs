@@ -7,7 +7,7 @@
 
 use super::*;
 use crate::binning::{self as bn, Binned, PAINT_VEC4S, TILE, piece_cover, solid_of};
-use anicraft_doc::{BlendMode, ColorEffect, ColorTransform, DisplayItem, ElementId, ElementKind, GradientStop, Group, LayerId, LayerKind, MaskMode, Paint, Rgba, Stroke, sample};
+use anicraft_doc::{BlendMode, ColorEffect, ColorTransform, DisplayItem, ElementId, ElementKind, Filter, GradientStop, Group, LayerId, LayerKind, MaskMode, Paint, Rgba, Stroke, sample};
 use anicraft_geom::{Affine, FillRule, Path, Vec2};
 use anicraft_render::{paint::Premul, render};
 use std::sync::OnceLock;
@@ -66,6 +66,141 @@ fn mask(path: Path, clip: u32) -> DisplayItem {
 fn in_group(mut i: DisplayItem, g: u32) -> DisplayItem {
     i.group = Some(g);
     i
+}
+
+#[test]
+fn filtered_scratch_policy_tracks_completions_and_lowers_the_discrete_budget_on_oom() {
+    use wgpu::{Backend, DeviceType};
+    for backend in [Backend::Vulkan, Backend::Dx12, Backend::Metal, Backend::Gl] {
+        for device_type in [DeviceType::IntegratedGpu, DeviceType::VirtualGpu, DeviceType::Cpu, DeviceType::Other] {
+            assert_eq!(filter_budget(device_type, backend), SHARED_FILTER_BYTES);
+        }
+        assert_eq!(filter_budget(DeviceType::DiscreteGpu, backend), DISCRETE_FILTER_BYTES);
+    }
+    assert_eq!(filter_budget(DeviceType::DiscreteGpu, Backend::BrowserWebGpu), 0);
+
+    let mut flight = FilteredFlight::new(DISCRETE_FILTER_BYTES);
+    let sixty = 60 << 20;
+    flight.submitted(10, sixty);
+    flight.submitted(20, sixty);
+    let mut waited = Vec::new();
+    flight.make_room(8 << 20, |id| { waited.push(*id); Ok(()) }).unwrap();
+    assert!(waited.is_empty(), "the larger allowance keeps two submissions in flight");
+    let fail = flight.make_room(9 << 20, |id| Err(GpuError::Device(format!("submission {id} stalled"))));
+    assert!(matches!(fail, Err(GpuError::Device(_))));
+    assert_eq!(flight.bytes, sixty * 2, "a failed fence releases none of its memory");
+    flight.lower_after_oom();
+    assert!(matches!(flight.make_room(65 << 20, |_| panic!("over-budget jobs do not submit")), Err(GpuError::TooLarge(_))));
+    flight.make_room(5 << 20, |id| { waited.push(*id); Ok(()) }).unwrap();
+    assert_eq!(waited, [10, 20]);
+    assert_eq!(flight.bytes, 0);
+}
+
+#[test]
+fn dense_shadow_glow_budget_includes_small_filter_allocations() {
+    let v = view(24, 24, None);
+    let bin = || binning::bin(&prepare_scene(&list(vec![]), &v).unwrap().0, v.width, v.height).unwrap();
+    let ops: Vec<_> = ["drop_shadow", "glow"].iter().map(|name| {
+        let mut filter = Filter::new(name).unwrap();
+        filter.set_param(anicraft_doc::FilterParam::Quality, 3.0);
+        anicraft_render::filters::resolve(&filter, 1.0)
+    }).collect();
+    let mut root = Job { binned: bin(), layers: vec![] };
+    let cost = |job: &Job| {
+        let mut c = Cost::default();
+        job.cost(&mut c);
+        c.filtered_scratch()
+    };
+    assert_eq!(cost(&root), 0);
+    root.layers.extend((0..500).map(|_| LayerJob {
+        at: 0, job: Box::new(Job { binned: bin(), layers: vec![] }), view: v, ops: ops.clone(),
+    }));
+    let pixels_only = 500 * 60 * u64::from(v.width) * u64::from(v.height);
+    let charged = cost(&root);
+    assert!(charged > pixels_only + 500 * layers::passes(&ops) * 4096);
+    let mut flight = FilteredFlight::new(SHARED_FILTER_BYTES);
+    flight.submitted(1, charged);
+    let mut fenced = Vec::new();
+    flight.make_room(charged, |index| { fenced.push(*index); Ok(()) }).unwrap();
+    assert_eq!(fenced, [1], "two dense filtered generations cannot overlap their scratch reservations");
+}
+
+/// Run on a hardware adapter with `WGPU_BACKEND=vulkan`. Sample the driver's allocator
+/// after successive 512 px tile batches, keeping the same output textures between passes.
+#[test]
+#[ignore = "requires a hardware GPU and reports filtered-stage memory"]
+fn measure_filtered_tile_pressure() {
+    let gpu = GpuRenderer::new().expect("hardware GPU");
+    eprintln!("{}", gpu.adapter);
+    {
+        let mut flight = gpu.filtered_flight.lock().unwrap();
+        let limit = flight.limit;
+        assert!(matches!(flight.make_room(limit + 1, |_| panic!("too large before allocation")), Err(GpuError::TooLarge(_))));
+    }
+    let scale = 2.0;
+    // Keep one visible set and room for its replacement, as the Array stage does.
+    let retained_limit = 40;
+    for (name, kinds, quality, radial_first) in [
+        ("shadow low", &["drop_shadow"][..], 1, false),
+        ("shadow high", &["drop_shadow"][..], 3, false),
+        ("glow high", &["glow"][..], 3, false),
+        ("mixed low", &["drop_shadow", "glow"][..], 1, false),
+        ("mixed high", &["drop_shadow", "glow"][..], 3, false),
+        ("mixed high radial to linear", &["drop_shadow", "glow"][..], 3, true),
+    ] {
+        let filters: Arc<[Filter]> = kinds.iter().map(|kind| {
+            let mut f = Filter::new(kind).unwrap();
+            f.set_param(anicraft_doc::FilterParam::Quality, quality as f32);
+            f
+        }).collect();
+        let mut display = list((0..10).map(|i| in_group(item(Path::rect(-32.0, -32.0, 64.0, 64.0), Paint::Solid(Rgba::BLACK)), i)).collect());
+        display.groups = (0..10).map(|_| Group { filters: filters.clone(), ..group(None, 1.0, BlendMode::Normal) }).collect();
+        let mut retained = std::collections::VecDeque::new();
+        let mut peak = (0, 0, 0);
+        let mut latter_peak = 0;
+        let mut timings = Vec::new();
+        for step in 0..30 {
+            let shift = if step % 2 == 0 { step as f32 * 9.0 } else { -(step as f32) * 12.0 };
+            for (i, item) in display.items.iter_mut().enumerate() {
+                let i = i as f32;
+                item.transform = if radial_first && step == 0 {
+                    let theta = i * std::f32::consts::TAU / 10.0;
+                    Affine::translate(640.0 + 220.0 * theta.cos(), 400.0 + 220.0 * theta.sin())
+                } else {
+                    Affine::translate(110.0 + 107.0 * i + shift, 425.0 + shift * 0.25)
+                };
+            }
+            let started = Instant::now();
+            let results: Vec<_> = (0..20).into_par_iter().map(|tile| {
+                let transform = Affine::translate(-512.0 * (tile % 5) as f32, -512.0 * (tile / 5) as f32).mul(&Affine::scale(scale, scale));
+                let v = View { transform, ..view(512, 512, None) };
+                gpu.render_texture(&display, &v)
+            }).collect();
+            for result in results { retained.push_back(result.expect(name)); }
+            while retained.len() > retained_limit { retained.pop_front(); }
+            timings.push(ms(started));
+            if let Some(report) = gpu.device.generate_allocator_report() {
+                let scratch = report.allocations.iter().filter(|a| matches!(a.name.as_str(), "layer" | "layer-coverage" | "paints")).map(|a| a.size).sum();
+                peak.0 = peak.0.max(report.total_allocated_bytes);
+                peak.1 = peak.1.max(report.total_reserved_bytes);
+                peak.2 = peak.2.max(scratch);
+                if step >= 15 { latter_peak = latter_peak.max(report.total_allocated_bytes); }
+            }
+        }
+        gpu.wait_idle().unwrap();
+        timings.sort_by(f32::total_cmp);
+        let mb = |bytes: u64| bytes as f64 / 1048576.0;
+        if peak.0 > 0 {
+            eprintln!("{name:<27} peak live {:.1} MiB, second half {:.1} MiB, reserved {:.1} MiB, filtered scratch {:.1} MiB, tile batch p50 {:.2} ms", mb(peak.0), mb(latter_peak), mb(peak.1), mb(peak.2), timings[15]);
+        } else {
+            eprintln!("{name:<27} allocator report unavailable, tile batch p50 {:.2} ms", timings[15]);
+        }
+        let flight = gpu.filtered_flight.lock().unwrap();
+        assert!(flight.bytes <= flight.limit);
+        drop(flight);
+        drop(retained);
+        gpu.wait_idle().unwrap();
+    }
 }
 
 /// Analytic scenes: each stresses one part of the coverage or paint model.
@@ -1100,13 +1235,40 @@ fn gpu_matches_the_oracle_on_every_filter() {
 #[test]
 fn gpu_matches_the_oracle_on_filtered_symbols_in_context() {
     let Some(g) = gpu() else { return };
-    use anicraft_doc::Filter as F;
+    use anicraft_doc::{Filter as F, FilterParam, FilterSide};
     let blur = F::Blur { blur_x: 4.0, blur_y: 4.0, quality: 2 };
     let shadow = F::DropShadow { blur_x: 4.0, blur_y: 4.0, strength: 1.0, quality: 1, angle: 45.0, distance: 5.0, color: Rgba::BLACK, inner: false, knockout: false, hide_object: false };
     let glow = F::Glow { blur_x: 6.0, blur_y: 6.0, strength: 1.5, quality: 1, color: Rgba::new(1.0, 0.9, 0.0, 1.0), inner: false, knockout: false };
     let white = Some(Rgba::WHITE);
     let bg = item(Path::rect(0.0, 0.0, 80.0, 64.0), Paint::Solid(Rgba::new(0.3, 0.6, 0.4, 1.0)));
     let mut scenes: Vec<(&str, DisplayList)> = Vec::new();
+    let bevel = F::Bevel { blur_x: 5.0, blur_y: 7.0, strength: 1.8, angle: 310.0, distance: 8.0, quality: 3,
+        shadow_color: Rgba::new(0.3, 0.02, 0.35, 0.7), highlight_color: Rgba::new(0.9, 0.8, 0.6, 0.55), side: FilterSide::Full, knockout: false };
+    let mut high_quality = vec![blur.clone(), shadow.clone(), glow.clone(), bevel];
+    for filter in &mut high_quality { assert!(filter.set_param(FilterParam::Quality, 3.0)); }
+    let mut gradient_stack = high_quality.clone();
+    gradient_stack.push(F::GradientGlow { blur_x: 9.0, blur_y: 11.0, strength: 1.5, angle: 310.0, distance: 5.0, quality: 3,
+        stops: stops(&[(0.0, Rgba::TRANSPARENT), (0.3, Rgba::new(0.42, 0.17, 0.86, 0.55)), (1.0, Rgba::new(0.1, 0.85, 0.75, 1.0))]),
+        side: FilterSide::Full, knockout: false });
+    let mut gradient_bevel_stack = gradient_stack.clone();
+    gradient_bevel_stack.push(F::GradientBevel { blur_x: 10.0, blur_y: 8.0, strength: 1.9, angle: 35.0, distance: 6.0, quality: 3,
+        stops: stops(&[(0.0, Rgba::WHITE), (0.32, Rgba::new(0.94, 0.72, 0.3, 0.6)), (0.5, Rgba::TRANSPARENT),
+            (0.8, Rgba::new(0.35, 0.18, 0.52, 0.6)), (1.0, Rgba::new(0.14, 0.26, 0.38, 1.0))]),
+        side: FilterSide::Full, knockout: false });
+    let mut all_filters = gradient_bevel_stack.clone();
+    all_filters.push(F::AdjustColor { brightness: 8.0, contrast: 16.0, saturation: -20.0, hue: -65.0 });
+    for (name, filters) in [
+        ("High-quality Blur, Drop Shadow, Glow and Bevel", high_quality),
+        ("High-quality mixed stack with Gradient Glow", gradient_stack),
+        ("High-quality mixed stack with Gradient Bevel", gradient_bevel_stack),
+        ("High-quality mixed stack with all seven filters", all_filters),
+    ] {
+        let mut items = vec![bg.clone()];
+        items.extend(symbol_items(0));
+        scenes.push((name, DisplayList {
+            left_out: false, links: Vec::new(), clip_modes: Vec::new(), items, clip_parents: Vec::new(), groups: vec![filtered_group(filters)],
+        }));
+    }
     // Several filters in a row, at part opacity, multiplied.
     let mut grp = filtered_group(vec![shadow.clone(), glow.clone(), F::AdjustColor { brightness: 10.0, contrast: 0.0, saturation: -40.0, hue: 25.0 }]);
     (grp.alpha, grp.blend) = (0.7, BlendMode::Multiply);

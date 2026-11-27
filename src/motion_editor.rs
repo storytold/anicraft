@@ -797,7 +797,7 @@ fn colour_row(app: &mut App, ui: &mut egui::Ui, painter: &egui::Painter, row: Re
     let now = colour_of(at, slot, c).unwrap_or(Rgba::BLACK);
     let mut picked = now;
     let mut cell = ui.new_child(egui::UiBuilder::new().max_rect(field).layout(egui::Layout::left_to_right(egui::Align::Center)));
-    if crate::panels::alpha_swatch(&mut cell, &mut picked, &full) {
+    if crate::panels::alpha_swatch(&mut cell, &mut picked, &full).changed() {
         app.s.begin_gesture(tr_noop!("Filter colour keyframe"));
         app.run("motion.set_key", json!({"property": key, "frame": app.s.frame, "color": hex8(picked)}));
         app.s.end_gesture();

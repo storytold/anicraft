@@ -209,7 +209,7 @@ fn button_inner(ui: &mut egui::Ui, c: &mut [u8; 4], alpha: bool) -> Response {
     let size = ui.spacing().interact_size;
     let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::new(egui::Role::ColorWell));
-    let popup = resp.id.with("colour_popup");
+    let popup = swatch_popup_id(resp.id);
     let open = egui::Popup::is_id_open(ui.ctx(), popup);
     if ui.is_rect_visible(rect) {
         let v = if open { &ui.visuals().widgets.open } else { ui.style().interact(&resp) };
@@ -221,6 +221,10 @@ fn button_inner(ui: &mut egui::Ui, c: &mut [u8; 4], alpha: bool) -> Response {
         resp.mark_changed();
     }
     resp
+}
+
+pub(crate) fn swatch_popup_id(anchor: Id) -> Id {
+    anchor.with("colour_popup")
 }
 
 /// Opens the picker under `anchor` when it is clicked, and shows it while open. True when the

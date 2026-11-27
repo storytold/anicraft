@@ -19,6 +19,7 @@ use std::collections::BTreeMap;
 pub enum Panel {
     Properties,
     Align,
+    Array,
     Colour,
     Library,
     MovieExplorer,
@@ -35,13 +36,14 @@ pub enum Panel {
 
 impl Panel {
     /// In the Window menu's order.
-    pub const ALL: [Panel; 13] = [Panel::Actions, Panel::Align, Panel::Colour, Panel::History, Panel::LayerDepth, Panel::Library, Panel::MotionEditor, Panel::MovieExplorer, Panel::Output, Panel::Properties, Panel::Swatches, Panel::Timeline, Panel::Tools];
+    pub const ALL: [Panel; 14] = [Panel::Actions, Panel::Align, Panel::Array, Panel::Colour, Panel::History, Panel::LayerDepth, Panel::Library, Panel::MotionEditor, Panel::MovieExplorer, Panel::Output, Panel::Properties, Panel::Swatches, Panel::Timeline, Panel::Tools];
 
     /// Its machine name, in the preferences (English, never translated).
     pub fn id(self) -> &'static str {
         match self {
             Panel::Properties => "properties",
             Panel::Align => "align",
+            Panel::Array => "array",
             Panel::Colour => "colour",
             Panel::Library => "library",
             Panel::MovieExplorer => "movie_explorer",
@@ -73,6 +75,7 @@ impl Panel {
             Panel::Output => "view.panel.output",
             Panel::Swatches => "view.panel.swatches",
             Panel::Tools => "view.panel.tools",
+            Panel::Array => "view.panel.array",
         }
     }
 
@@ -89,6 +92,7 @@ impl Panel {
         match self {
             Panel::Properties => tr_noop!("Properties"),
             Panel::Align => tr_noop!("Align"),
+            Panel::Array => tr_noop!("Array"),
             Panel::Colour => tr_noop!("Colour"),
             Panel::Library => tr_noop!("Library"),
             Panel::MovieExplorer => tr_noop!("Movie Explorer"),
@@ -110,6 +114,7 @@ impl Panel {
             Panel::Actions => [460.0, 520.0],
             Panel::Output => [520.0, 300.0],
             Panel::Align => [300.0, 140.0],
+            Panel::Array => [350.0, 620.0],
             Panel::Swatches => [300.0, 300.0],
             Panel::LayerDepth => [440.0, 260.0],
             // Two columns of tools.
@@ -710,6 +715,7 @@ fn default_home(p: Panel) -> Home {
     let (side, near) = match p {
         Panel::Properties => (Side::Right, Some(Panel::Align)),
         Panel::Align | Panel::Colour => (Side::Right, Some(Panel::Align)),
+        Panel::Array => (Side::Right, Some(Panel::Properties)),
         // Beside the Colour panel when it is open, as Animate tabs them together.
         Panel::Swatches => (Side::Right, Some(Panel::Colour)),
         Panel::Library | Panel::MovieExplorer => (Side::Right, Some(Panel::Library)),

@@ -31,6 +31,8 @@ pub fn show_all(app: &mut App, ctx: &egui::Context) {
     licenses(app, ctx);
     confirm_modal(app, ctx);
     close_modal(app, ctx);
+    array_quit_modal(app, ctx);
+    crate::array_panel::show_timeline_modal(app, ctx);
     palette(app, ctx);
     shortcut_sheet(app, ctx);
 }
@@ -153,6 +155,41 @@ fn close_modal(app: &mut App, ctx: &egui::Context) {
     // up; Cancel leaves everything open (`tabs::tick` does the rest).
     if let Some(choice) = choice {
         crate::tabs::answer(app, choice);
+    }
+}
+
+fn array_quit_modal(app: &mut App, ctx: &egui::Context) {
+    if !app.array_quit_pending || app.array_panel.timeline_modal_open() || app.document_modal_open() || app.file_dialog_open() {
+        return;
+    }
+    let mut apply = None;
+    let mut keep_editing = false;
+    let can_apply = crate::array_panel::can_apply_on_quit(app);
+    egui::Modal::new(egui::Id::unique("array_quit")).show(ctx, |ui| {
+        ui.set_width(460.0);
+        ui.label(text(Type::Title, tr!("Quit during an Array preview?")));
+        ui.add_space(6.0);
+        ui.label(text(Type::Body, tr!("Apply the Array to your document or discard the preview before quitting.")).color(T.text_dim));
+        ui.add_space(12.0);
+        ui.horizontal_wrapped(|ui| {
+            if ui.add(egui::Button::new(tr!("Keep Editing")).min_size(egui::vec2(0.0, crate::theme::TARGET + 4.0))).clicked() {
+                keep_editing = true;
+            }
+            if ui.add(danger_button(tr!("Discard Array and Quit"))).clicked() {
+                apply = Some(false);
+            }
+            let button = egui::Button::new(text(Type::Body, tr!("Apply Array and Quit")).strong().color(T.on_fill))
+                .fill(T.accent).min_size(egui::vec2(0.0, crate::theme::TARGET + 4.0));
+            if ui.add_enabled(can_apply, button).on_disabled_hover_text(tr!("The current Array preview cannot be applied.")).clicked() {
+                apply = Some(true);
+            }
+        });
+    });
+    if keep_editing || ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, Key::Escape)) {
+        app.array_quit_pending = false;
+    } else if let Some(apply) = apply {
+        crate::array_panel::finish_for_quit(app, apply);
+        ctx.request_repaint();
     }
 }
 

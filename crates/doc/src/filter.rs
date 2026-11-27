@@ -541,15 +541,15 @@ const NUMBERS: [FilterParam; 9] = [
     FilterParam::Hue,
 ];
 
-/// The stepped ones.
-const STEPPED: [FilterParam; 4] = [FilterParam::Quality, FilterParam::Inner, FilterParam::Knockout, FilterParam::HideObject];
-
 impl FilterParam {
+    /// Values that hold until the next key instead of interpolating.
+    pub const STEPPED: [Self; 4] = [Self::Quality, Self::Inner, Self::Knockout, Self::HideObject];
+
     /// Every value there is, in track order: the numbers, the channels of the colours (colour,
     /// shadow, highlight, then the stops of the ramp), quality and the switches.
     pub fn all() -> Vec<FilterParam> {
         let colors = [FilterColor::Color, FilterColor::Shadow, FilterColor::Highlight].into_iter().chain((0..MAX_RAMP_STOPS as u8).map(FilterColor::Stop));
-        NUMBERS.into_iter().chain(colors.flat_map(|c| Channel::ALL.map(|ch| FilterParam::Color(c, ch)))).chain(STEPPED).collect()
+        NUMBERS.into_iter().chain(colors.flat_map(|c| Channel::ALL.map(|ch| FilterParam::Color(c, ch)))).chain(Self::STEPPED).collect()
     }
 
     /// The name in files and commands (`blur_x`, `strength`, `color_red`, `stop_2_alpha`,
@@ -581,7 +581,7 @@ impl FilterParam {
             "hideobject" => "hide_object",
             other => other,
         };
-        if let Some(p) = NUMBERS.into_iter().chain(STEPPED).find(|p| p.key() == s) {
+        if let Some(p) = NUMBERS.into_iter().chain(Self::STEPPED).find(|p| p.key() == s) {
             return Some(p);
         }
         // `<colour>_<channel>`: the channel is the last word.
@@ -638,7 +638,7 @@ impl FilterParam {
     /// Whether a key holds until the next one instead of travelling to it: quality and the
     /// switches (whole numbers; the value of a key is rounded).
     pub fn is_stepped(self) -> bool {
-        STEPPED.contains(&self)
+        Self::STEPPED.contains(&self)
     }
 
     /// The colour this is a channel of.
@@ -652,7 +652,7 @@ impl FilterParam {
     fn index(self) -> usize {
         match self {
             FilterParam::Color(c, ch) => NUMBERS.len() + c.index() * Channel::ALL.len() + ch.index(),
-            p => match STEPPED.iter().position(|q| *q == p) {
+            p => match Self::STEPPED.iter().position(|q| *q == p) {
                 Some(i) => NUMBERS.len() + FILTER_COLORS * Channel::ALL.len() + i,
                 None => NUMBERS.iter().position(|q| *q == p).unwrap_or(0),
             },
@@ -661,7 +661,7 @@ impl FilterParam {
 }
 
 /// How many [`FilterParam`]s there are.
-pub const FILTER_PARAMS: usize = NUMBERS.len() + FILTER_COLORS * Channel::ALL.len() + STEPPED.len();
+pub const FILTER_PARAMS: usize = NUMBERS.len() + FILTER_COLORS * Channel::ALL.len() + FilterParam::STEPPED.len();
 
 impl Filter {
     /// The values of this filter a motion tween can animate, in the order of the Filters panel:

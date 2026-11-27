@@ -23,6 +23,23 @@ Sound output (ADR 0020) uses `cpal`, which on Linux and the BSDs builds against 
 (Arch, FreeBSD). `cargo build --no-default-features` leaves sound output out (playback is
 silent; import, waveforms and audio export still work). Tests never open an audio device.
 
+### Native UI verification
+
+Use the same executable for native screenshots and interactive review that the reviewer will
+launch. For the standard Windows debug build, run `cargo build --locked --bin anicraft` from
+the checkout and launch `target/debug/anicraft.exe` explicitly. Confirm Cargo completed
+successfully and record the resolved executable path with the review results.
+
+If Windows reports `Access is denied` while replacing `target/debug/anicraft.exe`, the file
+can still be an older build. Check running AniCraft processes by executable path.
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name = 'anicraft.exe'" | Select-Object ProcessId,ExecutablePath
+```
+
+Save any open work and close the instance using that path normally. Rebuild and verify a fresh
+launch from the standard path before reporting the UI check as passed.
+
 ### The user guide
 
 The user guide is Markdown in `docs/guide/` (ADR 0069); `crates/guide` bundles it as HTML for

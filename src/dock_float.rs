@@ -172,6 +172,17 @@ fn own_window(app: &mut App, ctx: &egui::Context, f: &Float, layout: &Layout, ac
                 ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
             }
         }
+        if class != egui::ViewportClass::EmbeddedWindow {
+            if !app.modal_open() && ui.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::Q)) {
+                crate::tabs::quit(app);
+                ui.ctx().request_repaint_of(egui::ViewportId::ROOT);
+            }
+            if app.array_quit_pending {
+                ui.disable();
+            }
+            crate::array_panel::escape(app, ui.ctx());
+            crate::array_panel::history_shortcut(app, ui.ctx());
+        }
         if class == egui::ViewportClass::EmbeddedWindow {
             // egui's own stand-in, with no window system under it (tests): already in a window.
             a11y::name_own_title_bar(ui, &title);
@@ -179,6 +190,10 @@ fn own_window(app: &mut App, ctx: &egui::Context, f: &Float, layout: &Layout, ac
         } else {
             let frame = egui::Frame::NONE.fill(T.panel).inner_margin(egui::Margin::same(6));
             egui::CentralPanel::default().frame(frame).show(ui, |ui| float_body(app, ui, f, layout, false, acts));
+        }
+        if class != egui::ViewportClass::EmbeddedWindow {
+            app.array_panel.finish_edit(ui.ctx());
+            crate::array_panel::remember_text_focus(ui.ctx());
         }
         // The app's shortcuts with Ctrl (⌘) or Alt still work over it (Undo, Save, Test Movie),
         // unless a text field has the keyboard.

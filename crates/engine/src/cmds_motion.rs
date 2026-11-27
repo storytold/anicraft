@@ -486,6 +486,7 @@ fn clear_path(s: &mut Session, p: &Value) -> Result<Value> {
     // Orient to path has nothing left to turn with, and pins nothing to pin. Their keys stay:
     // the straight path runs through them.
     m.orient = false;
+    m.clear_path_timing();
     m.pins.clear();
     Ok(json!({"cleared": true}))
 }

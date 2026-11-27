@@ -558,6 +558,193 @@ Each thing keeps its top-left corner, and a straight line keeps its zero width o
 stage instead of the selection. A single shape always aligns to the stage. Align works across
 layers.
 
+### Arrays
+
+Select one symbol instance on the active layer and open **Window › Array**. Choose **Linear**,
+**Grid**, or **Radial** from **Array type** to see the preview. The instance count includes the original.
+Switch types to compare arrangements while keeping each type's positions and the property stops.
+
+In a Linear array, drag the **Start** or **End** circle on the stage, or drag the line to move
+both. Drag or type values in the panel to edit the coordinates, direction, length, and X/Y
+spacing. Editing a derived value moves End. Changing the instance count keeps both endpoints
+in place and updates the spacing. The button beside **Dim Stage** shows or hides the stage
+controls and the white instance markers in all modes. **Dim Stage** brings the Array in front
+of the faded surroundings. Turn it off to see the document's stacking.
+
+For a Grid, set **Rows** and **Columns** under **Distribution**. A 5 × 5 Grid has
+25 instances, including the original, and can have up to 500 instances. Drag **Start** or
+**End** to change the spacing, or drag the rectangle to move it. When the handles coincide,
+grab Start from the centre and End from the ring. You can also drag or type **Start X/Y**,
+**Row Spacing (Y)**, and **Column Spacing (X)**. Spacing measures between symbol registration
+points, so artwork can overlap. Changing a count keeps the endpoints when that axis has
+at least two instances before and after the edit. Each axis remembers its spacing while
+it has one instance.
+
+Lock the counts to make Rows and Columns match. The current Columns value sets both counts,
+up to 22. The spacing lock matches the two spacing magnitudes using the current column spacing.
+Each axis keeps its sign. With spacing locked, dragging a corner keeps the intervals equal
+and changing a count may also resize the other axis. Equal spacing makes a square only
+when the counts match.
+
+Drag a corner past the other along X or Y, or enter negative spacing, to reverse that
+axis. **Flip on Reverse** starts on and mirrors the artwork around each copy's registration
+point along every reversed axis. Turn it off to keep each copy's original orientation
+while reversing either axis. The toggle leaves each copy in its current grid position.
+
+Open **Stagger** to enable **Offset Rows**, **Offset Columns**, or both. Each has an
+**Every N** field and signed **X Offset** and **Y Offset** fields in stage pixels.
+For example, every second row with X set to +50 px shifts rows 2, 4, and 6 by 50 px.
+Turn on **Accumulate** to add 50 px at each of those rows and keep the latest
+displacement in between. Rows 1–6 then move by 0, 50, 50, 100, 100, and 150 px.
+Every 1 starts at the second row or column so the original stays at Start.
+
+Row and column offsets add where they meet. The rectangle still shows the base
+Grid. Drag a corner to change the base spacing, or drag the rectangle to move the
+whole arrangement. Artwork can extend outside the rectangle. Flip on Reverse
+follows the base directions, and property stops keep their logical ordering.
+
+Use the **Circle** and **Spiral** buttons under **Distribution** for Radial Arrays. Circle starts
+selected. Choose Spiral to spread the instances along a spiral, then tune **Sweep** and
+**Spiral Offset**. Positive offset grows the spiral outward, and negative offset shrinks it
+toward the centre. Circle keeps your offset ready for the next switch. **Centre Drift X/Y**
+moves the local centre by that many pixels per turn in either sweep direction.
+Drag **Centre** or the curved guide on the stage to move the array. Drag **Start** to set
+the radius and starting angle. Drag **End** to place the endpoint and add or remove turns. At a
+closed seam, grab Start from the middle and End from the surrounding ring, including just outside
+its outline. Drag **Drift** in any direction to steer successive turns. The distance from Centre
+to Drift indicates the displacement over one turn. Drag their connecting bar to move the array.
+
+Use **Easing** above the property track to change how values progress along the Array. **Global**
+applies across the whole track. **Per Segment** lets you select a stop and set how the next
+segment eases. The final stop's Ease picker is disabled. Choose which families to ease under **Apply to**.
+The curve thumbnails use the same named presets as Classic and Motion Tweens.
+The base Grid stays evenly spaced. In **Property Distribution**, choose **X** to repeat the
+progression across each row, or **Y** to repeat it down each column. **X + Y**, the
+default, samples in order across each row from Start, then continues onto the next
+row. The choice applies to all stops and their easing, including transforms, colour
+effects, and filters. A sampling axis with just one instance uses the start of the
+progression.
+
+Distribution changes the placement along Linear and Radial paths. **Back Out** can place copies past End
+or across a closed loop's seam.
+
+Both default stops start with the source instance's Transform, Colour Effect, and supported filter values.
+Click the property track to add a stop. The new stop copies all the values and the outbound ease
+from the stop immediately to its left. A stop inserted before the first copies the first.
+Drag a stop to move it or enter its position as a percentage. In **Transform**, drag a Scale or
+Rotation value horizontally or click it to type. **Lock scale** keeps the selected stop's
+proportions while editing. **Rotate instances** adds the distribution's rotation.
+Enter 720° at the end of a progression starting at 0° to turn the artwork twice. With a stop
+focused, use the arrow keys to nudge it, Shift for larger steps, or Delete to remove it.
+
+Open **Colour Effect** to change Alpha and choose a style. **Brightness** goes from black at
+−100% to white at +100%. **Tint** blends toward the colour you pick, at the percentage you set.
+**Advanced** gives Alpha, Red, Green, and Blue their own multipliers (−100% to 100%) and offsets
+(−255 to 255). Its Alpha multiplier is the same value as the Alpha field in the other styles.
+The **Colour Effect** target under **Easing** changes how all these values progress across the copies. Tint picker
+changes made before closing the picker undo together.
+
+Open **Filters** to see the source instance's filter stack. Each entry has its own collapsible
+card. Cards start collapsed. Click each header to expand it. Open cards stay open when you change
+stops or distribution modes. **Blur** offers X and Y sizes in stage pixels. **Drop Shadow** and **Glow** also offer
+Strength, a Colour picker, Quality, Inner, and Knockout. Drop Shadow has Angle, Distance, and
+Hide Object. **Bevel** offers Blur X/Y, Strength, Angle, Distance, separate Shadow and Highlight
+colour pickers with opacity, Quality, Type (Inner, Outer, Full), and Knockout. A Drop Shadow or
+Bevel angle going from 350° to 10° passes through 0°. **Gradient Glow** and **Gradient Bevel**
+offer the same blur, strength, offset, quality, type, and knockout controls, with a gradient ramp
+and the same shortest-arc angle behaviour. Every copy keeps the source's filter order, on/off
+states, and Blur quality.
+
+In either gradient filter card, select a ramp marker to edit its colour and opacity. Drag it or
+use its percentage field to move it between neighbouring markers. Gradient Glow pins the first
+marker at 0%. Gradient Bevel pins the midpoint at 50%, and its neighbouring markers stay on
+their original side of the midpoint. Both pinned markers stay transparent. The source filter
+determines the ramp's marker count and order. Select a different Array stop on the upper track
+to set different ramp values for the same markers.
+
+**Adjust Color** has draggable and typeable Brightness, Contrast, and Saturation fields from
+−100 to 100 and Hue from −180° to 180°. A Hue transition from −180° to 180° goes through 0°.
+It runs in the source's filter stack and works alongside the Array stop's **Colour Effect**.
+An off Adjust Color card shows its original settings read-only.
+
+Use **Filters** under **Easing** to ease the numbers, colours, and matching ramp positions.
+Quality, Type, and switches hold their value until the next authored Array stop.
+Edits from one opening of a filter colour picker undo together.
+
+**Commit As** at the bottom of the Array panel defaults to **Spatial Array**, which keeps the instances shown in the preview. **Create Unique Symbols** is off by default. Turn it on to give
+each Array instance its own editable Symbol definition and timeline. Names continue
+from the highest numbered sibling in the source folder, so Box_8 is followed by
+Box_9 even if earlier numbers are unused. The original Symbol and its other
+instances keep their existing references. Nested Symbols and shared assets remain
+shared. Transforms, colour, alpha, and filters remain editable on the instances.
+Undo removes the new definitions and restores the original placement. Redo
+restores the same definitions and instances.
+
+Linear Arrays can also **Commit As › Timeline Animation**. Click **Commit**,
+enter a duration of at least two frames, then choose **Classic Tween** or
+**Hold Keyframes**. The dialog shows the duration in seconds at the document's
+frame rate. Duration defaults to one second, rounded to whole frames. The panel
+remembers your entered duration while the Array session is active. The animation starts at the playhead and uses one instance of the
+existing Symbol. **Cancel** in the dialog returns to the Array preview.
+
+**Classic Tween** creates editable keyframes at Start, End, and authored
+property stops. **Hold Keyframes** makes the Symbol jump between the actual
+Array samples. For example, eight samples over 48 frames produce eight poses,
+including the final pose at frame 48. If poses land on the same frame, the dialog lists the numbered stops or samples
+and their frames. **Use N frames** sets the shortest valid duration when one is
+available. Click **Create Animation** to apply it. Separate coincident stops
+in the Array editor. If Classic Tween reports an incompatible ease
+or property transition, adjust the Array settings or use Hold Keyframes.
+
+Timeline commit requires a compatible source keyframe on a normal artwork
+layer with no overlapping destination content. It preserves the draft if
+validation fails.
+
+For a **Radial › Circle** Array, choose **Timeline Animation** to create one
+native **Motion Tween**. You can use either sweep direction and a partial arc
+or a full 360° loop. The Symbol reaches End on the final exposure frame, even
+when it coincides with Start. Edit the generated curve with AniCraft's ordinary
+Motion Path tools. To ease movement along the path, enable **Distribution**
+in **Easing** and use a monotonic preset such as Quad, Cubic, Quart, Quint,
+Sine, or Circ. **Global** eases the whole path. **Per Segment** eases between
+successive stop positions. Back, Bounce, and Elastic cannot ease Distribution
+because they overshoot or reverse direction. Property stops keep their timing
+and can animate scale, rotation, alpha, supported colour effects, and parameters
+of the existing filters. Open **Motion Editor** to edit the generated property keys
+and their Per Segment easing independently of the path. **Use N frames**
+resolves stops that land on the same frame.
+
+Constant filter settings carry over. Filter ramp positions and bevel type
+must stay constant. Nonlinear Global easing across intermediate stops and
+some mixed colour effects or overshoots are unavailable. With nonlinear
+Distribution, **Rotate** follows path progress and the Rotation keys add their
+own rotation. With Linear Distribution, **Rotate** combines both where the
+ease is compatible. Turn
+Rotate off for an offset transformation point, and use transforms that keep
+registration on the path.
+
+For **Radial › Spiral**, choose **Timeline Animation** to follow a signed sweep
+through one or more turns. **Spiral Offset** changes the radius and
+**Centre Drift X/Y** moves the centre per turn. Enable **Distribution** to ease
+angular progress with the same Global and Per Segment presets as Circle.
+Property stops keep their own timing and easing. Motion Path tools can reshape
+the curve while keeping its pacing, and **Rotate instances** adds the signed,
+eased sweep to the authored Rotation keys, including full turns.
+
+When an inward Spiral reaches zero radius, the Symbol follows the drifting
+centre in a straight line or holds at the centre if drift is zero. Rotation
+can continue during the hold. If a very long or complex Spiral exceeds native
+path limits, shorten the sweep or reduce its size. Splitting a Spiral Motion
+Tween during a zero-radius stationary hold may discard the remaining
+path-driven rotation in the new tail span.
+
+Either output commits in one document undo step. The next Array starts with
+defaults at the newly selected symbol's position. **Cancel**, **Escape**, or choosing **None** restores the
+original artwork and selection and retains the unfinished settings for the selected source.
+Picking another source clears those settings. Dim Stage and handle visibility carry over.
+If you hide the panel, use **Show Array** above the stage to return to the preview. Use
+**Reset Settings to Defaults** to clear the remembered geometry and stops.
+
 ### Grouping
 
 Select some artwork and choose **Modify › Group** (**Ctrl+G**) to keep it together. A group

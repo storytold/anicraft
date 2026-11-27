@@ -379,6 +379,8 @@ pub const PATH_PARAMS: &[(&str, &[(&str, Access)])] = &[
 /// Commands whose `path`, `dir` or `folder` is not a place on disk (an element, a Library
 /// folder id, a motion path), or that only edit a list kept in memory.
 pub const NOT_FILES: &[&str] = &[
+    // "Library folder" is the document Library, not a place on disk.
+    "array.create",
     "find.goto",
     "layer.delete",
     "layer.move",

@@ -46,15 +46,26 @@ window's device).
 3. **The app acts on the news each frame:**
    * **An error the window survived** autosaves unsaved work at once (not waiting for the
      interval), and the status bar says AniCraft carried on, at most once a minute.
-   * **The device lost, or the surface failing for 8 s on end**, can't be repaired: eframe 0.36
-     can't make a new device for a running window. So the app:
-     * writes the work to the recovery folder one last time;
-     * records the attempt in `Logs/graphics-lost`;
-     * asks `main` to reopen;
-     * closes the window.
-
-     `main` then opens the window again with that attempt last. The Recover window offers the
-     work back (a saved, unchanged document simply reopens). It does this at most twice per run.
+   * **The surface failing for 8 s on end** saves recovery copies and requests a normal close.
+     `main` reopens with the failing attempt last, at most twice per run.
+   * **A device-loss callback or an uncaptured window out-of-memory error** stops using the
+     device. eframe paints again before it processes Close, and egui-wgpu uploads buffers before
+     it asks for a surface frame. A stage fallback still gives those uploads to the failed device.
+     AniCraft flushes the open documents' committed states to their recovery sessions, records the
+     failing backend, and hands off once to a fresh process using CPU stage rendering. It tries
+     OpenGL first when OpenGL is a healthy alternative. It tries explicit alternatives before
+     automatic adapter selection and puts the failed API last. A reported error from a running
+     OpenGL window uses the same launch plan after eframe closes the window and saves recovery
+     copies. Loss of the separate compute device behind a working OpenGL window leaves that
+     window running and routes the stage through the CPU.
+     The failed process exits without unwinding the device and swapchain. The new process waits
+     on a pipe for the old process to leave before it initializes its window and finds the copies.
+     Recover offers unsaved edits back. A saved, unchanged document reopens directly.
+     An active Array draft and its session undo and redo history remain in memory and are lost
+     on restart. Restoring them is tracked as [future session-recovery work](../roadmap.md).
+     If loss arrives during the paint itself, the panic hook recognizes a known loss in the
+     egui-wgpu painter or swapchain and uses the recovery checkpoints from the last app frame.
+     A driver abort that never reaches AniCraft still relies on the existing autosave interval.
 4. **The startup record.** `startup::begin` returns the attempts to try last:
    * the one in `graphics-lost`, for the next 3 starts (`LOST_STARTS`, counted down each start);
    * then the one a start died in (the existing marker).

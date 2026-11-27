@@ -747,6 +747,11 @@ pub const RULER: f32 = 18.0;
 pub const TOOL_BUTTON: f32 = 36.0;
 pub const TOOL_ICON: f32 = 18.0;
 
+/// The stage's registration point, visible against both light and dark artwork.
+pub(crate) fn registration_mark(painter: &egui::Painter, at: egui::Pos2) {
+    painter.circle(at, 3.5, Color32::WHITE, Stroke::new(1.0, Color32::BLACK));
+}
+
 /// Depth for floating surfaces: tight and downward, so a window lifts off the work without a
 /// glow around it.
 fn depth(y: i8, blur: u8, alpha: u8) -> Shadow {
@@ -1188,17 +1193,38 @@ pub fn section<R>(ui: &mut egui::Ui, id: &str, style: Section, title: &str, deta
     section_with_header(ui, id, style, title, detail, add).1
 }
 
+/// A section whose initial state can differ from the standard open state.
+pub fn section_with_default<R>(ui: &mut egui::Ui, id: &str, style: Section, title: &str, open: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    section_body(ui, id, style, title, None, open, add).1
+}
+
 /// [`section`], also returning its header (a panel's keyboard anchor, `a11y::anchor`).
 pub fn section_with_header<R>(ui: &mut egui::Ui, id: &str, style: Section, title: &str, detail: Option<&str>, add: impl FnOnce(&mut egui::Ui) -> R) -> (egui::Response, Option<R>) {
-    use egui::{Sense, StrokeKind, pos2, vec2};
+    section_body(ui, id, style, title, detail, true, add)
+}
+
+fn section_body<R>(ui: &mut egui::Ui, id: &str, style: Section, title: &str, detail: Option<&str>, default_open: bool, add: impl FnOnce(&mut egui::Ui) -> R) -> (egui::Response, Option<R>) {
     let key = ui.make_persistent_id(("section", id));
-    let mut open = ui.data_mut(|d| *d.get_temp_mut_or(key, true));
+    let before = ui.data_mut(|d| *d.get_temp_mut_or(key, default_open));
+    let mut open = before;
+    let result = section_content(ui, style, title, detail, &mut open, add);
+    if open != before { ui.data_mut(|d| d.insert_temp(key, open)); }
+    result
+}
+
+/// A collapsible section whose open state is owned by its panel.
+pub(crate) fn section_with_state<R>(ui: &mut egui::Ui, style: Section, title: &str, open: &mut bool, add: impl FnOnce(&mut egui::Ui) -> R) -> Option<R> {
+    section_content(ui, style, title, None, open, add).1
+}
+
+fn section_content<R>(ui: &mut egui::Ui, style: Section, title: &str, detail: Option<&str>, open: &mut bool, add: impl FnOnce(&mut egui::Ui) -> R) -> (egui::Response, Option<R>) {
+    use egui::{Sense, StrokeKind, pos2, vec2};
     let height = if style == Section::Band { 32.0 } else { TARGET };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
     if resp.clicked() {
-        open = !open;
-        ui.data_mut(|d| d.insert_temp(key, open));
+        *open = !*open;
     }
+    let open = *open;
     let enabled = ui.is_enabled();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, enabled, open, title));
     let p = ui.painter();

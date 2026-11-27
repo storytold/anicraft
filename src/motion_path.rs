@@ -725,6 +725,125 @@ mod tests {
         }
 
         #[test]
+        fn ordinary_motion_tweens_preserve_pose_through_path_edits_and_reopen() {
+            use anicraft_engine::{Session, format};
+            use std::time::{SystemTime, UNIX_EPOCH};
+
+            let unique = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+            let dir = std::env::temp_dir().join(format!("anicraft-motion-{}-{unique}", std::process::id()));
+            std::fs::create_dir(&dir).unwrap();
+            for (name, basis, offset_pivot) in [
+                ("normal", [1.0, 0.0, 0.0, 1.0], false),
+                ("horizontal", [-1.0, 0.0, 0.0, 1.0], false),
+                ("vertical", [1.0, 0.0, 0.0, -1.0], false),
+                ("sheared", [1.0, 0.0, 0.65, 1.0], false),
+                ("reflected_shear_pivot", [-1.0, 0.0, 0.65, 1.0], true),
+                ("shear_above_key_range", [1.0, 0.0, 60.0, 1.0], true),
+            ] {
+                let mut s = Session::default();
+                let mut run = |cmd, params| s.execute(cmd, &params).unwrap();
+                run("draw.rect", json!({"x": 0, "y": 0, "w": 28, "h": 8, "fill": "#237aac", "stroke": null}));
+                run("modify.convert_to_symbol", json!({"name": name}));
+                let [a, b, c, d] = basis;
+                run("modify.transform", json!({"a": a, "b": b, "c": c, "d": d, "e": 110, "f": 95}));
+                let reg = s.visible_elements()[0].transform.translation();
+                if offset_pivot {
+                    s.execute("modify.transformation_point", &json!({"x": reg.x + 17.0, "y": reg.y - 5.0})).unwrap();
+                }
+                s.execute("timeline.create_motion_tween", &json!({})).unwrap();
+                let (x, y) = (reg.x, reg.y);
+                let path = format!("M {x} {y} C {} {} {} {} {} {} C {} {} {} {} {} {}",
+                    x+35.0, y-25.0, x+64.0, y+35.0, x+100.0, y+35.0,
+                    x+136.0, y+35.0, x+175.0, y-10.0, x+215.0, y+12.0);
+                s.execute("motion.set_path", &json!({"d": path})).unwrap();
+                let file = dir.join(format!("{name}.anicraft"));
+                format::save(&s.doc, &file).unwrap();
+                // Ordinary spans must remain readable with the pre-Array file semantics.
+                assert!(!std::fs::read_to_string(&file).unwrap().contains("exact_path_affine"));
+                let input = format::load(&file).unwrap();
+                let layer = s.layer;
+                let s = Session::new(input);
+                let ctx = egui::Context::default();
+                let mut app = App::with_context(&ctx, s, Some("unused.png".into()));
+                app.s.layer = layer;
+                let target = app.s.active_layer().unwrap().keyframes[0].motion.as_ref().unwrap().target;
+                app.s.selection.insert(layer, target);
+                app.tool = Tool::Subselect;
+                app.motion_anchors = vec![1];
+
+                let poses = |s: &mut Session| {
+                    [0, 6, 12, 18, 23].map(|frame| {
+                        s.set_frame(frame);
+                        let visible = s.visible_elements();
+                        let instance = visible.iter().find(|e| e.id == target).unwrap();
+                        let display = s.display_list();
+                        let artwork = display.items.iter().find(|i| i.element == target).unwrap();
+                        let points = artwork.path.bounds();
+                        let world = [
+                            instance.transform.translation(),
+                            instance.transform.apply(instance.pivot().unwrap_or(Vec2::ZERO)),
+                            artwork.transform.apply(points.min),
+                            artwork.transform.apply(Vec2::new(points.max.x, points.min.y)),
+                            artwork.transform.apply(points.max),
+                        ];
+                        world.map(|p| [p.x, p.y])
+                    })
+                };
+                let before = poses(&mut app.s);
+                app.s.set_frame(0);
+                let shown_before = shown(&app).unwrap();
+                let start = shown_before.path.point(1, C2).unwrap();
+                let grab = Grab::Handle(1, C2);
+                assert_eq!(hit(&app, &shown_before, screen(start), XF, true), Some(grab));
+                let steps = app.s.history_len();
+                let _ = drag_start(&mut app, shown_before, grab, start);
+                drag_to(&mut app, grab, screen(start), screen(start + Vec2::new(0.0, 42.0)), false);
+                drag_end(&mut app);
+                let changed = shown(&app).unwrap();
+                assert_eq!(changed.path.point(1, C2), Some(start + Vec2::new(0.0, 42.0)));
+                assert_eq!(app.s.history_len(), steps + 1);
+                let after = poses(&mut app.s);
+                if name == "shear_above_key_range" {
+                    // Playback recorded on 4a75c49. The pivot stays put, but recomposing
+                    // with a clamped source shear moves registration and the artwork.
+                    let expected_start = [[350.4502, 99.0], [381.0, 94.0], [107.29004, 95.0], [135.29004, 95.0], [593.61035, 103.0]];
+                    assert!(before[0].iter().flatten().zip(expected_start.iter().flatten()).all(|(a, b)| (a - b).abs() < 0.001));
+                    for pose in before.iter().chain(&after) {
+                        assert!((pose[1][0] - pose[0][0] - 30.5498).abs() < 0.001, "legacy pivot relative to registration");
+                        assert!((pose[4][0] - pose[3][0] - 458.3203).abs() < 0.001, "artwork edge at legacy shear");
+                    }
+                }
+                assert!(after[0].iter().flatten().zip(before[0].iter().flatten()).all(|(a, b)| (a - b).abs() < 0.002));
+                assert!(after[4].iter().flatten().zip(before[4].iter().flatten()).all(|(a, b)| (a - b).abs() < 0.002));
+                assert_ne!(after[2], before[2]);
+                app.s.undo().unwrap();
+                assert_eq!(poses(&mut app.s), before);
+                app.s.redo().unwrap();
+                assert_eq!(poses(&mut app.s), after);
+                format::save(&app.s.doc, &file).unwrap();
+                let mut reopened = Session::new(format::load(&file).unwrap());
+                assert_eq!(reopened.active_layer().unwrap().keyframes[0].motion.as_ref().unwrap().path.as_ref(), Some(&changed.path));
+                assert_eq!(poses(&mut reopened), after);
+                if name == "shear_above_key_range" {
+                    reopened.execute("timeline.resize_span", &json!({"frame": 0, "frames": 47})).unwrap();
+                    reopened.execute("motion.split", &json!({"frame": 24})).unwrap();
+                    reopened.execute("timeline.copy_frames", &json!({"frame": 24, "count": 23})).unwrap();
+                    reopened.execute("timeline.paste_frames", &json!({"frame": 47})).unwrap();
+                    let saved = format::to_json(&reopened.doc).unwrap();
+                    assert!(!saved.contains("exact_path_affine"));
+                    for frame in [0, 16, 24, 40, 47, 63] {
+                        reopened.set_frame(frame);
+                        let display = reopened.display_list();
+                        assert!((display.items[0].transform.m[2] - 57.29004).abs() < 0.001);
+                    }
+                }
+                std::fs::remove_file(file).unwrap();
+                println!("MOTION_COMPAT {}", json!({"fixture": name, "before": before, "after": after}));
+            }
+            std::fs::remove_dir(dir).unwrap();
+        }
+
+        #[test]
         fn dragging_an_end_moves_it_in_one_undo_step() {
             let mut app = app();
             let s = shown(&app).unwrap();

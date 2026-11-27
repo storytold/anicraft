@@ -226,7 +226,12 @@ impl MotionTween {
             keys.truncate(super::MAX_KEYS);
             tracks.push(Track { property: p, keys });
         }
-        Some(MotionTween { target: self.target, tracks, path: None, orient: self.orient, pins: Vec::new(), keep_area: self.keep_area })
+        // A path added to the joined span uses exact playback only when both spans opted in.
+        Some(MotionTween {
+            target: self.target, tracks, path: None, path_timing: None,
+            exact_path_affine: self.exact_path_affine && next.exact_path_affine,
+            orient: self.orient, pins: Vec::new(), keep_area: self.keep_area,
+        })
     }
 }
 

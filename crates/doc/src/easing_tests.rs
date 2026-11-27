@@ -1,5 +1,13 @@
 use super::*;
 
+#[test]
+fn named_eases_keep_exact_normalized_endpoints() {
+    for ease in Easing::named() {
+        assert_eq!(ease.apply(0.0), 0.0, "{ease:?}");
+        assert_eq!(ease.apply(1.0), 1.0, "{ease:?}");
+    }
+}
+
 fn all() -> Vec<Easing> {
     let mut v: Vec<Easing> = Easing::named().collect();
     v.extend([Easing::Classic(-60.0), Easing::Classic(100.0), Easing::CubicBezier(0.25, 0.1, 0.25, 1.0), Easing::Custom(Arc::new(wave()))]);

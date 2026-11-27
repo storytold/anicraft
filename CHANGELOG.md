@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+* **Array panel** (Window › Array): preview and commit Linear, Grid, and Radial
+  layouts, including Circle and Spiral. Property stops and easing vary transforms,
+  colour effects, and filters across instances. Spatial output can give each
+  instance a unique Symbol with its own timeline. Linear Arrays can create an
+  editable Classic Tween or Hold Keyframes. Circle and Spiral Arrays can create
+  editable Motion Tweens with independent property and path easing. Preview
+  edits have their own Undo/Redo, and each commit is one document undo step.
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.

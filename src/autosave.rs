@@ -178,17 +178,25 @@ impl DocSaver {
         self.saver.as_ref().map(|s| s.id().to_string())
     }
 
+    /// Captures only document edits. A live Array is still an uncommitted gesture.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn graphics_checkpoint(&self, s: &anicraft_engine::Session) -> Option<recovery::Checkpoint> {
+        if !s.is_dirty() { return None; }
+        self.saver.as_ref()?.checkpoint(s.committed_document().0, s.path.as_deref())
+    }
+
     /// Writes a copy of unsaved work now, without waiting for the interval (the graphics driver
     /// reported trouble, ADR 0092: the next thing may be the window going). Whether one was
     /// started; nothing to do when the newest copy already holds this state.
     pub fn write_now(&mut self, s: &anicraft_engine::Session) -> bool {
         let Some(saver) = &mut self.saver else { return false };
-        if !s.is_dirty() || self.written == Some(s.state) {
+        let (doc, state) = s.committed_document();
+        if !s.is_dirty() || self.written == Some(state) {
             return false;
         }
-        saver.write(s.doc.clone(), s.path.as_deref());
+        saver.write(doc.clone(), s.path.as_deref());
         self.has_copy = true;
-        self.written = Some(s.state);
+        self.written = Some(state);
         self.rev_at_copy = s.revision;
         self.dirty_since = None;
         true
@@ -200,7 +208,7 @@ impl DocSaver {
     pub fn finish(&mut self, s: &anicraft_engine::Session, clean: bool) {
         if let Some(saver) = self.saver.take() {
             let keep = !clean && s.is_dirty();
-            saver.finish(keep.then(|| (s.doc.clone(), s.path.clone())));
+            saver.finish(keep.then(|| (s.committed_document().0.clone(), s.path.clone())));
         }
     }
 }
@@ -315,6 +323,7 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
         }
     }
     let r = &mut app.recovery.doc;
+    let (doc, state) = app.s.committed_document();
     let Some(saver) = &mut r.saver else { return };
     if !app.prefs.autosave || !app.s.is_dirty() {
         // Nothing to protect (saved, back at the saved state, a new document) or autosave off.
@@ -323,21 +332,21 @@ pub fn tick(app: &mut App, ctx: &egui::Context) {
             r.has_copy = false;
             r.last_copy_at = None;
         }
-        r.written = app.prefs.autosave.then_some(app.s.state);
+        r.written = app.prefs.autosave.then_some(state);
         r.rev_at_copy = app.s.revision;
         r.dirty_since = None;
         return;
     }
-    if r.written == Some(app.s.state) {
+    if r.written == Some(state) {
         return;
     }
     let since = *r.dirty_since.get_or_insert(now);
     let changes = app.s.revision.saturating_sub(r.rev_at_copy);
     if due(now - since, changes, app.s.in_gesture(), &app.prefs) {
         // An `Arc` snapshot: O(1) here; serializing and writing happen on the worker.
-        saver.write(app.s.doc.clone(), app.s.path.as_deref());
+        saver.write(doc.clone(), app.s.path.as_deref());
         r.has_copy = true;
-        r.written = Some(app.s.state);
+        r.written = Some(state);
         r.rev_at_copy = app.s.revision;
         r.dirty_since = None;
     } else {
