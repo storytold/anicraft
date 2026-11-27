@@ -86,9 +86,9 @@ The camera layer is left alone.
 
 To work on one layer without the others' rows in the way, click the **View only the active
 layer** button beside the **Layers** heading (the one after the parenting view's): the timeline
-shows the active layer's row alone, following you as you pick another layer (with the arrow
-keys or the stage). The other layers stay on the stage, and their settings are untouched.
-Click the button again to see every row.
+shows the active layer's row alone (or an active folder with the layers inside it), following you
+as you pick another layer (with the arrow keys or the stage). The other layers stay on the stage,
+and their settings are untouched. Click the button again to see every row.
 
 To give the frames more room, drag the line between the layer names and the frames to the left
 (or to the right for long layer names). Double-click the line to put it back. AniCraft remembers

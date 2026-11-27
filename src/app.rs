@@ -547,7 +547,7 @@ pub struct App {
     pub frame_sel: Option<timeline::FrameSel>,
     pub tl_drag: timeline::TlDrag,
     /// The layer being dragged by its name to another place in the stack (#407).
-    pub tl_layer_drag: Option<anicraft_engine::doc::LayerId>,
+    pub tl_layer_drag: Option<timeline::LayerDrag>,
     /// The layer whose dot is being dragged to its new parent layer in the parenting view
     /// (ADR 0113), and where the dots were drawn this frame.
     pub tl_parent_drag: Option<anicraft_engine::doc::LayerId>,

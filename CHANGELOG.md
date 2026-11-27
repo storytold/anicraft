@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* **View Only the Active Layer keeps an active folder's contents and clears the header icons**
+  (#653): with the toggle on and a folder active, the layers inside it (nested folders included,
+  respecting closed folders) stay listed; in a narrow layers column the **Layers** heading steps
+  aside so the toggle never overlaps the all-layers eye.
+
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.
