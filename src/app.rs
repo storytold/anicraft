@@ -653,6 +653,10 @@ pub struct App {
     /// A copy or cut ran: the system clipboard gets a note at the end of the frame, so the next
     /// Ctrl/⌘+V reaches the app (egui-winit sends a paste only when the clipboard holds text).
     copied: bool,
+    /// In a browser: the archive the last command's several files left in (ADR 0137), and why
+    /// one could not be made (the files then went one by one).
+    web_archive: Option<String>,
+    web_archive_failed: Option<String>,
     /// Paste looks at the system clipboard for a picture from another app (#263). Off in
     /// screenshot runs and tests, which must not depend on what this computer last copied.
     system_clipboard: bool,
@@ -973,6 +977,8 @@ impl App {
             fonts_rx: None,
             glyph_check: true,
             copied: false,
+            web_archive: None,
+            web_archive_failed: None,
             system_clipboard: !shot_mode && !platform::WEB,
             swallowed_paste: platform::SwallowedPaste::default(),
             last_revision: 0,
@@ -1097,11 +1103,13 @@ impl App {
             // browser as downloads (ADR 0036).
             // Several files (a sequence) leave as one ZIP: a browser drops most of a run of
             // downloads.
-            let (files, failed) = platform::as_one_download(anicraft_engine::vfs::take_written(), None);
+            let written = anicraft_engine::vfs::take_written();
+            let several = written.len() > 1;
+            let (files, failed) = platform::as_one_download(written, None);
+            // For the status line, which is written after this (`perform_here`).
+            self.web_archive = files.first().filter(|_| several && failed.is_none()).map(|(p, _)| p.display().to_string());
+            self.web_archive_failed = failed;
             platform::deliver(files);
-            if let Some(e) = failed {
-                self.status_err(tr!("Could not make the archive: {e}", e = e));
-            }
         }
         match result {
             Ok(v) => {
@@ -3606,6 +3614,10 @@ impl App {
             return Some(v);
         }
         self.announce(id, &v, selected);
+        // In a browser: the files went one by one after all, and the status line says why.
+        if let Some(e) = self.web_archive_failed.take() {
+            self.status_err(tr!("Could not make the archive: {e}", e = e));
+        }
         Some(v)
     }
 
@@ -3778,7 +3790,7 @@ impl App {
                 self.status_ok(format!("{done}{report}"));
             }
             // In a browser a sequence's frames arrive as one archive named after the folder.
-            "file.export_png_sequence" | "file.export_svg_sequence" if platform::WEB => self.status_ok(tr!("Exported {path}.zip to your downloads", path = v.get("dir").and_then(Value::as_str).unwrap_or(""))),
+            "file.export_png_sequence" | "file.export_svg_sequence" if self.web_archive.is_some() => self.status_ok(tr!("Exported {path} to your downloads", path = self.web_archive.as_deref().unwrap_or(""))),
             "file.export_png" | "file.export_png_sequence" | "file.export_svg_sequence" | "file.export_gif" | "file.export_svg" | "file.export_video" => self.status_ok(tr!("Exported {path}", path = v.get("written").or_else(|| v.get("dir")).and_then(Value::as_str).unwrap_or(""))),
             // Undo labels are the engine's English, translated when a catalog has them.
             "edit.undo" => self.status_ok(tr!("Undid {action}", action = crate::i18n::t_dyn(v["undone"].as_str().unwrap_or("")))),

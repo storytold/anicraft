@@ -322,9 +322,11 @@ fn guard_keys() {
         // (Alt's own release no longer counts it as held.)
         let pressed = egui::Modifiers { alt: e.alt_key() || e.key() == "Alt", ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() };
         let name = e.key();
-        let key = egui::Key::from_name(&name).or_else(|| egui::Key::from_name(&e.code()));
+        // Alt itself is no key of a chord here (to egui its physical name, AltLeft, is one).
+        let alt = name == "Alt"; // i18n-exempt: a DOM key name
+        let key = if alt { None } else { egui::Key::from_name(&name).or_else(|| egui::Key::from_name(&e.code())) };
         // AltGr types a character (€, @ on many layouts): never a shortcut to take.
-        if (key.is_none() && name != "Alt") || e.get_modifier_state("AltGraph") { // i18n-exempt: DOM key names
+        if (key.is_none() && !alt) || e.get_modifier_state("AltGraph") { // i18n-exempt: a DOM key name
             return;
         }
         if KEYS.with(|k| {

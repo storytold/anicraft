@@ -120,8 +120,9 @@ ANICRAFT_BROWSER=/usr/bin/chromium scripts/web-check.sh
 
 Not checked by it: Firefox and Safari, sound, drag and drop from the desktop, and how the
 canvas looks. To check those by hand: build, serve, then in the page open a `.anicraft` file,
-draw, save (a download arrives), close the tab with unsaved work, reopen it (Restore is
-offered), and export a GIF.
+draw, drop a picture and a sound from the desktop onto the stage, play (the sound is heard),
+save (a download arrives), close the tab with unsaved work, reopen it (Restore is offered), and
+export a GIF.
 
 **Without a browser**, as before:
 

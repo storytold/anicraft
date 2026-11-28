@@ -207,7 +207,8 @@ One failing format doesn't stop the others.
 Exports and Publish download their files. Publish sends several files as one ZIP named after
 the document. Video export isn't available in a browser, because it needs ffmpeg; export a GIF,
 animated PNG or WebP, a PNG sequence or an HTML page instead. A PNG or SVG sequence, like any
-export of several files, downloads as one ZIP named after its folder (`frames.zip`).
+export of several files, downloads as one ZIP named after its folder (`frames.zip`); a single
+frame downloads as the picture itself.
 
 ## From the command line
 

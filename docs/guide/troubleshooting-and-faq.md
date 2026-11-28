@@ -196,7 +196,7 @@ The web version is the same program running in a browser, with some limits:
 | The stage on the graphics card, and parallel rendering | Large scenes and exports are slower. |
 
 Saving and exporting download the file, usually to your Downloads folder. A PNG or SVG
-sequence downloads as one ZIP. The shortcuts are the desktop ones (F5 inserts a frame; to
+sequence of several frames downloads as one ZIP. The shortcuts are the desktop ones (F5 inserts a frame; to
 reload the page use the browser's button), except Ctrl+N and Ctrl+W, which every browser keeps
 for itself: use File › New and File › Close.
 

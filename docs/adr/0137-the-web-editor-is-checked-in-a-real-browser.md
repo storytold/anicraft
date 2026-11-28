@@ -104,7 +104,7 @@ things did not, and none of them could have been seen without a browser:
 * The check takes 21 s once the bundle is built (five runs in a row here, all green). Against
   the bundle built from the code before this change it fails at the second step, with the
   first document saved again in place of the picked one.
-* A sequence in the browser is now always an archive, even a short one. One more step to
+* A sequence of two or more frames in the browser is now an archive. One more step to
   unpack it, and no frame is lost.
 * An artist who pressed F5 to reload the page uses the browser's button; the editor says
   nothing about it because nothing happens that needs saying: a frame is inserted, as on the
