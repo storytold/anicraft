@@ -195,6 +195,13 @@ entries between here and the `.fla` import are the last changes before the relea
     under the tools opens its colour picker (#246), and the docks keep their size while the
     pointer moves over them at every interface scale (#159, not reproduced; the issue stays
     open for a retest).
+
+* **Stroke Join applies to corners drawn with Line, Pen and Pencil** (#589). Merge drawing splits
+  strokes at sharp corners into separate pieces so each side can be selected on its own, which used
+  to render each piece with end caps instead of the chosen corner join. Contiguous solid raw stroke
+  pieces of the same style that meet at a plain corner are now chained when rendered and exported
+  to SVG, so Miter, Round and Bevel joins show on the stage (for Line, wherever two drawn lines
+  meet at a corner).
 * **Text reads right: mixed directions, and letters from a fallback face** (M5, backlog P-008,
   ADR 0130). With outside pull requests #39 and #40 by SoldierPePe, whose commits are merged
   here and rebuilt on styled text.

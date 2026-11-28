@@ -66,6 +66,7 @@ fn set_style(s: &mut Session, p: &Value) -> Result<Value> {
 mod tests {
     use super::*;
     use anicraft_doc::{Cap, ElementKind, Join, Stroke};
+    use anicraft_render::View;
 
     fn line(s: &mut Session) -> u64 {
         let v = s.execute("draw.line", &json!({"x0": 100, "y0": 100, "x1": 300, "y1": 100, "stroke_width": 4})).unwrap();
@@ -171,5 +172,88 @@ mod tests {
         assert_eq!((v["cap"].as_str(), v["style"].as_str()), (Some("square"), Some("dashed")), "{v}");
         assert_eq!(s.style.line.dash, Dash::dashed(12.0, 4.0), "as drawn: twice as long");
         assert!(stroke(&s, id).is_some());
+    }
+
+    /// How far ink reaches past the outer quadrant (`x >= corner.0`, `y <= corner.1`) of a right-down
+    /// corner, measured on both the CPU oracle (`render`) and the GPU scene (`prepare_scene`).
+    fn corner_reach(s: &Session, corner: (f32, f32)) -> (f32, f32) {
+        let dl = s.display_list();
+        let view = View::stage(&s.doc, 1.0);
+        let (pm, _) = anicraft_render::render(&dl, &view).unwrap();
+        let mut cpu = 0.0f32;
+        for y in 0..corner.1 as u32 {
+            for x in corner.0 as u32..pm.width {
+                if let Some(px) = pm.pixel(x, y) && px[0] < 0.9 {
+                    cpu = cpu.max(((x as f32 + 0.5 - corner.0).powi(2) + (y as f32 + 0.5 - corner.1).powi(2)).sqrt());
+                }
+            }
+        }
+        let (scene, _) = anicraft_render::prepare_scene(&dl, &view).unwrap();
+        let gpu = scene.fills.iter().flat_map(|f| f.polys.iter().flatten()).filter(|q| q.x >= corner.0 && q.y <= corner.1)
+            .map(|q| ((q.x - corner.0).powi(2) + (q.y - corner.1).powi(2)).sqrt())
+            .fold(0.0f32, f32::max);
+        (cpu, gpu)
+    }
+
+    fn check_stored_join(s: &Session, want: Join) {
+        let strokes: Vec<Stroke> = s.visible_elements().into_iter().filter_map(|e| match &e.kind {
+            ElementKind::Shape(sh) => sh.stroke.clone(),
+            _ => None,
+        }).collect();
+        assert!(!strokes.is_empty(), "strokes were created");
+        for st in &strokes {
+            assert_eq!(st.style.join, want, "stored stroke style has the chosen join");
+        }
+    }
+
+    #[test]
+    fn line_tool_honours_join_at_corners() {
+        let draw = |join: Join| {
+            let mut s = Session::default();
+            s.style.object_drawing = false;
+            s.style.line = StrokeStyle { join, ..StrokeStyle::default() };
+            s.execute("draw.line", &json!({"x0": 100, "y0": 100, "x1": 200, "y1": 100, "stroke_width": 20, "stroke": "#000000"})).unwrap();
+            s.execute("draw.line", &json!({"x0": 200, "y0": 100, "x1": 200, "y1": 200, "stroke_width": 20, "stroke": "#000000"})).unwrap();
+            check_stored_join(&s, join);
+            corner_reach(&s, (200.0, 100.0))
+        };
+        let (miter_cpu, miter_gpu) = draw(Join::Miter);
+        let (round_cpu, round_gpu) = draw(Join::Round);
+        assert!(miter_cpu > round_cpu + 2.0, "CPU miter {miter_cpu} > round {round_cpu}");
+        assert!(miter_gpu > round_gpu + 2.0, "GPU miter {miter_gpu} > round {round_gpu}");
+    }
+
+    #[test]
+    fn pen_tool_honours_join_at_corners() {
+        let draw = |join: Join| {
+            let mut s = Session::default();
+            s.style.object_drawing = false;
+            s.style.line = StrokeStyle { join, ..StrokeStyle::default() };
+            s.execute("draw.path", &json!({"d": "M 100 100 L 200 100 L 200 200", "stroke_width": 20, "stroke": "#000000"})).unwrap();
+            check_stored_join(&s, join);
+            corner_reach(&s, (200.0, 100.0))
+        };
+        let (miter_cpu, miter_gpu) = draw(Join::Miter);
+        let (round_cpu, round_gpu) = draw(Join::Round);
+        assert!(miter_cpu > round_cpu + 2.0, "CPU miter {miter_cpu} > round {round_cpu}");
+        assert!(miter_gpu > round_gpu + 2.0, "GPU miter {miter_gpu} > round {round_gpu}");
+    }
+
+    #[test]
+    fn pencil_tool_honours_join_at_corners() {
+        for mode in ["smooth", "straighten", "ink"] {
+            let draw = |join: Join| {
+                let mut s = Session::default();
+                s.style.object_drawing = false;
+                s.style.line = StrokeStyle { join, ..StrokeStyle::default() };
+                s.execute("draw.freehand", &json!({"points": [[100, 100], [150, 100], [200, 100], [200, 150], [200, 200]], "mode": mode, "tolerance": 1.5, "stroke_width": 20, "stroke": "#000000"})).unwrap();
+                check_stored_join(&s, join);
+                corner_reach(&s, (200.0, 100.0))
+            };
+            let (miter_cpu, miter_gpu) = draw(Join::Miter);
+            let (round_cpu, round_gpu) = draw(Join::Round);
+            assert!(miter_cpu > round_cpu + 2.0, "{mode}: CPU miter {miter_cpu} > round {round_cpu}");
+            assert!(miter_gpu > round_gpu + 2.0, "{mode}: GPU miter {miter_gpu} > round {round_gpu}");
+        }
     }
 }

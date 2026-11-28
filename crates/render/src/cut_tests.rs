@@ -24,6 +24,7 @@ fn item(path: Path, fill: Paint, rule: FillRule) -> DisplayItem {
         image: None,
         smooth: true,
         warp: None,
+        merge: false,
     }
 }
 

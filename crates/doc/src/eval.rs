@@ -120,6 +120,9 @@ pub struct DisplayItem {
     /// image as drawn (`rest`) to where it shows (`shown`); renderers draw the image through
     /// its triangles. `None` for everything else (a warped shape's path is already bent).
     pub warp: Option<Arc<crate::warp::WarpMesh>>,
+    /// Part of its layer's merged raw drawing (ADR 0031): stroke runs of one style that meet at
+    /// a corner join into one outline when rendered, so corner joins apply across the split pieces.
+    pub merge: bool,
 }
 
 /// Back-to-front list of shapes.
@@ -1036,6 +1039,7 @@ fn eval_timeline(doc: &Document, tl: &Timeline, frame: u32, cx: &Ctx<'_>, out: &
                 image: None,
                 smooth: true,
                 warp: None,
+                merge: false,
             });
         }
         let Some((kf_start, elements)) = shown else { continue };
@@ -1141,6 +1145,7 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
                     Some(Paint::Bitmap { .. }) if !is_sliced => s.live_warp().filter(|w| !w.at_rest()).and_then(crate::warp::Warp::mesh).map(Arc::new),
                     _ => None,
                 },
+                merge: s.merge,
             });
         }
         ElementKind::Text(t) => {
@@ -1172,6 +1177,7 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
                 image: None,
                 smooth: true,
                 warp: None,
+                merge: false,
             };
             match &t.field {
                 // Mask artwork: a field's text masks; its box and border don't.

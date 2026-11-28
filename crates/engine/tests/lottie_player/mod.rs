@@ -153,6 +153,7 @@ fn item(path: Path, transform: Affine, fill: Option<Paint>, stroke: Option<Strok
         image: None,
         smooth: true,
         warp: None,
+        merge: false,
     }
 }
 

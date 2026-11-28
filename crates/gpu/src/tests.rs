@@ -33,6 +33,7 @@ fn item(path: Path, fill: Paint) -> DisplayItem {
         image: None,
         smooth: true,
         warp: None,
+        merge: false,
     }
 }
 

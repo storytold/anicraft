@@ -23,6 +23,7 @@ use std::fmt::Write;
 
 /// Writes `dl` as a standalone SVG document the size of `stage`, with its background.
 pub fn to_svg(dl: &DisplayList, stage: &Stage) -> String {
+    let dl = &*crate::stroke::join_raw_strokes(dl);
     // Variable-width strokes are written as the filled outlines the renderer draws.
     let dl = &*crate::stroke::outline_variable_strokes(dl);
     let (w, h) = (stage.width, stage.height);
@@ -579,6 +580,7 @@ mod tests {
             image: None,
             smooth: true,
             warp: None,
+            merge: false,
         }
     }
 
@@ -768,6 +770,7 @@ mod group_tests {
             image: None,
             smooth: true,
             warp: None,
+            merge: false,
         };
         let dl = DisplayList { left_out: false, links: Vec::new(), clip_modes: Vec::new(), items: vec![it(None), it(Some(0)), it(Some(1)), it(Some(0)), it(None)], clip_parents: vec![], groups: vec![Group { parent: None, alpha: 0.5, blend: Default::default(), filters: Default::default(), clip: None }, Group { parent: Some(0), alpha: 0.25, blend: Default::default(), filters: Default::default(), clip: None }] };
         let svg = to_svg(&dl, &Stage { width: 4, height: 4, fps: 24.0, background: Rgba::WHITE });
@@ -797,6 +800,7 @@ mod group_tests {
             image: None,
             smooth: true,
             warp: None,
+            merge: false,
         };
         let stage = Stage { width: 20, height: 20, fps: 24.0, background: Rgba::WHITE };
         let allowed = to_svg(

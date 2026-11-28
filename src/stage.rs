@@ -2905,6 +2905,7 @@ mod pattern_tests {
             image: None,
             smooth: true,
             warp: None,
+            merge: false,
         }
     }
 
