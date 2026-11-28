@@ -240,17 +240,10 @@ fn finish(app: &mut App, job: Job) {
     if crate::platform::WEB {
         // In a browser the files are in memory: they go to the downloads, in one ZIP when there
         // are several (ADR 0060).
-        let written = anicraft_engine::vfs::take_written();
-        if written.len() > 1 {
-            match publish::zip(&written) {
-                Ok(z) => crate::platform::deliver(vec![(std::path::PathBuf::from(format!("{}.zip", job.name)), z)]),
-                Err(e) => {
-                    app.status_err(tr!("Could not make the archive: {e}", e = e));
-                    crate::platform::deliver(written);
-                }
-            }
-        } else {
-            crate::platform::deliver(written);
+        let (files, failed) = crate::platform::as_one_download(anicraft_engine::vfs::take_written(), Some(&job.name));
+        crate::platform::deliver(files);
+        if let Some(e) = failed {
+            app.status_err(tr!("Could not make the archive: {e}", e = e));
         }
     }
     let (ok, failed, skipped) = (report.count(Status::Published), report.count(Status::Failed), report.count(Status::Skipped));

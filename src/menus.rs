@@ -71,6 +71,12 @@ fn top_labels() -> Vec<String> {
     TOP_MENUS.iter().map(|t| crate::i18n::t(t).to_string()).collect()
 }
 
+/// The keys that open the top menus with Alt, in the interface language.
+pub fn top_access_keys() -> Vec<egui::Key> {
+    let labels = top_labels();
+    access_keys(&labels.iter().map(String::as_str).collect::<Vec<_>>()).into_iter().filter_map(|k| egui::Key::from_name(&k?.1.to_string())).collect()
+}
+
 /// Each top menu's access key: `(character index, letter)`, the first letter of its title that
 /// no menu before it took (word starts first); ASCII letters only, so a title without one has
 /// none.

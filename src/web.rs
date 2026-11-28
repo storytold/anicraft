@@ -53,6 +53,9 @@ thread_local! {
     /// Dropped files read so far, by ticket: each file's name and bytes.
     static DROPPED: RefCell<Vec<(u64, ReadFiles)>> = const { RefCell::new(Vec::new()) };
     static TICKET: Cell<u64> = const { Cell::new(0) };
+    /// The chords the editor acts on, and whether Alt reaches its menu bar: the key presses
+    /// taken from the browser (`platform::claims_key`).
+    static KEYS: RefCell<(Vec<(egui::Modifiers, egui::Key)>, bool)> = const { RefCell::new((Vec::new(), false)) };
 }
 
 /// Starts the editor on the page's canvas.
@@ -60,6 +63,7 @@ pub fn start() {
     let mac = web_sys::window().and_then(|w| w.navigator().user_agent().ok()).is_some_and(|ua| ua.contains("Mac"));
     crate::platform::set_web_on_mac(mac);
     guard_leaving();
+    guard_keys();
     wasm_bindgen_futures::spawn_local(async {
         match run().await {
             Ok(()) => {
@@ -296,6 +300,49 @@ fn guard_leaving() {
     if window.add_event_listener_with_callback("beforeunload", on_leave.as_ref().unchecked_ref()).is_ok() {
         // Lives as long as the page.
         on_leave.forget();
+    }
+}
+
+// ----- keys -------------------------------------------------------------------------------------
+
+/// Tells the page which chords the editor acts on (its shortcut table changed).
+pub fn claim_keys(bound: Vec<(egui::Modifiers, egui::Key)>, alt_menus: bool) {
+    KEYS.with(|k| *k.borrow_mut() = (bound, alt_menus));
+}
+
+/// Keeps the browser from acting on the editor's shortcuts: F5 inserts a frame instead of
+/// reloading the page, Ctrl+R imports instead of reloading, Alt+F opens the editor's File menu.
+/// eframe stops only a few (Ctrl+S, Ctrl+O, Ctrl+P, Tab, the arrows) and leaves F5 and Ctrl+R
+/// to the browser on purpose. The key still reaches the editor: only the browser's own action
+/// is called off, and only for keys the editor uses (`platform::claims_key`).
+fn guard_keys() {
+    let Some(window) = web_sys::window() else { return };
+    let on_key = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(|e: web_sys::KeyboardEvent| {
+        // The same reading of the event as eframe's, so both see one key.
+        // (Alt's own release no longer counts it as held.)
+        let pressed = egui::Modifiers { alt: e.alt_key() || e.key() == "Alt", ctrl: e.ctrl_key(), shift: e.shift_key(), mac_cmd: e.meta_key(), command: e.ctrl_key() || e.meta_key() };
+        let name = e.key();
+        let key = egui::Key::from_name(&name).or_else(|| egui::Key::from_name(&e.code()));
+        // AltGr types a character (€, @ on many layouts): never a shortcut to take.
+        if (key.is_none() && name != "Alt") || e.get_modifier_state("AltGraph") { // i18n-exempt: DOM key names
+            return;
+        }
+        if KEYS.with(|k| {
+            let k = k.borrow();
+            crate::platform::claims_key(&k.0, k.1, pressed, key)
+        }) {
+            e.prevent_default();
+        }
+    });
+    // In the capture phase, on the window: before eframe's listeners on the canvas, which stop
+    // the event from going further.
+    let mut held = false;
+    for kind in ["keydown", "keyup"] {
+        held |= window.add_event_listener_with_callback_and_bool(kind, on_key.as_ref().unchecked_ref(), true).is_ok();
+    }
+    if held {
+        // Lives as long as the page.
+        on_key.forget();
     }
 }
 

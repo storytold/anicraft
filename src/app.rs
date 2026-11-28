@@ -1095,7 +1095,13 @@ impl App {
         if platform::WEB && id.starts_with("file.") {
             // In a browser, what a save or an export wrote is in memory: hand it to the
             // browser as downloads (ADR 0036).
-            platform::deliver(anicraft_engine::vfs::take_written());
+            // Several files (a sequence) leave as one ZIP: a browser drops most of a run of
+            // downloads.
+            let (files, failed) = platform::as_one_download(anicraft_engine::vfs::take_written(), None);
+            platform::deliver(files);
+            if let Some(e) = failed {
+                self.status_err(tr!("Could not make the archive: {e}", e = e));
+            }
         }
         match result {
             Ok(v) => {
@@ -1337,6 +1343,22 @@ impl App {
     pub fn refresh_keymap(&mut self) {
         self.keymap = keymap::Keymap::new(&self.prefs.shortcuts);
         self.shortcuts = self.keymap.table();
+        #[cfg(target_arch = "wasm32")]
+        crate::web::claim_keys(self.browser_keys(), platform::menu_bar_keys());
+    }
+
+    /// Every chord the editor acts on that a browser would act on first (`platform::claims_key`
+    /// decides per key press): the shortcut table, the fixed ones `handle_shortcuts` takes, and
+    /// the menu bar's (ADR 0064).
+    #[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+    pub fn browser_keys(&self) -> Vec<(Modifiers, Key)> {
+        let mut keys: Vec<(Modifiers, Key)> = self.shortcuts.iter().map(|(m, k, _)| (*m, *k)).collect();
+        keys.extend([(Modifiers::NONE, Key::F1), (Modifiers::COMMAND, Key::K), (Modifiers::COMMAND | Modifiers::SHIFT, Key::P), (Modifiers::COMMAND, Key::U), (Modifiers::COMMAND, Key::Comma)]);
+        if platform::menu_bar_keys() {
+            keys.push((Modifiers::NONE, Key::F10));
+            keys.extend(crate::menus::top_access_keys().into_iter().map(|k| (Modifiers::ALT, k)));
+        }
+        keys
     }
 
     pub fn save_prefs(&mut self) {
@@ -3755,6 +3777,8 @@ impl App {
                 let done = trn!("Exported {path} ({n} frame, {layers} layers).", "Exported {path} ({n} frames, {layers} layers).", v["frames"].as_u64().unwrap_or(0), path = v["written"].as_str().unwrap_or(""), layers = v["layers"]);
                 self.status_ok(format!("{done}{report}"));
             }
+            // In a browser a sequence's frames arrive as one archive named after the folder.
+            "file.export_png_sequence" | "file.export_svg_sequence" if platform::WEB => self.status_ok(tr!("Exported {path}.zip to your downloads", path = v.get("dir").and_then(Value::as_str).unwrap_or(""))),
             "file.export_png" | "file.export_png_sequence" | "file.export_svg_sequence" | "file.export_gif" | "file.export_svg" | "file.export_video" => self.status_ok(tr!("Exported {path}", path = v.get("written").or_else(|| v.get("dir")).and_then(Value::as_str).unwrap_or(""))),
             // Undo labels are the engine's English, translated when a catalog has them.
             "edit.undo" => self.status_ok(tr!("Undid {action}", action = crate::i18n::t_dyn(v["undone"].as_str().unwrap_or("")))),
