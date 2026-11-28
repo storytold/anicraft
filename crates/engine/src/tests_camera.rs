@@ -425,3 +425,21 @@ fn picking_through_the_camera_finds_what_the_movie_shows() {
     let d = v.inverse().unwrap().apply_vector(anicraft_geom::Vec2::new(10.0, 0.0));
     assert!((d.x - 5.0).abs() < 1e-4, "{d:?}");
 }
+
+#[test]
+fn set_on_a_held_frame_reports_the_keyframe_it_edited() {
+    let mut s = stage_with(&[(95.0, 45.0, 10.0, 10.0)]);
+    run(&mut s, "camera.add", json!({}));
+    // Frame 10 is held by the camera's one keyframe (frames 1–20): the edit lands on that keyframe.
+    let v = run(&mut s, "camera.set", json!({"zoom": 200, "frame": 10}));
+    assert_eq!(v["keyframe"], 0, "{v}");
+    assert!(v["note"].as_str().is_some_and(|n| n.contains("frame 11") && n.contains("frame 1 ")), "{v}");
+    assert_eq!(s.doc.timeline(0).layers[0].keyframes.len(), 1, "no keyframe was added");
+    let zoom = |s: &mut Session, f: u32| run(s, "camera.info", json!({"frame": f}))["zoom"].as_f64().unwrap();
+    assert!((zoom(&mut s, 0) - zoom(&mut s, 19)).abs() < 1e-6, "the whole span changed together");
+    // On a keyframe of its own there is nothing to report.
+    run(&mut s, "timeline.insert_keyframe", json!({"frame": 10}));
+    let v = run(&mut s, "camera.set", json!({"zoom": 300, "frame": 10}));
+    assert!(v.get("note").is_none() && v.get("keyframe").is_none(), "{v}");
+    assert!(zoom(&mut s, 10) > zoom(&mut s, 0), "the new keyframe holds its own zoom");
+}
