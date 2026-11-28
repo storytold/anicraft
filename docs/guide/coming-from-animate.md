@@ -84,6 +84,7 @@ Asset Warp, the Paint Brush and Fluid Brush, Deco and the Spray Brush. More on t
 | Actions panel | **F9** | Window › Actions |
 | Play and stop | **Enter** | Control › Play |
 | Previous and next frame | **,** and **.** | Control |
+| Previous and next keyframe of the active layer | **Alt+,** and **Alt+.** | Control |
 | Test Movie | **Ctrl+Enter** | Control › Test Movie |
 | Publish | **Shift+F12** | File › Publish |
 | Publish Settings | **Ctrl+Shift+F12** | File › Publish Settings… |

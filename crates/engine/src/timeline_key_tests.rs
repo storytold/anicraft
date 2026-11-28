@@ -210,3 +210,30 @@ fn stepping_stops_at_the_ends() {
     run(&mut s, "timeline.next_frame", json!({}));
     assert_eq!(s.frame, 1, "in between, one frame on");
 }
+
+/// Previous and Next Keyframe (#51; the test follows the one in outside PR #619): the active
+/// layer's keyframes by default, any layer's when asked, and no move past the first or last.
+#[test]
+fn keyframe_stepping_follows_the_active_layer_or_every_layer_and_stops_at_the_ends() {
+    let mut s = Session::default();
+    let a = layer_with(&mut s, &[(0, 5), (5, 9), (14, 6)]);
+    let b = layer_with(&mut s, &[(0, 9), (9, 11)]);
+    run(&mut s, "layer.select", json!({"layer": a.0}));
+    let go = |s: &mut Session, id: &str, p: Value| run(s, id, p)["frame"].as_u64().unwrap();
+
+    run(&mut s, "timeline.goto", json!({"frame": 2}));
+    assert_eq!(go(&mut s, "timeline.next_keyframe", json!({})), 5, "from inside a span, its end");
+    assert_eq!(go(&mut s, "timeline.next_keyframe", json!({})), 14, "layer b's keyframe at 9 is not the active layer's");
+    let stay = run(&mut s, "timeline.next_keyframe", json!({}));
+    assert_eq!((stay["frame"].as_u64(), stay["moved"].as_bool()), (Some(14), Some(false)), "after the last keyframe it stays, and says so");
+    assert_eq!(go(&mut s, "timeline.prev_keyframe", json!({"all_layers": true})), 9);
+    assert_eq!(go(&mut s, "timeline.prev_keyframe", json!({"layer": b.0})), 0);
+    assert_eq!(go(&mut s, "timeline.prev_keyframe", json!({})), 0, "before the first keyframe it stays");
+    assert_eq!(s.frame, 0);
+
+    // A folder has no keyframes: asked for alone it is refused with the reason, and among
+    // every layer it changes nothing.
+    let folder = run(&mut s, "layer.new_folder", json!({}))["layer"].as_u64().unwrap();
+    assert!(s.execute("timeline.next_keyframe", &json!({"layer": folder})).is_err());
+    assert_eq!(go(&mut s, "timeline.next_keyframe", json!({"all_layers": true})), 5);
+}

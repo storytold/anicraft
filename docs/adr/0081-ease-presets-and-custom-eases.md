@@ -99,3 +99,18 @@ the public XFL descriptions; the ease formulas are the classic public easing equ
   Bézier can draw onto Lottie's own eases instead of baking; per-property eases of motion
   tweens imported from XFL (motion tweens themselves still come in as keyframes); 3D property
   groups; dragging keys in time in the Motion Editor.
+
+## Amendment (2026-11-28): the sign of an Animate file's ease
+
+An Animate file's tween `acceleration` (and the ease field of a Flash 8 to CS4 binary `.fla`)
+runs the other way from the Classic Ease slider: a positive value starts slowly and speeds up.
+Both importers passed the number through, so every eased classic and shape tween from an
+Animate file played the wrong way round. They now convert through
+`Easing::from_flash_acceleration`, which flips the sign (outside PR #663). The evidence is one
+real file: a Flash 8 document its maker drew and released under MIT (the committed fixture
+`crates/fla/tests/fixtures/flash8-tester.fla`, outside PR #661), the CS6 XFL copy they saved
+of it, which stores the same signs, and the frames they exported from Flash 8 and published
+beside it, in which the tween stored as +100 leaves its keyframe slowly and the one stored as
+−100 leaves quickly. The slider, documents made in AniCraft and custom ease curves are
+unchanged. A document imported before this keeps the direction it was imported with; open the
+Animate file again to get the right one.

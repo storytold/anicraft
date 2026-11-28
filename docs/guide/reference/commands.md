@@ -1,6 +1,6 @@
 # Command reference
 
-Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 406 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
+Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 408 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
 
 This page is generated from the command registry, so it always matches the version of AniCraft it came with.
 
@@ -306,6 +306,10 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{} (on the last frame it stays there)`
 - **Previous Frame** `timeline.prev_frame` · **,**
   Parameters: `{} (on the first frame it stays there)`
+- **Previous Keyframe** `timeline.prev_keyframe` · **Alt+,** (macOS **⌥,**)
+  Parameters: `{layer? | layers?: [..] | all_layers?: true} (the active layer's keyframes unless told otherwise; before the first one it stays there)`
+- **Next Keyframe** `timeline.next_keyframe` · **Alt+.** (macOS **⌥.**)
+  Parameters: `{layer? | layers?: [..] | all_layers?: true} (the active layer's keyframes unless told otherwise; after the last one it stays there)`
 - **Go to First Frame** `timeline.first_frame` · **Home**
   Parameters: `{}`
 - **Go to Last Frame** `timeline.last_frame` · **End**
