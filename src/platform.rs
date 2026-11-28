@@ -235,8 +235,9 @@ pub fn claims_key(bound: &[(egui::Modifiers, egui::Key)], alt_menus: bool, press
     if !chorded && !function {
         return false;
     }
-    // As egui matches a shortcut: extra Shift or Alt held still presses it.
-    bound.iter().any(|(m, k)| *k == key && pressed.matches_logically(*m))
+    // As egui matches a shortcut: extra Shift or Alt held still presses it. But a plain letter's
+    // binding (a tool key) is not a chord to take with Alt held: on a Mac that types a character.
+    bound.iter().any(|(m, k)| *k == key && (function || m.ctrl || m.command || m.alt) && pressed.matches_logically(*m))
 }
 
 pub fn set_mac_glyphs(available: bool) {
@@ -1480,6 +1481,7 @@ mod tests {
         assert!(claims(Modifiers::SHIFT, Key::F5), "as egui matches it: Shift held still presses F5");
         assert!(!claims(Modifiers::NONE, Key::F12) && !claims(ctrl, Key::T) && !claims(Modifiers::ALT, Key::D), "unused keys are the browser's");
         assert!(!claims(Modifiers::NONE, Key::V), "a tool letter is typing in a text field");
+        assert!(!claims(Modifiers::ALT, Key::V), "and with Alt it types a character on a Mac");
         assert!(!claims(ctrl, Key::V) && !claims(ctrl | Modifiers::SHIFT, Key::V), "paste arrives as the browser's event");
         assert!(claims_key(&bound, true, Modifiers::ALT, None), "Alt alone is the editor's menu bar");
         assert!(!claims_key(&bound, false, Modifiers::ALT, None), "but not on a Mac, where Alt opens no menu");
