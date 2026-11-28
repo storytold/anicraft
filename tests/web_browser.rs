@@ -431,7 +431,7 @@ fn an_artist_can_work_in_a_real_browser() {
     let second = downloaded(&got, &mut t);
     assert_eq!(second.len(), 1, "saving the opened document downloads it: {:?}", names(&second));
     let reopened: Value = serde_json::from_slice(&second[0].1).expect("a document");
-    assert_ne!(reopened, sample, "the picked file opened, though a document with its name was open");
+    assert!(reopened != sample, "the picked file opened, though a document with its name was open (the first document was saved again instead)");
 
     // Import to Stage (Ctrl+R, which a browser would reload the page on): the picture is in
     // the document that is saved next.

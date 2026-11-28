@@ -195,8 +195,10 @@ The web version is the same program running in a browser, with some limits:
 | Large autosaves | The browser keeps only a few MB per site: save often. |
 | The stage on the graphics card, and parallel rendering | Large scenes and exports are slower. |
 
-Saving and exporting download the file, usually to your Downloads folder. A PNG sequence
-downloads frame by frame, and your browser may ask once to allow several downloads.
+Saving and exporting download the file, usually to your Downloads folder. A PNG or SVG
+sequence downloads as one ZIP. The shortcuts are the desktop ones (F5 inserts a frame; to
+reload the page use the browser's button), except Ctrl+N and Ctrl+W, which every browser keeps
+for itself: use File › New and File › Close.
 
 ## Reporting a bug
 
