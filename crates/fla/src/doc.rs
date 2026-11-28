@@ -606,7 +606,7 @@ fn pair_hints(layer: &mut Layer, raw: &HashMap<u32, Vec<archive::HintRec>>, repo
 /// one for everything, or one per property group.
 fn easing(frame: &archive::FrameRec, report: &mut Report) -> (Easing, Vec<(EaseGroup, Easing)>) {
     let acc = (frame.ease as f32).clamp(-100.0, 100.0);
-    let classic = if acc == 0.0 { Easing::Linear } else { Easing::Classic(acc) };
+    let classic = Easing::from_flash_acceleration(acc);
     if frame.eases.iter().all(Vec::is_empty) {
         return (classic, Vec::new());
     }

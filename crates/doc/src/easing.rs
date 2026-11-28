@@ -228,6 +228,15 @@ impl Easing {
     pub const PRESETS: [(&'static str, Easing); 2] = [("Linear", Easing::Linear), ("Smooth (bezier)", Easing::CubicBezier(0.25, 0.1, 0.25, 1.0))];
     pub const LINEAR_LABEL: &'static str = "Linear";
 
+    /// The classic ease an Animate file's tween `acceleration` (−100..=100) stands for, as the
+    /// XFL and legacy FLA importers read it. The file's sign is the other way round from
+    /// [`Easing::Classic`]'s: a positive value starts slowly and speeds up, as Flash 8's own
+    /// exported frames show, so it becomes a negative strength here. 0 is linear.
+    pub fn from_flash_acceleration(acceleration: f32) -> Easing {
+        let a = acceleration.clamp(-100.0, 100.0);
+        if a == 0.0 || !a.is_finite() { Easing::Linear } else { Easing::Classic(-a) }
+    }
+
     /// The named ease of `family` easing `dir`.
     pub fn preset(family: EaseFamily, dir: EaseDir) -> Easing {
         use EaseDir::*;

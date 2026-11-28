@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+* **Eased tweens from Animate files ease the right way** (#163). A classic tween's ease in an
+  imported `.fla` or XFL file played back the wrong way round: one that should start slowly
+  and speed up started quickly and slowed down, and the other way about. Both importers now
+  read the ease as Flash draws it, checked against Flash 8's own exported frames.
+
 ## 0.3.0 (2026-11-28)
 
 The first release since 0.2.1 (2026-11-12). It carries everything listed below, from the Flash 8 to
