@@ -802,7 +802,7 @@ fn report_rows(ui: &mut egui::Ui, r: &Report) {
                 // The exporter's English, translated when a catalog has it.
                 ui.horizontal(|ui| {
                     ui.add_space(128.0);
-                    ui.add(egui::Label::new(text(Type::Caption, sentence(&crate::i18n::t_dyn(&o.message)))).wrap());
+                    crate::theme::wrapped_label(ui, Type::Caption, &sentence(&crate::i18n::t_dyn(&o.message)));
                 });
             }
         }

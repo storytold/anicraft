@@ -316,7 +316,7 @@ fn script_status(ui: &mut egui::Ui, src: &SourceScript, links: &[anicraft_engine
             Some(at) => tr!("Line {line}, column {column}: {message}", line = at.line, column = at.column, message = message.as_str()),
             None => message,
         };
-        let r = ui.add(egui::Label::new(text(Type::Caption, label).color(color)).sense(egui::Sense::click()).wrap());
+        let r = crate::theme::wrapped_label_with_sense(ui, Type::Caption, color, egui::Sense::click(), &label);
         if let Some(at) = p.pos()
             && r.on_hover_text(tr!("Show this line in the script")).clicked()
         {

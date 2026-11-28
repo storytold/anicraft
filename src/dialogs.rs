@@ -413,12 +413,20 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
                     // current one finds it at the top. Each language is named in itself.
                     form_row(ui, LW, tr!("Language"), |ui| {
                         let auto = crate::i18n::AUTO;
-                        let current = if p.language == auto { tr!("System language ({name})", name = crate::i18n::system_choice()) } else { crate::i18n::name_of(&p.language).into_owned() };
-                        egui::ComboBox::from_id_salt("pref_language").width(260.0).selected_text(text(Type::Body, current)).show_ui(ui, |ui| {
-                            ui.selectable_value(&mut p.language, auto.to_string(), text(Type::Body, tr!("System language ({name})", name = crate::i18n::system_choice())));
+                        let (sys_code, sys_name) = crate::i18n::system_choice();
+                        let (sys_logical, sys_visual) = system_choice_labels(sys_code, sys_name);
+                        let current = if p.language == auto {
+                            sys_visual.clone()
+                        } else {
+                            let name = crate::i18n::name_of(&p.language);
+                            crate::i18n::display_for(name.as_ref(), crate::i18n::is_rtl_code(&p.language)).into_owned()
+                        };
+                        egui::ComboBox::from_id_salt("pref_language").width(260.0).selected_text(crate::theme::text_logical(Type::Body, current)).show_ui(ui, |ui| {
+                            ui.selectable_value(&mut p.language, auto.to_string(), crate::theme::text_logical(Type::Body, &sys_visual)).named(&sys_logical);
                             ui.separator();
                             for (code, name) in crate::i18n::offered() {
-                                ui.selectable_value(&mut p.language, code.to_string(), text(Type::Body, name));
+                                let label = crate::i18n::display_for(name, crate::i18n::is_rtl_code(code)).into_owned();
+                                ui.selectable_value(&mut p.language, code.to_string(), crate::theme::text_logical(Type::Body, label)).named(name);
                             }
                         })
                         .response
@@ -519,7 +527,7 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
                                         theme_act = Some(ThemeAct::Export);
                                     }
                                 });
-                                ui.add(egui::Label::new(text(Type::Caption, tr!("A theme is a small file that names colours for the interface's roles. A theme whose text would be hard to read is not used, and says which colours to change."))).wrap());
+                                crate::theme::wrapped_label(ui, Type::Caption, tr!("A theme is a small file that names colours for the interface's roles. A theme whose text would be hard to read is not used, and says which colours to change."));
                             }
                         });
                     });
@@ -539,8 +547,8 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
                     ui.add_space(4.0);
                     form_row(ui, LW, tr!("Preview"), |ui| {
                         ui.vertical(|ui| {
-                            ui.label(text(Type::Body, tr!("Layer names, menus and dialog text read like this.")));
-                            ui.label(text(Type::Data, tr!("Frame {frame} · {seconds} s · X {x} Y {y} · {keys}", frame = "0042", seconds = "1.75", x = "1280.5", y = "720.0", keys = crate::platform::shortcut_label("Ctrl+Shift+S"))));
+                            crate::theme::label(ui, text(Type::Body, tr!("Layer names, menus and dialog text read like this.")));
+                            crate::theme::label(ui, text(Type::Data, tr!("Frame {frame} · {seconds} s · X {x} Y {y} · {keys}", frame = "0042", seconds = "1.75", x = "1280.5", y = "720.0", keys = crate::platform::shortcut_label("Ctrl+Shift+S"))));
                         });
                     });
                     ui.add_space(4.0);
@@ -682,7 +690,8 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
                             let shown = crate::prefs::AUTOSAVE_INTERVALS.iter().find(|(s, _)| *s == p.autosave_secs).map_or_else(|| trn!("{n} second", "{n} seconds", p.autosave_secs), |(_, l)| crate::i18n::t(l).to_string());
                             egui::ComboBox::from_id_salt("pref_autosave_secs").width(160.0).selected_text(text(Type::Body, shown)).show_ui(ui, |ui| {
                                 for (secs, label) in crate::prefs::AUTOSAVE_INTERVALS {
-                                    ui.selectable_value(&mut p.autosave_secs, secs, text(Type::Body, crate::i18n::t(label)));
+                                    let label_text = crate::i18n::t(label);
+                                    ui.selectable_value(&mut p.autosave_secs, secs, text(Type::Body, label_text)).named(label_text);
                                 }
                             })
                             .response
@@ -799,7 +808,7 @@ fn licenses(app: &mut App, ctx: &egui::Context) {
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 for (title, body) in NOTICES {
                     egui::CollapsingHeader::new(crate::i18n::t(title)).id_salt(("notice", *title)).default_open(*title == "NOTICE").show(ui, |ui| {
-                        ui.add(egui::Label::new(text(Type::Path, *body)).wrap());
+                        ui.add(egui::Label::new(crate::theme::text_logical(Type::Path, *body)).wrap());
                     });
                 }
             });
@@ -1176,4 +1185,34 @@ fn shortcut_sheet(app: &mut App, ctx: &egui::Context) {
     }
     ctx.data_mut(|d| d.insert_temp(state_id, st));
     app.show_shortcuts = open;
+}
+
+/// Returns `(logical, visual)` labels for the "System language ({name})" picker entry.
+/// When the active UI is LTR and the system language is RTL, only the embedded name is
+/// reordered with its own script direction; when the active UI is RTL, the full phrase
+/// is reordered once by `i18n::display`.
+fn system_choice_labels(sys_code: &str, sys_name: &str) -> (String, String) {
+    let logical = tr!("System language ({name})", name = sys_name);
+    let visual = if crate::i18n::is_rtl() {
+        crate::i18n::display(&logical).into_owned()
+    } else {
+        let embedded = crate::i18n::display_for(sys_name, crate::i18n::is_rtl_code(sys_code));
+        tr!("System language ({name})", name = embedded)
+    };
+    (logical, visual)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::system_choice_labels;
+
+    #[test]
+    fn system_choice_labels_reorder_embedded_rtl_name_when_ui_is_ltr() {
+        let prev = crate::i18n::code();
+        crate::i18n::set_language("en");
+        let (logical, visual) = system_choice_labels("he", "עברית");
+        crate::i18n::set_language(prev);
+        assert_eq!(logical, "System language (עברית)");
+        assert_eq!(visual, "System language (תירבע)");
+    }
 }

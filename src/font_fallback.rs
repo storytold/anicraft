@@ -33,7 +33,7 @@ const MAX_SHAPE_DEPTH: u32 = 8;
 const JAPANESE: [&str; 6] = ["Yu Gothic UI", "Meiryo UI", "Meiryo", "Hiragino Sans", "Noto Sans CJK JP", "Noto Sans JP"]; // i18n-exempt: font family names
 const CHINESE: [&str; 8] = ["Microsoft YaHei UI", "Microsoft YaHei", "Microsoft JhengHei UI", "PingFang SC", "PingFang TC", "Noto Sans CJK SC", "Noto Sans SC", "WenQuanYi Micro Hei"]; // i18n-exempt: font family names
 const KOREAN: [&str; 4] = ["Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans CJK KR", "Noto Sans KR"]; // i18n-exempt: font family names
-const OTHERS: [&str; 14] = ["Segoe UI", "Nirmala UI", "Leelawadee UI", "Segoe UI Symbol", "Geeza Pro", "Thonburi", "Kohinoor Devanagari", "Arial Unicode MS", "Noto Sans", "Noto Sans Arabic", "Noto Sans Devanagari", "Noto Sans Thai", "DejaVu Sans", "Droid Sans Fallback"]; // i18n-exempt: font family names
+const OTHERS: [&str; 17] = ["Segoe UI", "Nirmala UI", "Leelawadee UI", "Segoe UI Symbol", "SF Hebrew", "Arial Hebrew", "Geeza Pro", "Thonburi", "Kohinoor Devanagari", "Arial Unicode MS", "Noto Sans", "Noto Sans Hebrew", "Noto Sans Arabic", "Noto Sans Devanagari", "Noto Sans Thai", "DejaVu Sans", "Droid Sans Fallback"]; // i18n-exempt: font family names
 
 /// The families to try first, for a system whose language is `locale` (`ja-JP`, `zh_CN`, …):
 /// Han characters are drawn in the reader's own language's face when it is known.

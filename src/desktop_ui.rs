@@ -124,7 +124,7 @@ pub fn offer(app: &mut App, ctx: &egui::Context) {
             ui.set_width(340.0);
             ui.label(text(Type::Label, tr!("Add AniCraft to your applications menu?")).strong());
             ui.add_space(4.0);
-            ui.add(egui::Label::new(text(Type::Caption, tr!("Start it from the menu like any app, and open .anicraft, .fla and .xfl files by double-clicking them. Only your own data folder changes; Preferences › About removes it again."))).wrap());
+            crate::theme::wrapped_label(ui, Type::Caption, tr!("Start it from the menu like any app, and open .anicraft, .fla and .xfl files by double-clicking them. Only your own data folder changes; Preferences › About removes it again."));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 let add = egui::Button::new(text(Type::Body, tr!("Add to Menu")).color(T.on_fill).strong()).fill(T.accent).min_size(egui::vec2(110.0, crate::theme::TARGET));
@@ -189,7 +189,7 @@ pub fn about(app: &App, ui: &mut egui::Ui, label_w: f32) -> Option<Act> {
             if ui.add_enabled(there, egui::Button::new(text(Type::Body, tr!("Open")))).on_disabled_hover_text(tr!("Not made yet")).clicked() {
                 act = Some(Act::Open(dir.clone()));
             }
-            ui.add(egui::Label::new(text(Type::Path, dir.display().to_string()).color(if there { T.text } else { T.text_faint })).wrap());
+            ui.add(egui::Label::new(crate::theme::text_logical(Type::Path, dir.display().to_string()).color(if there { T.text } else { T.text_faint })).wrap());
         });
     }
     if let Some(d) = &app.desktop {
@@ -202,7 +202,7 @@ pub fn about(app: &App, ui: &mut egui::Ui, label_w: f32) -> Option<Act> {
                     Entry::Other(other, _) => (tr!("The menu starts another AppImage: {path}", path = other.display()), Some((tr!("Use This Copy"), Act::Add))),
                     Entry::Foreign => (tr!("A menu entry of AniCraft's name that AniCraft didn't add is there; it is left as it is").to_string(), None),
                 };
-                ui.add(egui::Label::new(text(Type::Body, state)).wrap());
+                crate::theme::wrapped_label(ui, Type::Body, &state);
                 ui.horizontal(|ui| {
                     if let Some((label, a)) = button
                         && ui.button(text(Type::Body, label)).clicked()
@@ -213,7 +213,7 @@ pub fn about(app: &App, ui: &mut egui::Ui, label_w: f32) -> Option<Act> {
                         act = Some(Act::Remove);
                     }
                 });
-                ui.add(egui::Label::new(text(Type::Path, d.data_home.display().to_string()).color(T.text_faint)).wrap());
+                ui.add(egui::Label::new(crate::theme::text_logical(Type::Path, d.data_home.display().to_string()).color(T.text_faint)).wrap());
             });
         });
     }

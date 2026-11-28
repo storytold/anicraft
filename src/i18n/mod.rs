@@ -39,23 +39,26 @@ pub const PSEUDO: &str = "pseudo";
 /// Languages the interface can be drawn in today: written left to right, in scripts the bundled
 /// faces cover and egui lays out a letter at a time (Latin, Greek, Cyrillic). A catalog for any
 /// other locale is embedded but not offered (docs/localisation.md › Scripts and direction).
-/// A regional variant (`es-mx`) is ready when its language is. Georgian is not listed here: its
-/// face is not bundled, so [`ready_codes`] adds it only when the build embedded Noto Sans
-/// Georgian from craft-fonts. Hebrew (`he`) is not offered at all yet: the build may embed Noto
-/// Sans Hebrew so Hebrew names draw, but the interface needs bidi layout in egui first.
+/// A regional variant (`es-mx`) is ready when its language is. Georgian and Hebrew are not listed
+/// here: their faces are not bundled in the repository, so [`ready_codes`] adds them when the
+/// build embedded their craft-fonts face (`Geor` / `Hebr`).
 pub const READY: &[&str] = &[
-    "az", "bg", "bs", "ca", "cs", "da", "de", "el", "es", "et", "fi", "fr", "gl", "hr", "hu", "id", "it", "kk", "lt", "lv", "nb", "nl", "pl", "pt", "pt-br", "ro", "ru", "sk", "sl", "sq", "sr", "sr-latn", "sv", "tr", "uk",
+    "az", "bg", "bs", "ca", "cs", "da", "de", "el", "es", "et", "fi", "fr", "gl", "hr", "hu", "id", "it", "kk", "lt", "lv", "nb", "nl", "pl", "pt",
+    "pt-br", "ro", "ru", "sk", "sl", "sq", "sr", "sr-latn", "sv", "tr", "uk",
 ];
 
 /// [`READY`] plus the languages whose script needs a craft-fonts face this build embedded.
 pub fn ready_codes() -> Vec<&'static str> {
-    ready_with(crate::theme::georgian_font().is_some())
+    ready_with(crate::theme::georgian_font().is_some(), crate::theme::hebrew_font().is_some())
 }
 
-fn ready_with(georgian_face: bool) -> Vec<&'static str> {
+fn ready_with(georgian_face: bool, hebrew_face: bool) -> Vec<&'static str> {
     let mut codes = READY.to_vec();
     if georgian_face {
         codes.push("ka");
+    }
+    if hebrew_face {
+        codes.push("he");
     }
     codes
 }
@@ -63,9 +66,7 @@ fn ready_with(georgian_face: bool) -> Vec<&'static str> {
 /// Whether `code` names a language written right to left (`ar`, `ckb`, `dv`, `fa`, `he`, `ps`,
 /// `sd`, `ug`, `ur`, `yi`, and the legacy `iw`). A script subtag (ISO 15924, in its RFC 5646
 /// place after the language and any extended-language subtags) decides before the language's
-/// default does: `ku-Arab` is, `sd-Deva` is not. Nothing lays out right to left yet (ADR 0040):
-/// this is the one place that will answer the question when egui can.
-#[cfg_attr(not(test), allow(dead_code))]
+/// default does: `ku-Arab` is, `sd-Deva` is not.
 pub fn is_rtl_code(code: &str) -> bool {
     let normalized = Languages::normalize_code(code.split(['.', '@']).next().unwrap_or(code));
     let mut parts = normalized.split('-').filter(|p| !p.is_empty());
@@ -81,9 +82,97 @@ pub fn is_rtl_code(code: &str) -> bool {
 }
 
 /// Whether the interface language in use is written right to left.
-#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_rtl() -> bool {
     is_rtl_code(code())
+}
+
+/// Converts a single logical line into left-to-right visual order for egui 0.36 using UAX #9.
+/// Keeps leading numeric signs (`-5`, `+12.5`) and leading filename/path prefixes (`.env`,
+/// `.anicraft`, `~/...`, `/tmp/...`) attached to their tokens when not preceded by an RTL letter.
+fn visual_rtl_line(line: &str) -> String {
+    use craft_text::bidi::{Direction, Override, Paragraph, mirror};
+
+    if line.is_empty() {
+        return String::new();
+    }
+    let is_rtl_char = |c: char| matches!(c, '\u{0590}'..='\u{05FF}' | '\u{0600}'..='\u{06FF}' | '\u{0700}'..='\u{07BF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}');
+    let mut overrides = Vec::new();
+    let bytes = line.as_bytes();
+    let mut prev_char: Option<char> = None;
+    let mut skip_until = 0usize;
+    for (idx, ch) in line.char_indices() {
+        if idx < skip_until {
+            prev_char = Some(ch);
+            continue;
+        }
+        let next = bytes.get(idx + ch.len_utf8()).copied();
+        if matches!(ch, '-' | '+') && next.is_some_and(|b| b.is_ascii_digit()) && !prev_char.is_some_and(is_rtl_char) {
+            let mut end = idx + 1;
+            while end < bytes.len() {
+                let b = bytes[end];
+                if b.is_ascii_digit() || (matches!(b, b'.' | b',') && bytes.get(end + 1).is_some_and(u8::is_ascii_digit)) {
+                    end += 1;
+                } else {
+                    break;
+                }
+            }
+            overrides.push(Override { range: idx..end, rtl: false });
+            skip_until = end;
+        } else if matches!(ch, '.' | '/' | '~')
+            && next.is_some_and(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-' | b'/' | b'.'))
+            && !prev_char.is_some_and(|p| is_rtl_char(p) || p.is_ascii_alphanumeric() || p == '/')
+        {
+            let mut end = idx + 1;
+            while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || matches!(bytes[end], b'.' | b'/' | b'_' | b'-')) {
+                end += 1;
+            }
+            overrides.push(Override { range: idx..end, rtl: false });
+            skip_until = end;
+        }
+        prev_char = Some(ch);
+    }
+
+    let para = Paragraph::with_overrides(line, Direction::Rtl, &overrides);
+    let mut out = String::with_capacity(line.len());
+    for run in para.visual_runs(0..line.len()) {
+        let Some(slice) = line.get(run.range.clone()) else { continue };
+        if run.is_rtl() {
+            for ch in slice.chars().rev() {
+                out.push(mirror(ch).unwrap_or(ch));
+            }
+        } else {
+            out.push_str(slice);
+        }
+    }
+    out
+}
+
+/// Visual representation of `text` for egui 0.36 rendering when `rtl` is true; `text` itself
+/// remains in logical reading order for accessibility labels, search, and wrapping.
+pub fn display_for(text: &str, rtl: bool) -> Cow<'_, str> {
+    if !rtl || text.is_empty() {
+        return Cow::Borrowed(text);
+    }
+    if !text.contains('\n') {
+        return Cow::Owned(visual_rtl_line(text));
+    }
+    let mut out = String::with_capacity(text.len());
+    for (i, raw) in text.split('\n').enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        let (line, has_cr) = raw.strip_suffix('\r').map_or((raw, false), |s| (s, true));
+        out.push_str(&visual_rtl_line(line));
+        if has_cr {
+            out.push('\r');
+        }
+    }
+    Cow::Owned(out)
+}
+
+/// Visual representation of `text` for the active interface language (`is_rtl()`).
+pub fn display(text: &str) -> Cow<'_, str> {
+    display_for(text, is_rtl())
 }
 
 enum Kind {
@@ -101,7 +190,8 @@ struct Language {
 /// The last subtag is a region (`br`, `419`): the locale falls back to its base language.
 fn regional_base(code: &str) -> Option<&str> {
     let (base, region) = code.rsplit_once('-')?;
-    let is_region = (region.len() == 2 && region.chars().all(|c| c.is_ascii_alphabetic())) || (region.len() == 3 && region.chars().all(|c| c.is_ascii_digit()));
+    let is_region =
+        (region.len() == 2 && region.chars().all(|c| c.is_ascii_alphabetic())) || (region.len() == 3 && region.chars().all(|c| c.is_ascii_digit()));
     is_region.then_some(base)
 }
 
@@ -298,13 +388,20 @@ pub fn known(pref: &str) -> bool {
 /// pseudo-locale is listed in debug builds and while it is in use.
 pub fn offered() -> Vec<(&'static str, &'static str)> {
     let now = current();
-    LANGUAGES.list.iter().enumerate().filter(|(i, l)| !matches!(l.kind, Kind::Pseudo) || cfg!(debug_assertions) || *i == now).map(|(_, l)| (l.code.as_str(), l.name.as_str())).collect()
+    LANGUAGES
+        .list
+        .iter()
+        .enumerate()
+        .filter(|(i, l)| !matches!(l.kind, Kind::Pseudo) || cfg!(debug_assertions) || *i == now)
+        .map(|(_, l)| (l.code.as_str(), l.name.as_str()))
+        .collect()
 }
 
-/// The name of the language [`AUTO`] picks on this computer, for the picker's first entry.
-pub fn system_choice() -> &'static str {
+/// The resolved `(code, name)` pair [`AUTO`] picks on this computer, for the picker's first entry.
+pub fn system_choice() -> (&'static str, &'static str) {
     let system = if cfg!(test) { None } else { crate::platform::system_locale() };
-    LANGUAGES.get(LANGUAGES.resolve(AUTO, system.as_deref())).name.as_str()
+    let lang = LANGUAGES.get(LANGUAGES.resolve(AUTO, system.as_deref()));
+    (lang.code.as_str(), lang.name.as_str())
 }
 
 /// A language's own name, for the picker (the code itself when unknown).
@@ -354,7 +451,11 @@ impl Languages {
     fn count<'a>(&'a self, i: usize, one: &'static str, other: &'static str, n: u64) -> &'a str {
         match self.get(i).kind {
             Kind::English => {
-                if n == 1 { one } else { other }
+                if n == 1 {
+                    one
+                } else {
+                    other
+                }
             }
             Kind::Pseudo => pseudo_static(if n == 1 { one } else { other }),
             Kind::Catalog(_) => self.plural(i, one, other, n),
