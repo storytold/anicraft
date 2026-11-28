@@ -23,6 +23,8 @@ anicraft-guide.workspace = true
 # The legacy Flash container, for `fla-dump` (ADR 0120).
 anicraft-fla.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+clap.workspace = true
 
 # The live control port's per-run token (ADR 0104): the operating system's random numbers.
 # MIT OR Apache-2.0, already in the tree. Not for the web: a page has no sockets, so the control
@@ -31,6 +33,9 @@ serde_json.workspace = true
 getrandom = "0.3"
 
 [dev-dependencies]
+# Man pages and shell completions, written by `examples/man-and-completions.rs` (RFC-0018 rule 1.9).
+clap_complete.workspace = true
+clap_mangen.workspace = true
 # Exporter plug-in fixtures written in WebAssembly text (Apache-2.0 WITH LLVM-exception).
 wat = "1.228"
 

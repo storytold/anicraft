@@ -3,7 +3,8 @@
 //! 0122), and each step is timed. `--stroke-file` times the same steps on the artwork of a
 //! document instead, so a reported file can be measured as it is.
 
-use crate::{Args, avg_ms, open_session, round};
+use crate::args::BenchArgs;
+use crate::{CliError, Source, avg_ms, open_session, round};
 use anicraft_engine::Session;
 use serde_json::{Value, json};
 use std::time::Instant;
@@ -38,23 +39,22 @@ fn segments(s: &Session) -> usize {
     s.display_list().items.iter().map(|i| i.path.cmds.len()).sum()
 }
 
-pub fn bench_stroke(a: &Args) -> Result<String, String> {
-    let file = a.flag("stroke-file");
-    let samples = match a.flag("stroke") {
-        Some("yes" | "true") | None => DEFAULT_SAMPLES,
-        Some(v) => v.parse::<u32>().map_err(|_| "--stroke takes a number of samples (or yes)".to_string())?.clamp(2, MAX_SAMPLES),
-    };
+pub fn bench_stroke(a: &BenchArgs) -> Result<String, CliError> {
+    let file = a.stroke_file.as_deref();
+    let samples = a.stroke.unwrap_or(DEFAULT_SAMPLES).clamp(2, MAX_SAMPLES);
     let mut out = json!({"build": if cfg!(debug_assertions) { "debug (use --release for real numbers)" } else { "release" }});
     let mut s = match file {
         Some(p) => {
-            out["file"] = json!(p);
-            open_session(Some(p))?
+            out["file"] = json!(p.display().to_string());
+            open_session(Source::File(p))?
         }
         None => {
             let mut s = Session::default();
             let _ = s.execute("draw.object_drawing", &json!({"on": false}));
             let t = Instant::now();
-            let v = s.execute("draw.brush", &json!({"points": scribble(samples), "size": 10, "color": "#000000", "object": false})).map_err(|e| e.to_string())?;
+            let v = s
+                .execute("draw.brush", &json!({"points": scribble(samples), "size": 10, "color": "#000000", "object": false}))
+                .map_err(|source| CliError::Command { id: "draw.brush".into(), source })?;
             out["samples"] = json!(samples);
             out["draw_brush_ms"] = json!(ms(t));
             out["pieces"] = json!(v["elements"].as_array().map_or(0, Vec::len));
@@ -83,9 +83,9 @@ pub fn bench_stroke(a: &Args) -> Result<String, String> {
 
     // The reporter's steps: select it, move it, let go of the mouse (it floats), deselect (it
     // merges into the drawing).
-    let mut step = |s: &mut Session, key: &str, id: &str, p: Value| -> Result<Value, String> {
+    let mut step = |s: &mut Session, key: &str, id: &str, p: Value| -> Result<Value, CliError> {
         let t = Instant::now();
-        let v = s.execute(id, &p).map_err(|e| format!("{id}: {e}"))?;
+        let v = s.execute(id, &p).map_err(|source| CliError::Command { id: id.to_owned(), source })?;
         out[key] = json!(ms(t));
         Ok(v)
     };
@@ -97,5 +97,5 @@ pub fn bench_stroke(a: &Args) -> Result<String, String> {
     let _ = s.undo();
     out["undo_ms"] = json!(ms(t));
     out["segments_after"] = json!(segments(&s));
-    serde_json::to_string_pretty(&out).map_err(|e| e.to_string())
+    Ok(serde_json::to_string_pretty(&out)?)
 }
