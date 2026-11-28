@@ -96,7 +96,7 @@ fn stage_layers_frames_and_tweens() {
     assert_eq!(ball.keyframes.len(), 2);
     assert_eq!((ball.keyframes[0].start, ball.keyframes[0].duration), (0, 10));
     assert_eq!(ball.keyframes[0].label, "start");
-    assert!(matches!(ball.keyframes[0].tween.as_ref().map(|t| t.easing.clone()), Some(anicraft_doc::Easing::Classic(e)) if e == -50.0));
+    assert!(matches!(ball.keyframes[0].tween.as_ref().map(|t| t.easing.clone()), Some(anicraft_doc::Easing::Classic(e)) if e == 50.0));
     assert!(doc.timeline(0).layers[1].locked);
     assert_eq!((doc.timeline(0).layers[0].height(), doc.timeline(0).layers[1].height()), (1, 2), "Layer Properties height");
     assert_eq!(doc.timeline(0).layers[2].kind, LayerKind::Guide);
@@ -337,7 +337,7 @@ fn shape_tweens_come_across_as_shape_tweens() {
     let k = &d.timeline(0).layers[0].keyframes[0];
     let t = k.tween.clone().expect("a tween");
     assert_eq!(t.kind, anicraft_doc::TweenKind::Shape);
-    assert!(matches!(t.easing, anicraft_doc::Easing::Classic(a) if a == 40.0));
+    assert!(matches!(t.easing, anicraft_doc::Easing::Classic(a) if a == -40.0));
     assert!(report.skipped.keys().all(|s| !s.contains("shape tween")), "{:?}", report.skipped);
     // Halfway, the square has morphed towards the triangle.
     let mid = evaluate(&d, 5).items[0].path.bounds();
@@ -532,11 +532,11 @@ fn eases_names_and_loop_modes_the_corpus_found_missing() {
     assert_eq!(tween(0).easing, Easing::Custom(std::sync::Arc::new(two)), "a two-segment curve, exactly");
     assert!((tween(0).easing.apply(0.5) - 0.5).abs() < 1e-5 && tween(0).easing.apply(0.25) < 0.4);
     let per = tween(1);
-    assert_eq!(per.easing, Easing::Classic(-50.0));
+    assert_eq!(per.easing, Easing::Classic(50.0));
     assert_eq!(per.ease(EaseGroup::Position), &Easing::CubicBezier(0.5, 0.0, 0.5, 1.0));
     assert!(matches!(per.ease(EaseGroup::Rotation), Easing::Custom(c) if c.points().len() == 3));
     assert_eq!((per.has_own(EaseGroup::Scale), per.groups.len()), (false, 2));
-    assert_eq!((tween(2).easing, tween(3).easing), (Easing::Linear, Easing::Classic(10.0)));
+    assert_eq!((tween(2).easing, tween(3).easing), (Easing::Linear, Easing::Classic(-10.0)));
     assert_eq!(report.skipped.get("custom eases of unknown properties (left out)"), Some(&1));
     assert_eq!(report.skipped.get("custom eases without their curve (drawn with the simple ease)"), Some(&1));
     assert_eq!(report.skipped.get("custom ease curves with a broken point list (drawn with the simple ease)"), Some(&1));

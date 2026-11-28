@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Eased tweens from Animate files ease the right way** (#163). A classic tween's ease in an
+  imported `.fla` or XFL file played back the wrong way round: one that should start slowly
+  and speed up started quickly and slowed down, and the other way about. Both importers now
+  read the ease as Flash draws it, checked against Flash 8's own exported frames.
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.
