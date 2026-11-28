@@ -220,12 +220,6 @@ impl StageView {
     }
 }
 
-/// The percentage being typed, with edits tracked across frames until it is submitted.
-pub struct ZoomDraft {
-    pub text: String,
-    pub edited: bool,
-}
-
 /// In-progress pointer gesture on the stage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
@@ -286,10 +280,12 @@ pub enum Drag {
     /// Moving the whole motion path (ADR 0038), from stage point `last` last frame.
     MotionMove { last: egui::Pos2 },
     /// Camera tool (ADR 0027): panning from screen point `last`, turning from pointer angle
-    /// `last` (radians about the camera centre), or zooming with the wheel until `until`
-    /// (seconds; the turns of one burst are one undo step).
-    CameraPan { last: egui::Pos2 },
-    CameraRotate { last: f32 },
+    /// `last` (radians about the camera centre), trucking from corner distance `last_dist` on
+    /// `frame`, or zooming with the wheel until `until` (seconds; the turns of one burst are one
+    /// undo step).
+    CameraPan { frame: u32, last: egui::Pos2 },
+    CameraRotate { frame: u32, last: f32 },
+    CameraZoom { frame: u32, last_dist: f32 },
     CameraWheel { until: f64 },
     /// Bone tool (ADR 0043): drawing a bone from instance `from` (or inside shape `from`, or on
     /// from a shape bone's joint node, ADR 0071), joint `head` to `cur` (stage). `parent`: the
@@ -400,8 +396,8 @@ pub struct App {
     /// Onion skin and Edit Multiple Frames (ADR 0047): view state, passed with each render.
     pub onion: anicraft_engine::onion::OnionSkin,
     pub onion_ui: crate::onion::OnionUi,
-    /// View › Preview Through Camera: the stage shows what the movie shows (ADR 0027).
-    pub camera_preview: bool,
+    /// Selected camera keyframe start frames in the Timeline (authoritative target for the active camera box).
+    pub camera_key_sel: std::collections::BTreeSet<u32>,
     /// The tool in hand last frame (picking the Camera tool adds a camera).
     pub last_tool: Tool,
     pub status: Option<Status>,
@@ -538,7 +534,7 @@ pub struct App {
     pub xf: crate::xform::State,
     /// The zoom edit-bar field's draft while it has the keyboard (view state, not undoable):
     /// `None` shows the current zoom, `Some` is what is being typed.
-    pub zoom_text: Option<ZoomDraft>,
+    pub zoom_text: Option<String>,
     /// The bone picked on the stage (ADR 0043; view state).
     pub bone_sel: Option<anicraft_engine::doc::BoneId>,
     /// The Bind tool's options: Paint Weights, the brush, the focused point (ADR 0090).
@@ -841,7 +837,7 @@ impl App {
             play_acc: 0.0,
             onion: crate::onion::from_prefs(&prefs.onion),
             onion_ui: crate::onion::OnionUi::default(),
-            camera_preview: false,
+            camera_key_sel: std::collections::BTreeSet::new(),
             last_tool: Tool::Select,
             status: None,
             left_out_said: false,
@@ -1032,19 +1028,6 @@ impl App {
         app
     }
 
-    /// View › Preview Through Camera (ADR 0027). With no camera yet there is nothing to look
-    /// through, so it says how to add one; when the camera layer is hidden, it reminds to show it.
-    pub fn toggle_camera_preview(&mut self) {
-        self.camera_preview = !self.camera_preview;
-        if self.camera_preview {
-            if self.s.timeline().camera_layer().is_none() {
-                self.status_ok(tr!("Preview through camera is on; add a camera (the camera button on the timeline, or the Camera tool) to look through it."));
-            } else if self.s.timeline().camera_layer().is_some_and(|l| !l.visible) {
-                self.status_ok(tr!("Preview through camera is on, but the camera layer is hidden. Show the layer to look through it."));
-            }
-        }
-    }
-
     /// The Undo key as this computer shows it (rebindable; ⌘Z on macOS), for messages that
     /// say how to undo.
     pub fn undo_key(&self) -> String {
@@ -1104,6 +1087,16 @@ impl App {
                 }
                 if id == "view.hide_edges" {
                     self.status_ok(if self.s.aids.hide_edges { tr!("Selection edges hidden") } else { tr!("Selection edges shown") });
+                }
+                if id == "layer.select" {
+                    let is_cam = self.s.timeline().camera_layer().is_some_and(|c| c.id == self.s.layer);
+                    if is_cam {
+                        self.tool = Tool::Camera;
+                        self.last_tool = Tool::Camera;
+                    } else if self.tool == Tool::Camera {
+                        self.tool = Tool::Select;
+                        self.last_tool = Tool::Select;
+                    }
                 }
                 Some(v)
             }
@@ -2991,7 +2984,7 @@ impl App {
                 }
                 self.run("timeline.goto", json!({"frame": if which == "hints" { 0 } else { 15 }}));
             }
-            Some(which @ ("camera" | "cameraview")) => {
+            Some("camera" | "cameraview") => {
                 // The sample seen by a camera that pushes in and turns over the first second,
                 // the far background a layer deep; the Camera tool in hand at frame 12.
                 self.run("camera.add", json!({}));
@@ -3004,9 +2997,8 @@ impl App {
                 self.run("timeline.goto", json!({"frame": 12}));
                 self.tool = Tool::Camera;
                 self.last_tool = Tool::Camera;
-                self.camera_preview = which == "cameraview";
             }
-            Some(which @ ("layerdepth" | "layerdepthview")) => {
+            Some("layerdepth" | "layerdepthview") => {
                 // A parallax scene mid-pan (ADR 0082): the camera pans right and pushes in over
                 // the first second; the sky is far back, the sun and hills between, the star
                 // attached to the camera like a title; the Layer Depth panel open, frame 12.
@@ -3025,7 +3017,6 @@ impl App {
                 }
                 self.run("timeline.goto", json!({"frame": 12}));
                 self.tool = Tool::Select;
-                self.camera_preview = which == "layerdepthview";
                 self.show_panel(crate::dock::Panel::LayerDepth);
             }
             Some("bones") => {
@@ -4141,9 +4132,7 @@ impl App {
 
     pub fn view_center_stage(&self) -> egui::Vec2 {
         let size = egui::vec2(self.s.doc.stage.width as f32, self.s.doc.stage.height as f32);
-        let zoom = self.view.zoom;
-        let divisor = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1e-3 };
-        size * 0.5 - self.view.pan / divisor
+        size * 0.5 - self.view.pan / self.view.zoom.max(1e-3)
     }
 
     pub fn zoom_by(&mut self, canvas: egui::Rect, screen: egui::Pos2, factor: f32, pixels_per_point: f32) {
@@ -4514,7 +4503,18 @@ impl App {
         if play {
             self.toggle_play();
         }
-        if nudge != egui::Vec2::ZERO && crate::onion::editing(self) {
+        if nudge != egui::Vec2::ZERO && self.tool == Tool::Camera && crate::camera_tool::active_camera(self).is_some() {
+            // While the Camera tool is active, arrow keys move the camera without touching artwork.
+            let frame = crate::camera_tool::active_target_frame(self);
+            let own = !self.s.in_gesture();
+            if own {
+                self.s.begin_gesture(tr_noop!("Move Camera")); // i18n-exempt: an undo label
+            }
+            self.run("camera.set", json!({"frame": frame, "dx": nudge.x, "dy": nudge.y}));
+            if own {
+                self.s.end_gesture();
+            }
+        } else if nudge != egui::Vec2::ZERO && crate::onion::editing(self) {
             crate::onion::nudge(self, anicraft_engine::geom::Vec2::new(nudge.x, nudge.y));
         } else if nudge != egui::Vec2::ZERO && !self.s.selection.is_empty() {
             // One undo step: the move, with raw shapes left floating where they land (ADR 0122).

@@ -336,32 +336,6 @@ fn groups(n: u32, width: u32) -> (u32, u32) {
     (x, g.div_ceil(x))
 }
 
-impl Plan {
-    /// Additional buffers beyond the index and edge buffers charged by the caller.
-    pub(crate) fn scratch_bytes(&self, op_heads: usize) -> u64 {
-        use super::scratch_allocation;
-        let uploads = scratch_allocation(4 * self.headers.len() as u64) + scratch_allocation(4 * op_heads as u64);
-        if self.op_rows == 0 {
-            return uploads;
-        }
-        let n = u64::from(self.op_tiles);
-        let mut len = n;
-        let mut sums = 4 * n;
-        let mut level_params = 0;
-        loop {
-            let blocks = len.div_ceil(u64::from(SCAN_BLOCK));
-            level_params += scratch_allocation(16);
-            if blocks <= 1 {
-                break;
-            }
-            sums += blocks;
-            len = blocks;
-        }
-        uploads + scratch_allocation(4 * (sums + 2))
-            + scratch_allocation(std::mem::size_of_val(self.input.as_slice()) as u64) + scratch_allocation(64) + level_params
-    }
-}
-
 /// The fine pass's index and pieces, binned on the GPU into `enc` from `plan`: the index with
 /// the tile headers at 0 and `op_heads` at `ops_at`. Only those are uploaded (through `queue`,
 /// ahead of `enc`'s submission): the entries' room starts zeroed on the GPU.

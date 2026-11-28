@@ -9,8 +9,8 @@ use crate::a11y::{self, Named};
 use crate::app::App;
 use crate::theme::{T, TARGET, Type, text, to_color32};
 use anicraft_engine::doc::camera::{FOCAL, MAX_DEPTH, MIN_DEPTH, parallax};
-use anicraft_engine::doc::{Layer, LayerKind};
-use egui::{Sense, Stroke, StrokeKind, pos2, vec2};
+use anicraft_engine::doc::{Camera, Layer, LayerKind};
+use egui::{Color32, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::json;
 
 /// Whether a layer of this kind has a depth (the camera, folders and guides don't).
@@ -80,13 +80,14 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     }
     let frame = app.s.frame;
     let tl = app.s.doc.timeline(app.s.scene).clone();
-    if tl.camera_layer().is_none() {
+    let Some(cam_layer) = tl.camera_layer() else {
         ui.label(text(Type::Caption, tr!("Depth works through the camera: deeper layers move and zoom less as it moves.")));
         if ui.button(tr!("Add Camera")).named(tr!("Add camera")).clicked() {
             app.run("camera.add", json!({}));
         }
         return;
-    }
+    };
+    let cam = tl.camera_state_at(frame, &app.s.doc.stage);
     // Nearest first; ties in timeline order (top first), as `layer.depths` lists them.
     let mut rows: Vec<(usize, &Layer)> = tl.layers.iter().enumerate().filter(|(_, l)| has_depth(l.kind)).map(|(i, l)| (i, &**l)).collect();
     rows.sort_by(|a, b| a.1.depth_at(frame).total_cmp(&b.1.depth_at(frame)).then(a.0.cmp(&b.0)));
@@ -94,11 +95,55 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
         ui.label(text(Type::Caption, tr!("Nearer")));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(text(Type::Caption, tr!("Farther"))));
     });
+    camera_diagram(ui, cam_layer, cam.as_ref());
     for (_, layer) in rows {
         ui.push_id(layer.id.0, |ui| layer_row(app, ui, layer, frame));
     }
     ui.add_space(4.0);
     ui.label(text(Type::Caption, tr!("Drag a layer along its track, or type its depth. The diamond keys the depth on this frame.")));
+}
+
+/// Visual representation of the camera in the Layer Depth panel: a ball icon at the camera's
+/// 3D depth position with radiating dotted lines marking its field of view across the layers.
+fn camera_diagram(ui: &mut egui::Ui, cam_layer: &Layer, cam: Option<&Camera>) {
+    ui.horizontal(|ui| {
+        ui.add_space(14.0);
+        let width = (ui.available_width() - 4.0).max(48.0);
+        let (diagram, resp) = ui.allocate_exact_size(vec2(width, TARGET * 1.35), Sense::hover());
+        let p = ui.painter();
+        let cy = diagram.center().y;
+        p.line_segment([pos2(diagram.left(), cy), pos2(diagram.right(), cy)], Stroke::new(1.0, T.separator));
+        let x0 = diagram.left() + track_pos(0.0) * diagram.width();
+        p.line_segment([pos2(x0, diagram.top() + 3.0), pos2(x0, diagram.bottom() - 3.0)], Stroke::new(1.0, T.text_faint));
+
+        let zoom = cam.map_or(1.0, |c| c.zoom).max(0.05);
+        let cam_depth = -FOCAL / zoom;
+        let ball_x = (diagram.left() + track_pos(cam_depth) * diagram.width()).clamp(diagram.left() + 7.0, diagram.right() - 7.0);
+        let ball = pos2(ball_x, cy);
+
+        let cam_color = to_color32(cam_layer.color);
+        let ray_color = if cam_layer.visible { cam_color } else { T.text_faint };
+        let span_x = (diagram.right() - 2.0 - ball_x).max(16.0);
+        let tan_half = (0.48 / zoom.clamp(0.4, 3.0)).clamp(0.14, 0.58);
+        let max_dy = (diagram.height() * 0.44).min(span_x * tan_half);
+        for k in [-1.0_f32, -0.5, 0.0, 0.5, 1.0] {
+            let end = pos2(ball_x + span_x, cy + k * max_dy);
+            let delta = end - ball;
+            let len = delta.length();
+            let dir = delta / len.max(1.0);
+            let mut d = 8.5;
+            while d <= len {
+                p.circle_filled(ball + dir * d, 1.1, ray_color);
+                d += 4.5;
+            }
+        }
+
+        p.circle(ball, 6.0, ray_color, Stroke::new(1.5, T.text));
+        p.circle_filled(ball + vec2(-1.8, -1.8), 1.6, Color32::WHITE);
+
+        let tip = tr!("Camera · zoom {zoom}% · {dist} px from stage", zoom = format!("{:.0}", zoom * 100.0), dist = format!("{:.0}", FOCAL / zoom));
+        resp.on_hover_text(tip);
+    });
 }
 
 /// One layer: its colour and name, the track with its handle, the value, the key and Attach.
@@ -170,5 +215,22 @@ mod tests {
             assert!((track_depth(track_pos(d)) - d).abs() <= 1.0, "{d}");
         }
         assert_eq!(track_depth(f32::NAN), MIN_DEPTH);
+    }
+
+    #[test]
+    fn layer_depth_panel_draws_camera_ball_and_radiating_dotted_lines() {
+        let ctx = egui::Context::default();
+        let session = anicraft_engine::Session::new(anicraft_engine::doc::sample::demo());
+        let mut app = App::with_context(&ctx, session, Some(std::path::PathBuf::from("unused.png")));
+        assert!(app.run("camera.add", json!({})).is_some());
+        let mut shape_count = 0usize;
+        let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 600.0))), ..Default::default() }, |ui| {
+            let before = ui.painter().add(egui::Shape::Noop).0;
+            panel(&mut app, ui);
+            shape_count = ui.painter().add(egui::Shape::Noop).0 - before;
+        });
+        out.textures_delta.clear();
+        // Ball circle + highlight + 5 radiating dotted rays (multiple dots each) + layer tracks.
+        assert!(shape_count > 30, "expected camera ball and radiating dotted lines, got {shape_count} shapes");
     }
 }

@@ -497,8 +497,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         let gone = sel.layers(&app.s.timeline().layers).is_empty();
         if gone || app.playing || (app.tl_drag == TlDrag::None && !(f0..=f1).contains(&app.s.frame)) {
             app.frame_sel = None;
+            app.camera_key_sel.clear();
         }
     }
+    crate::camera_tool::sync_key_selection(app);
 
     // ---- body -----------------------------------------------------------------------------
     let body = ui.available_rect_before_wrap();
@@ -719,6 +721,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             // and Shift+F6 on every layer that reaches the playhead, F6 and F7 on the active
             // layer (ADR 0131).
             app.frame_sel = None;
+            app.camera_key_sel.clear();
         }
     // The onion menu on a right-click, as the markers live here (ADR 0047).
     ruler_resp.context_menu(|ui| crate::onion::menu(app, ui));
@@ -846,9 +849,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 painter.line_segment([g.left_bottom(), g.right_top()], Stroke::new(1.5, c_off));
             }
         }
-        // Attached to the camera: the camera glyph, bright when attached.
+        // Attached to the camera: active highlight + camera glyph when attached.
         if let Some(at) = attach_t {
-            icons::paint(&painter, glyph(at), Icon::Camera, if layer.attached { T.accent_text } else { c_off });
+            if layer.attached {
+                painter.rect_filled(at, T.rc(), T.active);
+            }
+            icons::paint(&painter, glyph(at), Icon::Camera, if layer.attached { T.on_active } else { c_off });
         }
         // outline swatch
         let sw = Rect::from_center_size(outl.center(), vec2(10.0, 10.0));
@@ -937,7 +943,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if let Some(at) = attach_t {
             let rr = ui.interact(at, ui.scope_id().with(("attach", layer.id.0)), Sense::click());
             a11y::control(ui, &rr, Role::CheckBox, &tr!("Attach {name} to camera", name = name), Some(layer.attached));
-            if rr.on_hover_text(tr!("Attach Layer to Camera: the layer stays where it is on screen while the camera moves (titles, HUDs)")).clicked() {
+            if rr.on_hover_text(tr!("Attach to Camera")).clicked() {
                 app.run("layer.set_attached", json!({"layer": layer.id.0}));
             }
         }
@@ -1028,10 +1034,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button(tr!("Preview Through Camera")).clicked() {
-                    app.toggle_camera_preview();
-                    ui.close();
-                }
                 if ui.button(tr!("Remove Camera")).clicked() {
                     app.request("camera.remove", json!({}));
                     ui.close();
@@ -1191,7 +1193,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let er = Rect::from_center_size(pos2(x1 - cell_w * 0.5 - 1.0, kc.y + 2.0), vec2(5.0, 7.0));
                 cp.rect_stroke(er, 0.0, Stroke::new(1.2, mark), StrokeKind::Inside);
             }
-            if empty {
+            if is_camera {
+                let selected_cam = app.camera_key_sel.contains(&k.start);
+                let fill = if selected_cam { to_color32(layer.color) } else { mark };
+                let r = if selected_cam { 5.0 } else { 4.0 };
+                let pts = vec![kc + vec2(0.0, -r), kc + vec2(r, 0.0), kc + vec2(0.0, r), kc + vec2(-r, 0.0)];
+                if empty {
+                    cp.add(egui::Shape::closed_line(pts, Stroke::new(1.5, fill)));
+                } else {
+                    cp.add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, T.ink)));
+                }
+                if selected_cam {
+                    let r2 = r + 2.5;
+                    let ring = vec![kc + vec2(0.0, -r2), kc + vec2(r2, 0.0), kc + vec2(0.0, r2), kc + vec2(-r2, 0.0)];
+                    cp.add(egui::Shape::closed_line(ring, Stroke::new(1.5, T.text)));
+                }
+            } else if empty {
                 cp.circle_stroke(kc, 3.5, Stroke::new(1.5, mark));
             } else {
                 cp.circle_filled(kc, 4.0, mark);
@@ -1340,6 +1357,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let grab = app.frame_sel.is_some_and(|s| s.contains(&layers, i, f) && s.has_keys(&layers));
             if !grab && !m.shift && !m.command && span_end_at(p.x).is_none() {
                 app.frame_sel = Some(whole_motion_span(layer, f).unwrap_or(FrameSel::cell(layer.id, f)));
+                if is_camera {
+                    app.camera_key_sel.clear();
+                    if layer.keyframe_starting_at(f).is_some() {
+                        app.camera_key_sel.insert(f);
+                    }
+                }
                 select_here(app, f);
             }
         }
@@ -1381,6 +1404,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     let row = rows.get(r.min(rows.len().saturating_sub(1))).copied().unwrap_or(0);
                     if let Some(l) = layers.get(row) {
                         sel.head = (l.id, f);
+                    }
+                    if let Some(cam) = layers.iter().find(|l| l.kind == LayerKind::Camera)
+                        && sel.layers(&layers).contains(&cam.id)
+                    {
+                        let (f0, f1) = sel.frames();
+                        app.camera_key_sel = cam.keyframes.iter().map(|k| k.start).filter(|s| *s >= f0 && *s <= f1).collect();
                     }
                     // The playhead follows the selection's end as it is dragged (#561).
                     if app.s.frame != f {
@@ -1469,9 +1498,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let f = frame_at(p.x);
             let ctrl = ui.input(|inp| inp.modifiers.command);
             match app.frame_sel.as_mut() {
-                Some(sel) if shift => sel.head = (layer.id, f),
+                Some(sel) if shift => {
+                    sel.head = (layer.id, f);
+                    if is_camera {
+                        let (f0, f1) = sel.frames();
+                        app.camera_key_sel = layer.keyframes.iter().map(|k| k.start).filter(|s| *s >= f0 && *s <= f1).collect();
+                    }
+                }
+                // Ctrl-click on a camera keyframe toggles it in the multi-keyframe selection.
+                _ if is_camera && ctrl && layer.keyframe_starting_at(f).is_some() => {
+                    if !app.camera_key_sel.remove(&f) {
+                        app.camera_key_sel.insert(f);
+                    }
+                    app.frame_sel = Some(FrameSel::cell(layer.id, f));
+                }
                 // A click on a motion tween picks the whole span (Ctrl-click: one frame).
-                _ => app.frame_sel = Some(whole_motion_span(layer, f).filter(|_| !ctrl).unwrap_or(FrameSel::cell(layer.id, f))),
+                _ => {
+                    app.frame_sel = Some(whole_motion_span(layer, f).filter(|_| !ctrl).unwrap_or(FrameSel::cell(layer.id, f)));
+                    if is_camera {
+                        app.camera_key_sel.clear();
+                        if layer.keyframe_starting_at(f).is_some() {
+                            app.camera_key_sel.insert(f);
+                        }
+                    }
+                }
             }
             select_here(app, f);
         }
@@ -2728,5 +2778,179 @@ mod tests {
         assert_eq!(app.s.frame, 3);
         click(&ctx, &mut app, pos2(x(12), y), Modifiers::NONE);
         assert_eq!(app.s.frame, 7);
+    }
+
+    #[test]
+    fn attach_to_camera_layers_panel_ui_anchor_animation_persistence_and_camera_removal() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut doc = anicraft_engine::doc::Document::default();
+        doc.stage.width = 400;
+        doc.stage.height = 300;
+        doc.stage.background = anicraft_engine::doc::Rgba::WHITE;
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::new(doc), Some(std::path::PathBuf::from("unused.png")));
+        app.show_panel(crate::dock::Panel::Timeline);
+
+        // Scene layer (red square at (160, 140)) + HUD layer (blue square initially at (60, 40) -> tweened to (140, 40)).
+        let scene_layer = app.s.layer;
+        assert!(app.run("layer.rename", json!({"layer": scene_layer.0, "name": "Scene"})).is_some());
+        assert!(app.run("draw.rect", json!({"x": 140.0, "y": 120.0, "w": 40.0, "h": 40.0, "fill": "#ff0000", "stroke": null})).is_some());
+        assert!(app.run("timeline.insert_frame", json!({"layer": scene_layer.0, "frame": 0, "count": 20})).is_some());
+
+        assert!(app.run("layer.new", json!({"name": "Hud"})).is_some());
+        let hud_layer = app.s.layer;
+        assert!(app.run("draw.rect", json!({"x": 140.0, "y": 90.0, "w": 20.0, "h": 20.0, "fill": "#0000ff", "stroke": null, "object": true})).is_some());
+        assert!(app.run("timeline.insert_keyframe", json!({"layer": hud_layer.0, "frame": 20})).is_some());
+        assert!(app.run("timeline.goto", json!({"frame": 20})).is_some());
+        assert!(app.run("edit.select_all", json!({})).is_some());
+        assert!(app.run("element.translate", json!({"dx": 60.0, "dy": 0.0})).is_some());
+        assert!(app.run("timeline.create_tween", json!({"layer": hud_layer.0, "frame": 0})).is_some());
+        assert!(app.run("layer.new_folder", json!({"name": "Folder"})).is_some());
+
+        let tree = |app: &mut App, events: Vec<Event>| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out.platform_output.accesskit_update.expect("a11y tree")
+        };
+        fn attach_node<'a>(t: &'a egui::accesskit::TreeUpdate, name: &str) -> Option<&'a egui::accesskit::Node> {
+            let want = format!("Attach {name} to camera");
+            t.nodes.iter().map(|(_, n)| n).find(|n| n.label() == Some(want.as_str()))
+        }
+
+        // 1. No camera exists: Attach to Camera icon is completely hidden on all layer rows.
+        tree(&mut app, Vec::new());
+        let t0 = tree(&mut app, Vec::new());
+        assert!(attach_node(&t0, "Scene").is_none());
+        assert!(attach_node(&t0, "Hud").is_none());
+        assert!(attach_node(&t0, "Folder").is_none());
+
+        // 2. Add animated camera: Attach icon appears on eligible artwork rows (not Folder/Camera), defaulting to off.
+        assert!(app.run("camera.add", json!({})).is_some());
+        assert!(app.run("timeline.insert_keyframe", json!({"frame": 20})).is_some());
+        assert!(app.run("camera.set", json!({"frame": 0, "x": 200.0, "y": 150.0, "zoom": 100.0, "rotation": 0.0})).is_some());
+        assert!(app.run("camera.set", json!({"frame": 20, "x": 220.0, "y": 150.0, "zoom": 160.0, "rotation": 20.0})).is_some());
+        assert!(app.run("timeline.create_tween", json!({"frame": 0})).is_some());
+
+        let t1 = tree(&mut app, Vec::new());
+        let hud_btn = attach_node(&t1, "Hud").expect("Attach icon shown on Hud when camera exists");
+        assert!(attach_node(&t1, "Scene").is_some(), "Attach icon shown on Scene");
+        assert!(attach_node(&t1, "Folder").is_none(), "Folders are ineligible");
+        assert!(attach_node(&t1, "Camera").is_none(), "Camera layer is ineligible");
+        assert!(!app.s.doc.timeline(0).layer(hud_layer).unwrap().attached);
+        assert!(!app.s.doc.timeline(0).layer(scene_layer).unwrap().attached);
+
+        let hud_bounds = hud_btn.bounds().expect("hud attach bounds");
+        let hud_center = pos2(((hud_bounds.x0 + hud_bounds.x1) * 0.5) as f32, ((hud_bounds.y0 + hud_bounds.y1) * 0.5) as f32);
+
+        let render_rgba = |app: &App| -> Vec<u8> {
+            let job = anicraft_engine::render_service::make_job_for(
+                0,
+                app.s.state,
+                &app.s.doc,
+                app.s.doc.scene_start(app.s.scene) + app.s.frame,
+                anicraft_engine::render::View::stage(&app.s.doc, 1.0),
+                None,
+            )
+            .through_camera(crate::camera_tool::previewing(app));
+            app.stage_cache.service.as_ref().expect("render service").render_now(job).rgba_premul.clone()
+        };
+        let blue_box = |rgba: &[u8]| -> Option<(u32, u32, u32, u32)> {
+            let (mut min_x, mut min_y, mut max_x, mut max_y, mut any) = (u32::MAX, u32::MAX, 0u32, 0u32, false);
+            for y in 0..300u32 {
+                for x in 0..400u32 {
+                    let i = ((y * 400 + x) * 4) as usize;
+                    if rgba[i + 2] > 180 && rgba[i] < 60 && rgba[i + 1] < 60 {
+                        min_x = min_x.min(x);
+                        min_y = min_y.min(y);
+                        max_x = max_x.max(x);
+                        max_y = max_y.max(y);
+                        any = true;
+                    }
+                }
+            }
+            any.then(|| (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1))
+        };
+        let red_box = |rgba: &[u8]| -> Option<(u32, u32, u32, u32)> {
+            let (mut min_x, mut min_y, mut max_x, mut max_y, mut any) = (u32::MAX, u32::MAX, 0u32, 0u32, false);
+            for y in 0..300u32 {
+                for x in 0..400u32 {
+                    let i = ((y * 400 + x) * 4) as usize;
+                    if rgba[i] > 180 && rgba[i + 1] < 60 && rgba[i + 2] < 60 {
+                        min_x = min_x.min(x);
+                        min_y = min_y.min(y);
+                        max_x = max_x.max(x);
+                        max_y = max_y.max(y);
+                        any = true;
+                    }
+                }
+            }
+            any.then(|| (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1))
+        };
+
+        // 3. With Attach OFF, camera pan+zoom+rotation moves/scales Hud at frame 20.
+        let hud_kf_before = app.s.doc.timeline(0).layer(hud_layer).unwrap().keyframes.clone();
+        assert!(app.run("timeline.goto", json!({"frame": 20})).is_some());
+        tree(&mut app, Vec::new());
+        let (bx_unattached, by_unattached, bw_unattached, bh_unattached) = blue_box(&render_rgba(&app)).expect("blue unattached at frame 20");
+        assert!(bw_unattached > 24 && bh_unattached > 24, "camera zoomed unattached blue square: {bw_unattached}x{bh_unattached} at ({bx_unattached},{by_unattached})");
+
+        // 4. Click the Layers panel Attach to Camera icon for Hud: active toggled on, Hud snaps to screen anchor (200..220, 90..110, 20x20), Scene still transformed by camera.
+        click(&ctx, &mut app, hud_center, Modifiers::NONE);
+        let t2 = tree(&mut app, Vec::new());
+        assert!(app.s.doc.timeline(0).layer(hud_layer).unwrap().attached);
+        assert_eq!(attach_node(&t2, "Hud").and_then(|n| n.toggled()), Some(egui::accesskit::Toggled::True));
+        assert_eq!(app.s.doc.timeline(0).layer(hud_layer).unwrap().keyframes, hud_kf_before, "toggling attachment must never alter original keyframes");
+
+        let rgba20 = render_rgba(&app);
+        let (bx20, by20, bw20, bh20) = blue_box(&rgba20).expect("attached blue square visible at frame 20");
+        assert!((199..=201).contains(&bx20) && (89..=91).contains(&by20) && (19..=21).contains(&bw20) && (19..=21).contains(&bh20), "attached Hud at frame 20 ignores camera pan/zoom/rot while keeping own tweened position (200,90,20x20): got ({bx20},{by20},{bw20}x{bh20})");
+        let (_, _, rw20, rh20) = red_box(&rgba20).expect("unattached red square visible at frame 20");
+        assert!(rw20 > 55 && rh20 > 55, "unattached Scene layer still zoomed+rotated: {rw20}x{rh20}");
+
+        // 5. Own animation on attached layer works smoothly across frame 0 and frame 10 (scrub) relative to fixed anchor.
+        assert!(app.run("timeline.goto", json!({"frame": 0})).is_some());
+        let (bx0, by0, bw0, bh0) = blue_box(&render_rgba(&app)).expect("blue at frame 0");
+        assert!((139..=141).contains(&bx0) && (89..=91).contains(&by0) && (19..=21).contains(&bw0) && (19..=21).contains(&bh0), "frame 0 Hud: ({bx0},{by0},{bw0}x{bh0})");
+        assert!(app.run("timeline.goto", json!({"frame": 10})).is_some());
+        let (bx10, by10, bw10, bh10) = blue_box(&render_rgba(&app)).expect("blue at frame 10");
+        assert!((169..=171).contains(&bx10) && (89..=91).contains(&by10) && (19..=21).contains(&bw10) && (19..=21).contains(&bh10), "midpoint frame 10 Hud animated along X without camera distortion: ({bx10},{by10},{bw10}x{bh10})");
+
+        // Tool switching and Stage viewport pan/zoom preserve attachment state & anchor rendering.
+        app.tool = crate::app::Tool::Brush;
+        app.view.fit = false;
+        app.view.pan += vec2(45.0, -25.0);
+        app.view.zoom *= 1.4;
+        tree(&mut app, Vec::new());
+        assert!(app.s.doc.timeline(0).layer(hud_layer).unwrap().attached);
+        assert_eq!(blue_box(&render_rgba(&app)), Some((bx10, by10, bw10, bh10)));
+
+        // Layer visibility toggle still hides attached layers cleanly.
+        assert!(app.run("layer.toggle_visible", json!({"layer": hud_layer.0})).is_some());
+        assert!(blue_box(&render_rgba(&app)).is_none(), "hidden attached layer does not render");
+        assert!(app.run("layer.toggle_visible", json!({"layer": hud_layer.0})).is_some());
+
+        // 6. Save and reopen preserves attached state and fixed rendering.
+        let saved = anicraft_engine::format::to_json(&app.s.doc).expect("save doc");
+        let reopened = anicraft_engine::format::from_json(&saved).expect("reload doc");
+        let mut app2 = App::with_context(&ctx, anicraft_engine::Session::new(reopened), Some(std::path::PathBuf::from("unused.png")));
+        app2.show_panel(crate::dock::Panel::Timeline);
+        assert!(app2.run("timeline.goto", json!({"frame": 20})).is_some());
+        tree(&mut app2, Vec::new());
+        assert!(app2.s.doc.timeline(0).layer(hud_layer).unwrap().attached);
+        let t_reopen = tree(&mut app2, Vec::new());
+        assert_eq!(attach_node(&t_reopen, "Hud").and_then(|n| n.toggled()), Some(egui::accesskit::Toggled::True));
+        assert_eq!(blue_box(&render_rgba(&app2)), Some((bx20, by20, bw20, bh20)));
+
+        // 7. Removing camera hides icons and renders safely without corrupting layer data; re-adding restores active Attach state.
+        assert!(app2.run("camera.remove", json!({})).is_some());
+        let t_removed = tree(&mut app2, Vec::new());
+        assert!(attach_node(&t_removed, "Hud").is_none());
+        assert_eq!(app2.s.doc.timeline(0).layer(hud_layer).unwrap().keyframes, hud_kf_before);
+        assert!(blue_box(&render_rgba(&app2)).is_some(), "removing camera renders layer safely");
+
+        assert!(app2.run("camera.add", json!({})).is_some());
+        let t_readded = tree(&mut app2, Vec::new());
+        assert_eq!(attach_node(&t_readded, "Hud").and_then(|n| n.toggled()), Some(egui::accesskit::Toggled::True));
     }
 }

@@ -1,6 +1,6 @@
 //! Tools bar, edit bar, status bar, Properties and Library panels.
 
-use crate::app::{App, Tool, ZoomDraft};
+use crate::app::{App, Tool};
 use crate::icons::{self, Icon};
 use crate::theme::{Section, T, TARGET, TOOL_BUTTON, TOOL_ICON, Type, color, section, text, to_color32, with_type};
 use anicraft_engine::doc::{ColorEffect, ColorStyle, ElementKind, LibraryItem, LineType, MAX_PATH_OFFSET, Paint, Rgba, SymbolKind, TextKind, evaluate_layer_elements};
@@ -426,33 +426,32 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
             crate::icons::paint(ui.painter(), Rect::from_center_size(arrow.response.rect.center(), vec2(12.0, 12.0)), Icon::ChevronDown, if arrow.response.hovered() { T.icon_hot } else { T.icon });
             arrow.response.set_name(tr!("Zoom presets"));
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("zoom_arrow"), arrow.response.rect));
-            // Enter submits the displayed percentage; other focus loss applies only edits.
+            // The percentage itself is typed here: focus to type a value, Enter or focus loss applies it.
             let was_editing = app.zoom_text.is_some();
-            let mut draft = app.zoom_text.take().unwrap_or_else(|| ZoomDraft { text: format!("{:>4.0}%", z * 100.0), edited: false });
-            let field = with_type(ui, Type::Data, |ui| {
-                ui.add(egui::TextEdit::singleline(&mut draft.text).desired_width(56.0).char_limit(7)).named(tr!("Zoom"))
-            });
+            let mut value = app.zoom_text.take().unwrap_or_else(|| format!("{:>4.0}%", z * 100.0));
+            let field = with_type(ui, Type::Data, |ui| ui.add(egui::TextEdit::singleline(&mut value).desired_width(56.0).char_limit(7)).named(tr!("Zoom")));
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("zoom_field"), field.rect));
-            if !was_editing && field.gained_focus() && !field.changed() {
+            if !was_editing && field.gained_focus() {
                 // Type digits over digits, not over the percent sign.
-                draft.text = format!("{:.0}", z * 100.0);
+                value = format!("{:.0}", z * 100.0);
             }
-            draft.edited |= field.changed();
-            let enter = (field.has_focus() || (was_editing && field.lost_focus())) && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if field.lost_focus() || enter {
-                let typed = draft.text.trim();
+            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if field.lost_focus() || (enter && field.has_focus()) {
+                let typed = value.trim();
                 let typed = typed.strip_suffix('%').unwrap_or(typed).trim();
-                if (draft.edited || enter)
-                    && let Ok(pct) = typed.parse::<f32>()
+                if let Ok(pct) = typed.parse::<f32>()
                     && pct.is_finite()
                 {
                     app.zoom_about(canvas, canvas.center(), pct / (100.0 * ppp), ppp);
                 }
+                app.zoom_text = None;
                 if enter {
                     ui.memory_mut(|m| m.surrender_focus(field.id));
                 }
             } else if field.has_focus() {
-                app.zoom_text = Some(draft);
+                app.zoom_text = Some(value);
+            } else {
+                app.zoom_text = None;
             }
             // Beside the zoom, as in Animate (#251): a toggle, on = the pasteboard is hidden.
             let clip = app.view.clip_to_stage;
@@ -1031,7 +1030,12 @@ fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: cra
         egui::ComboBox::from_id_salt(if camera { "prop_camera_color_style" } else { "prop_color_style" }).selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
             for st in ColorStyle::ALL.into_iter().filter(|st| !camera || *st != ColorStyle::Alpha) {
                 if ui.selectable_label(st == current, crate::i18n::t(st.label())).clicked() && (st != current || m.style) {
-                    app.run(cmd, json!({"style": st.key()}));
+                    let p = if camera {
+                        json!({"frame": crate::camera_tool::active_target_frame(app), "style": st.key()})
+                    } else {
+                        json!({"style": st.key()})
+                    };
+                    app.run(cmd, p);
                 }
             }
         })
@@ -1040,7 +1044,16 @@ fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: cra
         mixed(ui, m.style);
     });
     let pct = a11y::SliderLook { suffix: " %", max_decimals: Some(0), ..Default::default() };
-    let set = |app: &mut App, p: Value| live(app, if camera { tr_noop!("Camera Colour Effect") } else { tr_noop!("Colour Effect") }, cmd, p);
+    let cam_frame = camera.then(|| crate::camera_tool::active_target_frame(app));
+    let with_frame = |mut p: Value| {
+        if let Some(f) = cam_frame
+            && let Some(obj) = p.as_object_mut()
+        {
+            obj.insert("frame".into(), json!(f));
+        }
+        p
+    };
+    let set = |app: &mut App, p: Value| live(app, if camera { tr_noop!("Camera Colour Effect") } else { tr_noop!("Colour Effect") }, cmd, with_frame(p));
     match *fx {
         ColorEffect::None => {}
         ColorEffect::Alpha(a) => {
@@ -2535,13 +2548,14 @@ pub fn text_style_rows(app: &mut App, ui: &mut egui::Ui, st: &mut anicraft_engin
 /// preview switch.
 /// Edits key the playhead like any edit of a tweened object.
 fn camera_props(app: &mut App, ui: &mut egui::Ui) {
-    let Some(cam) = crate::camera_tool::camera(app) else { return };
+    let Some(cam) = crate::camera_tool::active_camera(app) else { return };
+    let target_frame = crate::camera_tool::active_target_frame(app);
     let (mut x, mut y) = (cam.center.x, cam.center.y);
     row(ui, tr!("Position"), |ui| {
         let a = ui.add(egui::DragValue::new(&mut x).prefix("x ").suffix(" px").speed(1.0).max_decimals(1)).named(tr!("Camera X"));
         let b = ui.add(egui::DragValue::new(&mut y).prefix("y ").suffix(" px").speed(1.0).max_decimals(1)).named(tr!("Camera Y"));
         if a.changed() || b.changed() {
-            live(app, tr_noop!("Move Camera"), "camera.set", json!({"x": x, "y": y}));
+            live(app, tr_noop!("Move Camera"), "camera.set", json!({"frame": target_frame, "x": x, "y": y}));
         }
     });
     let mut zoom = cam.zoom * 100.0;
@@ -2549,24 +2563,20 @@ fn camera_props(app: &mut App, ui: &mut egui::Ui) {
     row(ui, tr!("Zoom"), |ui| {
         ui.spacing_mut().slider_width = 96.0;
         if a11y::slider(ui, &mut zoom, lo..=hi, tr!("Camera zoom"), a11y::SliderLook { suffix: " %", max_decimals: Some(0), logarithmic: true, ..Default::default() }).changed() {
-            live(app, tr_noop!("Zoom Camera"), "camera.set", json!({"zoom": zoom}));
+            live(app, tr_noop!("Zoom Camera"), "camera.set", json!({"frame": target_frame, "zoom": zoom}));
         }
     });
     let mut rot = cam.rotation.to_degrees();
     row(ui, tr!("Rotation"), |ui| {
         if ui.add(egui::DragValue::new(&mut rot).suffix("°").speed(0.5).max_decimals(1)).named(tr!("Camera rotation")).changed() {
-            live(app, tr_noop!("Rotate Camera"), "camera.set", json!({"rotation": rot}));
+            live(app, tr_noop!("Rotate Camera"), "camera.set", json!({"frame": target_frame, "rotation": rot}));
         }
     });
     // Brightness, Tint or Advanced over the whole view, as on an instance (ADR 0082).
     colour_effect_rows(app, ui, &cam.color, crate::mixed::ColorMixed::default(), EffectOf::Camera);
     ui.horizontal_wrapped(|ui| {
-        let mut on = app.camera_preview;
-        if crate::theme::checkbox(ui, &mut on, tr!("Preview through camera")).on_hover_text(tr!("Show the stage as the movie shows it (View › Preview Through Camera)")).changed() {
-            app.toggle_camera_preview();
-        }
         if ui.button(tr!("Reset")).named(tr!("Reset camera")).on_hover_text(tr!("Back to the stage as it is: centred, 100 %, no turn, no colour effect")).clicked() {
-            app.run("camera.set", json!({"reset": true}));
+            app.run("camera.set", json!({"frame": target_frame, "reset": true}));
         }
     });
     let hidden = app.s.timeline().camera_layer().is_some_and(|l| !l.visible);

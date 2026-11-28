@@ -72,16 +72,8 @@ echo "==> AniCraft $VERSION for Linux $ARCH ($FORMATS, channel=${ANICRAFT_BUILD_
 
 if [[ "$SKIP_BUILD" = 0 ]]; then
   (cd "$ROOT" && cargo build --release --locked -p anicraft -p anicraft-cli --bins ${CROSS_TARGET:+--target "$CROSS_TARGET"})
-  # The man-and-completions example writes anicraft-cli's man pages and shell completions below.
-  # It is built in its own cargo run: built with the binaries, its dev-dependencies' features would
-  # be unified into them. A cross build cannot run it, so it is built for the host.
-  if [[ "$IS_NIGHTLY" != 1 ]]; then
-    (cd "$ROOT" && cargo build --release --locked -p anicraft-cli --example man-and-completions)
-  fi
 fi
 BIN="$CARGO_TARGET_DIR/${CROSS_TARGET:+$CROSS_TARGET/}release"
-# Host-built: the example is run here, so a cross build finds it in the host's release directory.
-HOST_BIN="$CARGO_TARGET_DIR/release"
 WORK="$CARGO_TARGET_DIR/linux-package"
 STAGE="$WORK/root"
 rm -rf "$WORK"
@@ -90,23 +82,6 @@ rm -rf "$WORK"
 install -Dm755 "$BIN/anicraft" "$STAGE/usr/bin/anicraft"
 install -Dm755 "$BIN/anicraft-cli" "$STAGE/usr/bin/anicraft-cli"
 "${CROSS_COMPILE:-}strip" "$STAGE/usr/bin/anicraft" "$STAGE/usr/bin/anicraft-cli" 2>/dev/null || true
-# anicraft-cli's man pages and shell completions (RFC-0018 rule 1.9), from its clap definition,
-# written by the example built above (a --skip-build run needs it built too). zsh reads
-# site-functions on Fedora and openSUSE; the deb also links the completion into Debian's
-# vendor-completions (nfpm.yaml). A Nightly build renames the CLI to anicraft-nightly-cli, so it
-# ships none: pages and completions for anicraft-cli would document a command it lacks.
-if [[ "$IS_NIGHTLY" != 1 ]]; then
-  CLI_DOCS="$HOST_BIN/examples/man-and-completions"
-  if [[ ! -x "$CLI_DOCS" ]]; then
-    echo "error: $CLI_DOCS is not built (cargo build --release -p anicraft-cli --example man-and-completions)" >&2
-    exit 1
-  fi
-  "$CLI_DOCS" "$WORK/cli-docs"
-  install -Dm644 -t "$STAGE/usr/share/man/man1" "$WORK"/cli-docs/*.1
-  install -Dm644 "$WORK/cli-docs/anicraft-cli.bash" "$STAGE/usr/share/bash-completion/completions/anicraft-cli"
-  install -Dm644 "$WORK/cli-docs/_anicraft-cli" "$STAGE/usr/share/zsh/site-functions/_anicraft-cli"
-  install -Dm644 "$WORK/cli-docs/anicraft-cli.fish" "$STAGE/usr/share/fish/vendor_completions.d/anicraft-cli.fish"
-fi
 install -Dm644 "$HERE/$APP_ID.desktop" "$STAGE/usr/share/applications/$APP_ID.desktop"
 if [[ "$IS_NIGHTLY" = 1 ]]; then
   sed -e 's|^StartupWMClass=.*|StartupWMClass=ai.storyteller.anicraft.nightly-v1|' \
@@ -222,12 +197,8 @@ CLI_WRAPPER
   DROP_LIB_TREE=
   # shellcheck disable=SC2016
   [[ -d "$NFPM_STAGE/usr/lib" ]] || DROP_LIB_TREE='\|^  - src: \${STAGE}/usr/lib/|,+2d;'
-  # The zsh link into Debian's vendor-completions is for the stable CLI's completion; a Nightly has none.
-  DROP_ZSH_LINK=
   # shellcheck disable=SC2016
-  [[ "$IS_NIGHTLY" != 1 ]] || DROP_ZSH_LINK='\|^  - src: /usr/share/zsh/site-functions/_anicraft-cli|,+3d;'
-  # shellcheck disable=SC2016
-  sed "${DROP_LIB_TREE}${DROP_ZSH_LINK}s|\${STAGE}|$NFPM_STAGE|g;s|\${NFPM_BIN}|$NFPM_BIN|g;s|\${NFPM_CLI}|$NFPM_CLI|g;s|@GLIBC_FLOOR@|${GLIBC_FLOOR:-2.35}|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
+  sed "${DROP_LIB_TREE}s|\${STAGE}|$NFPM_STAGE|g;s|\${NFPM_BIN}|$NFPM_BIN|g;s|\${NFPM_CLI}|$NFPM_CLI|g;s|@GLIBC_FLOOR@|${GLIBC_FLOOR:-2.35}|g" "$HERE/nfpm.yaml" >"$WORK/nfpm.yaml"
   for fmt in deb rpm; do
     if has "$fmt"; then (cd "$ROOT" && nfpm package -f "$WORK/nfpm.yaml" -p "$fmt" -t "$DIST/$BASENAME.$fmt"); fi
   done

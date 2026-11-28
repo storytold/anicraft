@@ -34,7 +34,6 @@ use anicraft_doc::DisplayList;
 use anicraft_render::{MAX_PIXELS, NeedsFull, Pixmap, RenderStats, View, paint::premultiply, prepare_scene};
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::prelude::*;
-use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use web_time::Instant;
@@ -211,7 +210,6 @@ pub struct GpuRenderer {
     pub shared: bool,
     /// When work may be submitted on the window's device ([`SubmitGate`], ADR 0105).
     gate: Option<Arc<SubmitGate>>,
-    filtered_flight: Mutex<FilteredFlight<wgpu::SubmissionIndex>>,
     /// First device failure (an error in a render, an uncaptured error or the device's loss).
     /// Once set, the renderer refuses to draw and callers fall back to the CPU.
     broken: Arc<Mutex<Option<String>>>,
@@ -250,73 +248,10 @@ fn check(adapter: &wgpu::Adapter, limits: &wgpu::Limits, name: &str) -> Result<(
 /// filtered inside its parent's); deeper goes to the CPU.
 pub const MAX_FILTER_DEPTH: usize = 4;
 
-/// Most filtered-layer pixels one call draws. A call beyond this uses the CPU.
+/// Most filtered-layer pixels one call draws (each costs 44 bytes of buffers while the frame
+/// draws: two f32 halves and three coverage slots). A stage tile's layers are far smaller; a
+/// call beyond this is drawn on the CPU.
 pub const MAX_LAYER_PIXELS: u64 = 1 << 23;
-
-/// App-owned scratch allowances, separate from the finished image cache. Device limits and
-/// diagnostic allocator reports do not give a portable measure of available graphics memory.
-const SHARED_FILTER_BYTES: u64 = 64 << 20;
-const DISCRETE_FILTER_BYTES: u64 = 128 << 20;
-
-fn filter_budget(device_type: wgpu::DeviceType, backend: wgpu::Backend) -> u64 {
-    match (device_type, backend) {
-        // Device::poll(Wait) cannot fence a browser WebGPU submission.
-        (_, wgpu::Backend::BrowserWebGpu) => 0,
-        (wgpu::DeviceType::DiscreteGpu, _) => DISCRETE_FILTER_BYTES,
-        _ => SHARED_FILTER_BYTES,
-    }
-}
-
-/// Charge short-lived buffers with a page-sized minimum. This is an admission
-/// estimate, not a driver memory report.
-fn scratch_allocation(bytes: u64) -> u64 {
-    bytes.max(1).next_multiple_of(4096)
-}
-
-struct FilteredFlight<S> {
-    limit: u64,
-    pending: VecDeque<(S, u64)>,
-    bytes: u64,
-}
-
-impl<S> FilteredFlight<S> {
-    fn new(limit: u64) -> Self {
-        Self { limit, pending: VecDeque::new(), bytes: 0 }
-    }
-
-    fn make_room(&mut self, bytes: u64, mut wait: impl FnMut(&S) -> Result<(), wgpu::PollError>) -> Result<(), GpuError> {
-        if bytes > self.limit {
-            return Err(GpuError::TooLarge(format!("this tile's filters need {} MiB of GPU scratch (budget {} MiB)", bytes.div_ceil(1 << 20), self.limit >> 20)));
-        }
-        while self.bytes + bytes > self.limit {
-            let Some((index, completed_bytes)) = self.pending.front() else { break };
-            match wait(index) {
-                Ok(()) => {}
-                Err(wgpu::PollError::Timeout) => {
-                    return Err(GpuError::TooLarge("the GPU is still using filtered scratch memory".into()));
-                }
-                Err(e) => return Err(GpuError::Device(e.to_string())),
-            }
-            self.bytes -= completed_bytes;
-            self.pending.pop_front();
-        }
-        Ok(())
-    }
-
-    fn submitted(&mut self, index: S, bytes: u64) {
-        self.bytes += bytes;
-        self.pending.push_back((index, bytes));
-    }
-
-    fn lower_after_oom(&mut self) {
-        self.limit /= 2;
-    }
-}
-
-struct FilterReservation<'a> {
-    flight: std::sync::MutexGuard<'a, FilteredFlight<wgpu::SubmissionIndex>>,
-    bytes: u64,
-}
 
 /// A scene binned for the fine pass, with the filtered layers it shows (each its own scene,
 /// drawn and filtered before the pass).
@@ -338,15 +273,8 @@ struct LayerJob {
 struct Cost {
     work: u64,
     layer_pixels: u64,
-    scratch_bytes: u64,
     entries: usize,
     pieces: usize,
-}
-
-impl Cost {
-    fn filtered_scratch(&self) -> u64 {
-        if self.layer_pixels == 0 { 0 } else { self.scratch_bytes }
-    }
 }
 
 impl Job {
@@ -354,24 +282,9 @@ impl Job {
         c.work += self.binned.work;
         c.entries += self.binned.entries;
         c.pieces += self.binned.pieces;
-        let b = &self.binned;
-        let pieces = b.gpu.as_ref().map_or(b.geo.len() as u64, |plan| u64::from(plan.piece_cap));
-        c.scratch_bytes += scratch_allocation(b.paints_len.max(1) as u64 * 16)
-            + scratch_allocation((u64::from(b.ops_at) + b.op_heads.len() as u64).max(4) * 4)
-            + scratch_allocation(pieces.max(1) * 16)
-            + scratch_allocation(48); // fine-pass uniform
-        if let Some(plan) = &b.gpu {
-            c.scratch_bytes += plan.scratch_bytes(b.op_heads.len());
-        }
         for l in &self.layers {
             let n = u64::from(l.view.width) * u64::from(l.view.height);
             c.layer_pixels += n;
-            // The parent's paints already include the copy. Each filter dispatch
-            // allocates its own uniform even though it reuses the pixel buffers.
-            c.scratch_bytes += scratch_allocation(32 * n) + layers::scratch_bytes(&l.ops);
-            if layers::needs_coverage(&l.ops) {
-                c.scratch_bytes += scratch_allocation(12 * n);
-            }
             // Each filter pass walks the layer once (per pixel or per line).
             c.work += n.div_ceil(256) * layers::passes(&l.ops);
             l.job.cost(c);
@@ -421,7 +334,7 @@ impl GpuRenderer {
             }
             let limits = device.limits();
             check(adapter, &limits, &name)?;
-            Self::build(device, queue, limits, info, Home::Window(gate), Arc::new(Mutex::new(None)))
+            Self::build(device, queue, limits, name, info.backend, Home::Window(gate), Arc::new(Mutex::new(None)))
         }))
         .unwrap_or_else(|_| Err(GpuError::Unavailable("the GPU driver failed while starting".into())))
     }
@@ -459,11 +372,10 @@ impl GpuRenderer {
                 g.get_or_insert_with(|| format!("device lost: {msg}"));
             });
         }
-        Self::build(device, queue, want, info, Home::Own, broken)
+        Self::build(device, queue, want, name, info.backend, Home::Own, broken)
     }
 
-    fn build(device: wgpu::Device, queue: wgpu::Queue, limits: wgpu::Limits, info: wgpu::AdapterInfo, home: Home, broken: Arc<Mutex<Option<String>>>) -> Result<GpuRenderer, GpuError> {
-        let name = format!("{} ({:?})", info.name, info.backend);
+    fn build(device: wgpu::Device, queue: wgpu::Queue, limits: wgpu::Limits, name: String, backend: wgpu::Backend, home: Home, broken: Arc<Mutex<Option<String>>>) -> Result<GpuRenderer, GpuError> {
         let scopes = Scopes::push(&device);
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("anicraft-fine"), source: wgpu::ShaderSource::Wgsl(include_str!("fine.wgsl").into()) });
         let entry = |binding: u32, ty: wgpu::BindingType| wgpu::BindGroupLayoutEntry { binding, visibility: wgpu::ShaderStages::COMPUTE, ty, count: None };
@@ -520,7 +432,7 @@ impl GpuRenderer {
             bins,
             binning: AtomicU8::new(Binning::from_env().code()),
             no_gpu_binning: Mutex::new(None),
-            auto_bins: info.backend == wgpu::Backend::Vulkan,
+            auto_bins: backend == wgpu::Backend::Vulkan,
             blank,
             blank_coverage,
             blank_ramp,
@@ -532,7 +444,6 @@ impl GpuRenderer {
                 Home::Window(gate) => gate,
                 Home::Own => None,
             },
-            filtered_flight: Mutex::new(FilteredFlight::new(filter_budget(info.device_type, info.backend))),
             broken,
         };
         r.self_test()?;
@@ -654,7 +565,7 @@ impl GpuRenderer {
         self.guard(|| {
             let (job, stats, mut timings, cost) = self.prepare(dl, view, binning)?;
             let t = Instant::now();
-            let (premul8, pixmap) = self.run_readback(&job, view, output, cost.filtered_scratch())?;
+            let (premul8, pixmap) = self.run_readback(&job, view, output)?;
             timings.gpu = ms(t);
             Ok(GpuFrame { width: view.width, height: view.height, premul8, pixmap, stats, timings, entries: cost.entries, pieces: cost.pieces, gpu_binned: job.binned.gpu.is_some() })
         })
@@ -675,7 +586,6 @@ impl GpuRenderer {
             if w > max || h > max {
                 return Err(GpuError::TooLarge(format!("image {w}×{h} is larger than this GPU's textures ({max} px)")));
             }
-            let reservation = self.reserve_filtered(cost.filtered_scratch(), scratch_allocation(4 * u64::from(w) * u64::from(h)))?;
             let scopes = Scopes::push(&self.device);
             let texture = self.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("anicraft-stage"),
@@ -692,10 +602,10 @@ impl GpuRenderer {
             let recorded = self.record(&mut enc, &job, view, Output::Premul8, Target::Texture(&tex_view));
             // Pop the scopes whatever happened while recording (they are this thread's).
             if let Err(e) = recorded {
-                drop((enc, tex_view, texture));
-                return Err(self.abort_recording(scopes, reservation, e));
+                let _ = self.pop(scopes);
+                return Err(e);
             }
-            self.submit_frame(enc.finish(), reservation);
+            self.submit(enc.finish());
             self.pop(scopes)?;
             timings.gpu = ms(t);
             Ok(GpuTexture { texture, view: tex_view, width: w, height: h, stats, timings, entries: cost.entries, pieces: cost.pieces, gpu_binned: job.binned.gpu.is_some() })
@@ -715,7 +625,7 @@ impl GpuRenderer {
                 wgpu::TexelCopyBufferInfo { buffer: &read, layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(t.height) } },
                 wgpu::Extent3d { width: t.width, height: t.height, depth_or_array_layers: 1 },
             );
-            self.submit([enc.finish()]);
+            self.submit(enc.finish());
             let bytes = self.map(&read, scopes)?;
             let mut out = Vec::with_capacity(t.width as usize * t.height as usize * 4);
             for r in bytes.chunks(row as usize) {
@@ -725,56 +635,13 @@ impl GpuRenderer {
         })
     }
 
-    /// Reserve scratch before encoding, then charge it until that submission completes. Both
-    /// window textures and headless readbacks share the same queue and the same allowance.
-    fn reserve_filtered(&self, layers: u64, output: u64) -> Result<Option<FilterReservation<'_>>, GpuError> {
-        if layers == 0 { return Ok(None); }
-        let bytes = layers + output;
-        let mut flight = self.filtered_flight.lock().unwrap_or_else(PoisonError::into_inner);
-        let room = flight.make_room(bytes, |index| self.device.poll(wgpu::PollType::Wait {
-            submission_index: Some(index.clone()),
-            timeout: Some(std::time::Duration::from_secs(2)),
-        }).map(|_| ()));
-        // The device-loss callback can run during the poll, including on a timeout.
-        if let Some(e) = self.broken() { return Err(GpuError::Device(e)); }
-        room?;
-        Ok(Some(FilterReservation { flight, bytes }))
-    }
-
-    fn submit_frame(&self, commands: wgpu::CommandBuffer, reservation: Option<FilterReservation<'_>>) {
-        let index = self.submit([commands]);
-        if let Some(mut reservation) = reservation {
-            reservation.flight.submitted(index, reservation.bytes);
-        }
-    }
-
-    fn abort_recording(&self, scopes: Scopes, reservation: Option<FilterReservation<'_>>, error: GpuError) -> GpuError {
-        let recording_errors = scopes.pop_split();
-        if let Some(mut reservation) = reservation
-            && self.broken().is_none()
-        {
-            // Queue uploads survive dropping the encoder. This fence covers them
-            // even if another caller submitted them first.
-            let flush_scopes = Scopes::push(&self.device);
-            let index = self.submit([]);
-            if let Some(e) = flush_scopes.pop() {
-                // A failed submit does not give us a usable fence. Stop admitting
-                // work, but keep the recording's error as this frame's result.
-                self.mark_broken(&format!("could not submit pending GPU uploads: {}", describe(&e)));
-            } else {
-                reservation.flight.submitted(index, reservation.bytes);
-            }
-        }
-        render_scope_result(recording_errors, &self.filtered_flight).err().unwrap_or(error)
-    }
-
     /// Hands finished commands to the queue: on a window's device only while its gate is open
     /// (a window can't reconfigure its surface while work is being submitted, ADR 0105).
-    fn submit<const N: usize>(&self, commands: [wgpu::CommandBuffer; N]) -> wgpu::SubmissionIndex {
+    fn submit(&self, commands: wgpu::CommandBuffer) {
         match &self.gate {
-            Some(gate) => gate.run(|| self.queue.submit(commands)),
-            None => self.queue.submit(commands),
-        }
+            Some(gate) => gate.run(|| self.queue.submit([commands])),
+            None => self.queue.submit([commands]),
+        };
     }
 
     /// Blocks until everything submitted so far has run (benchmarks).
@@ -976,24 +843,23 @@ impl GpuRenderer {
         pass.dispatch_workgroups(b.tiles_x, b.tiles_y, 1);
     }
 
-    fn run_readback(&self, job: &Job, view: &View, output: Output, scratch_bytes: u64) -> Result<(Vec<u8>, Option<Pixmap>), GpuError> {
+    fn run_readback(&self, job: &Job, view: &View, output: Output) -> Result<(Vec<u8>, Option<Pixmap>), GpuError> {
         let (w, h) = (view.width, view.height);
         let out_bytes = u64::from(w) * u64::from(h) * if output == Output::Float { 16 } else { 4 };
         let cap = self.limits.max_storage_buffer_binding_size.min(self.limits.max_buffer_size);
         if out_bytes > cap {
             return Err(GpuError::TooLarge(format!("the image needs {} MB, more than this GPU binds ({} MB)", out_bytes >> 20, cap >> 20)));
         }
-        let reservation = self.reserve_filtered(scratch_bytes, scratch_allocation(out_bytes) * 2)?;
         let scopes = Scopes::push(&self.device);
         let obuf = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("out"), size: out_bytes, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC, mapped_at_creation: false });
         let read = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: out_bytes, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("anicraft-fine") });
         if let Err(e) = self.record(&mut enc, job, view, output, Target::Buffer(&obuf, out_bytes)) {
-            drop((enc, obuf, read));
-            return Err(self.abort_recording(scopes, reservation, e));
+            let _ = self.pop(scopes);
+            return Err(e);
         }
         enc.copy_buffer_to_buffer(&obuf, 0, &read, 0, out_bytes);
-        self.submit_frame(enc.finish(), reservation);
+        self.submit(enc.finish());
         let bytes = self.map(&read, scopes)?;
         Ok(match output {
             Output::Premul8 => (bytes, None),
@@ -1024,7 +890,7 @@ impl GpuRenderer {
         let read = self.device.create_buffer(&wgpu::BufferDescriptor { label: Some("readback"), size: isize + gsize, usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST, mapped_at_creation: false });
         enc.copy_buffer_to_buffer(&ibuf, 0, &read, 0, isize);
         enc.copy_buffer_to_buffer(&gbuf, 0, &read, isize, gsize);
-        self.submit([enc.finish()]);
+        self.submit(enc.finish());
         let bytes = self.map(&read, scopes)?;
         let words: Vec<u32> = bytes.as_chunks::<4>().0.iter().map(|w| u32::from_le_bytes(*w)).collect();
         let n = isize as usize / 4;
@@ -1055,23 +921,15 @@ impl GpuRenderer {
     /// Pops a render's scopes: out of memory fails just this frame (the CPU draws it); any
     /// other error is a device error and stops the GPU stage.
     fn pop(&self, scopes: Scopes) -> Result<(), GpuError> {
-        render_scope_result(scopes.pop_split(), &self.filtered_flight)
+        let (oom, other) = scopes.pop_split();
+        if let Some(e) = other {
+            return Err(GpuError::Device(describe(&e)));
+        }
+        if let Some(e) = oom {
+            return Err(GpuError::TooLarge(format!("the GPU ran out of memory: {e}")));
+        }
+        Ok(())
     }
-}
-
-fn render_scope_result<S>(
-    (oom, other): (Option<wgpu::Error>, Option<wgpu::Error>), flight: &Mutex<FilteredFlight<S>>,
-) -> Result<(), GpuError> {
-    if oom.is_some() {
-        flight.lock().unwrap_or_else(PoisonError::into_inner).lower_after_oom();
-    }
-    if let Some(e) = other {
-        return Err(GpuError::Device(describe(&e)));
-    }
-    if let Some(e) = oom {
-        return Err(GpuError::TooLarge(format!("the GPU ran out of memory: {e}")));
-    }
-    Ok(())
 }
 
 /// The error scopes around one render on this thread: nothing the renderer does can reach the

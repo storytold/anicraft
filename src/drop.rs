@@ -357,7 +357,7 @@ pub fn run(app: &mut App, files: &[PathBuf], spot: Spot) {
         _ => {
             let geo = app.drop.stage;
             if geo.is_some_and(|g| g.paused) {
-                app.status_ok(tr!("Previewing through the camera: artwork edits are paused. Turn off View › Preview Through Camera to edit."));
+                app.status_ok(tr!("Camera active: artwork edits are paused. Hide the Camera layer to edit in stage space."));
                 return;
             }
             let (centred, (x, y)) = match spot {
