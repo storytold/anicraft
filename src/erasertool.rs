@@ -22,18 +22,24 @@ pub struct EraserOptions {
     pub mode: EraseMode,
     /// The Faucet: a click deletes a whole fill or line.
     pub faucet: bool,
+    /// Use the Brush tool's tip (size, shape, angle and roundness) instead of the eraser's own.
+    pub match_brush: bool,
 }
 
 impl Default for EraserOptions {
     fn default() -> Self {
-        EraserOptions { size: 16.0, shape: TipShape::Round, mode: EraseMode::Normal, faucet: false }
+        EraserOptions { size: 16.0, shape: TipShape::Round, mode: EraseMode::Normal, faucet: false, match_brush: false }
     }
 }
 
 impl EraserOptions {
-    /// The tip as the Brush draws it (for the shared previews).
-    fn tip(&self) -> BrushOptions {
-        BrushOptions { size: self.size, shape: self.shape, ..BrushOptions::default() }
+    /// The effective tip as the Brush draws it (for `draw.erase` and the shared previews).
+    pub(crate) fn tip(&self, brush: &BrushOptions) -> BrushOptions {
+        if self.match_brush {
+            BrushOptions { size: brush.size, shape: brush.shape, angle: brush.angle, roundness: brush.roundness, pressure_size: false, ..BrushOptions::default() }
+        } else {
+            BrushOptions { size: self.size, shape: self.shape, pressure_size: false, ..BrushOptions::default() }
+        }
     }
 }
 
@@ -50,8 +56,8 @@ pub fn commit(app: &mut App, xf: Xf) {
     if samples.is_empty() {
         return;
     }
-    let o = app.eraser;
-    let params = json!({"points": points(&samples), "size": o.size, "shape": shape_key(o.shape), "mode": o.mode.key(), "unit": xf.unit()});
+    let tip = app.eraser.tip(&app.brush);
+    let params = json!({"points": points(&samples), "size": tip.size, "shape": shape_key(tip.shape), "angle": tip.angle, "roundness": tip.roundness, "mode": app.eraser.mode.key(), "unit": xf.unit()});
     let undo = app.undo_key();
     // What the stroke passed over and kept (ADR 0093): symbols and drawing objects, which open
     // in place with a double-click so their own lines and fills can be erased.
@@ -101,7 +107,7 @@ pub fn draw_overlay(app: &App, painter: &egui::Painter, xf: Xf, hover: Option<Po
     if app.tool != Tool::Eraser {
         return;
     }
-    let tip = app.eraser.tip();
+    let tip = app.eraser.tip(&app.brush);
     if app.drag == Drag::Eraser {
         let bg = to_color32(anicraft_engine::doc::Rgba { a: 1.0, ..app.s.doc.stage.background });
         draw_sweep(painter, xf, &tip, &app.brush_samples, bg);
@@ -197,6 +203,137 @@ pub fn picker_dropper(app: &mut App, ui: &egui::Ui, resp: &egui::Response, picke
     if ui.input(|i| i.pointer.primary_clicked()) {
         crate::colour::pick_from_stage(ctx, picker, rgb);
         app.status_ok(tr!("Picked {colour} from the stage.", colour = crate::colour::to_hex([rgb[0], rgb[1], rgb[2], 255], false)));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Runs a vertical eraser stroke down the middle of a raw filled rectangle and returns the
+    /// horizontal gap cut between the two remaining halves.
+    fn erased_gap(configure: impl FnOnce(&mut App)) -> f32 {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.run("layer.new", json!({"name": "Ink"}));
+        app.run("draw.object_drawing", json!({"on": false}));
+        app.run("draw.rect", json!({"x": 100, "y": 100, "w": 300, "h": 200, "fill": "#336699", "stroke": null}));
+        app.tool = Tool::Eraser;
+        configure(&mut app);
+        let xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+        start(&mut app, Vec2::new(250.0, 50.0));
+        app.brush_samples.push((Vec2::new(250.0, 350.0), None));
+        commit(&mut app, xf);
+        let mut boxes: Vec<_> = app
+            .s
+            .visible_elements()
+            .iter()
+            .filter_map(|e| match &e.kind {
+                ElementKind::Shape(sh) if sh.fill.is_some() => Some(sh.path.bounds().transformed(&e.transform)),
+                _ => None,
+            })
+            .collect();
+        boxes.sort_by(|a, b| a.min.x.total_cmp(&b.min.x));
+        assert_eq!(boxes.len(), 2, "vertical stroke across the rectangle splits it in two: {boxes:?}");
+        boxes[1].min.x - boxes[0].max.x
+    }
+
+    #[test]
+    fn matched_eraser_stroke_and_preview_follow_brush_tip() {
+        let unmatched_gap = erased_gap(|app| {
+            app.eraser.size = 10.0;
+            app.brush.size = 60.0;
+            app.paint_brush.size = 120.0;
+            app.eraser.match_brush = false;
+        });
+        let matched_gap = erased_gap(|app| {
+            app.eraser.size = 10.0;
+            app.brush.size = 60.0;
+            app.paint_brush.size = 120.0;
+            app.eraser.match_brush = true;
+        });
+        assert!(matched_gap > unmatched_gap * 2.0, "matched eraser should follow the larger Brush size: matched={matched_gap}, unmatched={unmatched_gap}");
+
+        // Angle and roundness of the Brush carry over too when matched.
+        let flat_wide = erased_gap(|app| {
+            app.eraser.match_brush = true;
+            app.brush.size = 60.0;
+            app.brush.shape = TipShape::Square;
+            app.brush.roundness = 20.0;
+            app.brush.angle = 0.0;
+        });
+        let flat_narrow = erased_gap(|app| {
+            app.eraser.match_brush = true;
+            app.brush.size = 60.0;
+            app.brush.shape = TipShape::Square;
+            app.brush.roundness = 20.0;
+            app.brush.angle = 90.0;
+        });
+        assert!(flat_wide > flat_narrow * 2.0, "matched eraser should follow the Brush's angle and roundness: wide={flat_wide}, narrow={flat_narrow}");
+
+        // The on-stage tip preview follows the Brush's size when matched.
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.tool = Tool::Eraser;
+        app.eraser.size = 10.0;
+        app.brush.size = 60.0;
+        let xf = Xf { origin: Pos2::ZERO, zoom: 1.0 };
+        let preview_width = |app: &App| {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| draw_overlay(app, ui.painter(), xf, Some(Pos2::new(250.0, 200.0))));
+            out.textures_delta.clear();
+            let mut bounds = egui::Rect::NOTHING;
+            for cs in out.shapes {
+                bounds = bounds.union(cs.shape.visual_bounding_rect());
+            }
+            bounds.width()
+        };
+        app.eraser.match_brush = false;
+        let unmatched_preview = preview_width(&app);
+        app.eraser.match_brush = true;
+        let matched_preview = preview_width(&app);
+        assert!(matched_preview > unmatched_preview * 2.0, "matched tip preview should be wider: matched={matched_preview}, unmatched={unmatched_preview}");
+    }
+
+    #[test]
+    fn size_keys_follow_match_brush() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.tool = Tool::Eraser;
+        app.eraser.size = 15.0;
+        app.brush.size = 40.0;
+        app.paint_brush.size = 6.0;
+
+        // Match off: [ and ] change only the eraser's own size.
+        app.eraser.match_brush = false;
+        crate::brushtool::resize(&mut app, true);
+        let grown_eraser = app.eraser.size;
+        assert!(grown_eraser > 15.0, "unmatched resize should grow eraser size");
+        assert_eq!(app.brush.size, 40.0, "unmatched resize must leave Brush size alone");
+        assert_eq!(app.paint_brush.size, 6.0, "Paint Brush is never involved");
+        crate::brushtool::resize(&mut app, false);
+        assert!(app.eraser.size < grown_eraser, "unmatched shrink should reduce eraser size");
+        assert_eq!(app.brush.size, 40.0);
+
+        // Match on: [ and ] with the Eraser change the Brush's size instead.
+        let eraser_before = app.eraser.size;
+        app.eraser.match_brush = true;
+        crate::brushtool::resize(&mut app, true);
+        let grown_brush = app.brush.size;
+        assert!(grown_brush > 40.0, "matched resize should grow Brush size");
+        assert_eq!(app.eraser.size, eraser_before, "matched resize leaves the eraser's own stored size untouched");
+        assert_eq!(app.paint_brush.size, 6.0, "Paint Brush is never involved");
+        crate::brushtool::resize(&mut app, false);
+        assert!(app.brush.size < grown_brush, "matched shrink should reduce Brush size");
+        assert_eq!(app.eraser.size, eraser_before);
+
+        // Switching to Brush with match off never changes the eraser.
+        app.eraser.match_brush = false;
+        app.tool = Tool::Brush;
+        let brush_before = app.brush.size;
+        crate::brushtool::resize(&mut app, true);
+        assert!(app.brush.size > brush_before);
+        assert_eq!(app.eraser.size, eraser_before);
     }
 }
 

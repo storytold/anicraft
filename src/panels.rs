@@ -3295,32 +3295,37 @@ fn polystar_props(app: &mut App, ui: &mut egui::Ui) {
     }
 }
 
-/// The Eraser's options (ADR 0034): the Faucet, size, shape and erase mode, as in Animate.
+/// The Eraser's options (ADR 0034): the Faucet, matching the Brush's tip, size, shape and erase
+/// mode.
 fn eraser_props(app: &mut App, ui: &mut egui::Ui) {
     use crate::brushtool::{SIZE_MAX, SIZE_MIN};
     use anicraft_engine::cmds_erase::EraseMode;
     use anicraft_engine::geom::brush::TipShape;
     let keys = [app.keymap.primary("view.brush_smaller"), app.keymap.primary("view.brush_larger")].into_iter().flatten().map(crate::platform::shortcut_label).collect::<Vec<_>>().join(" / ");
-    let o = &mut app.eraser;
     row_prose(ui, tr!("Faucet"), |ui| {
-        crate::theme::checkbox(ui, &mut o.faucet, tr!("Delete whole fills and lines")).on_hover_text(tr!("On: a click deletes the whole fill or line under it. Off: drag to erase"));
+        crate::theme::checkbox(ui, &mut app.eraser.faucet, tr!("Delete whole fills and lines")).on_hover_text(tr!("On: a click deletes the whole fill or line under it. Off: drag to erase"));
     });
-    ui.add_enabled_ui(!o.faucet, |ui| {
+    ui.add_enabled_ui(!app.eraser.faucet, |ui| {
+        row_prose(ui, tr!("Tip"), |ui| {
+            crate::theme::checkbox(ui, &mut app.eraser.match_brush, tr!("Match Brush tip"))
+                .on_hover_text(tr!("Erase with the Brush tool's size and tip shape; changing the size with either tool changes both"));
+        });
+        let (size, shape) = if app.eraser.match_brush { (&mut app.brush.size, &mut app.brush.shape) } else { (&mut app.eraser.size, &mut app.eraser.shape) };
         row(ui, tr!("Size"), |ui| {
-            let r = ui.add(egui::DragValue::new(&mut o.size).suffix(" px").speed(0.25).range(SIZE_MIN..=SIZE_MAX).max_decimals(1)).named(tr!("Eraser size"));
+            let r = ui.add(egui::DragValue::new(size).suffix(" px").speed(0.25).range(SIZE_MIN..=SIZE_MAX).max_decimals(1)).named(tr!("Eraser size"));
             if !keys.is_empty() {
                 r.on_hover_text(tr!("Eraser size ({keys})", keys = keys));
             }
         });
         row(ui, tr!("Shape"), |ui| {
-            for (shape, label, hint) in [(TipShape::Round, tr!("Round"), tr!("A round eraser")), (TipShape::Square, tr!("Square"), tr!("A square eraser"))] {
-                ui.selectable_value(&mut o.shape, shape, label).on_hover_text(hint);
+            for (s, label, hint) in [(TipShape::Round, tr!("Round"), tr!("A round eraser")), (TipShape::Square, tr!("Square"), tr!("A square eraser"))] {
+                ui.selectable_value(shape, s, label).on_hover_text(hint);
             }
         });
         row_prose(ui, tr!("Mode"), |ui| {
-            egui::ComboBox::from_id_salt("erase_mode").width(crate::theme::fit(ui, 170.0)).selected_text(crate::i18n::t(o.mode.label())).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("erase_mode").width(crate::theme::fit(ui, 170.0)).selected_text(crate::i18n::t(app.eraser.mode.label())).show_ui(ui, |ui| {
                 for m in EraseMode::ALL {
-                    ui.selectable_value(&mut o.mode, m, crate::i18n::t(m.label())).on_hover_text(crate::i18n::t(m.hint()));
+                    ui.selectable_value(&mut app.eraser.mode, m, crate::i18n::t(m.label())).on_hover_text(crate::i18n::t(m.hint()));
                 }
             })
             .response

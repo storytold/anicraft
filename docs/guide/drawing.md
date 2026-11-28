@@ -375,9 +375,11 @@ swatch only.
 ### Eraser
 
 The **Eraser** (**E**) rubs out merged lines and fills on the active layer. It uses the same
-tip as the Brush (**[** and **]** change its size). Choose a **Mode** in the options: **Erase
-Normal**, **Erase Fills**, **Erase Lines**, **Erase Selected Fills** or **Erase Inside**,
-which erases only the fill where your stroke starts.
+kind of tip as the Brush (**[** and **]** change its size). Tick **Match Brush tip** in the
+options to erase with the Brush tool's size, shape, angle and roundness; changing the size or
+shape with either tool then updates both. Choose a **Mode** in the options: **Erase Normal**,
+**Erase Fills**, **Erase Lines**, **Erase Selected Fills** or **Erase Inside**, which erases
+only the fill where your stroke starts.
 
 Tick **Faucet** to delete a whole fill or line with a single click. **Erase Everything…**, or
 a double-click on the Eraser tool, clears every visible, unlocked layer at the current frame.

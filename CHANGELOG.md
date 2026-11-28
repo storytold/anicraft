@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Eraser: Match Brush tip** (#636): ticking **Match Brush tip** in the Eraser's options erases
+  with the Brush tool's size, shape, angle and roundness, previews the Brush's tip on the stage,
+  and edits the shared size and shape from either tool (including `[` and `]`).
+
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.
