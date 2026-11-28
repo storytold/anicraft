@@ -30,6 +30,8 @@ const CURVE_SIDE: f32 = 96.0;
 #[derive(Default)]
 pub struct BrushLibraryView {
     pub open: bool,
+    /// Focus the "Name for the brush" field on the next frame (from Properties' Save… button).
+    pub focus_save: bool,
     /// The brush last chosen for the Brush and for the Paint Brush, by name.
     pub chosen: [Option<String>; 2],
     /// The name typed to save the brush in hand under.
@@ -226,6 +228,13 @@ fn panel(app: &mut App, ui: &mut egui::Ui) {
     // Save the brush in hand under a name.
     ui.horizontal(|ui| {
         let r = ui.add(egui::TextEdit::singleline(&mut app.brush_lib.save_name).desired_width((ui.available_width() - 110.0).max(80.0)).hint_text(tr!("Name"))).named(tr!("Name for the brush"));
+        if std::mem::take(&mut app.brush_lib.focus_save) {
+            if app.brush_lib.save_name.is_empty() {
+                r.request_focus();
+            } else {
+                crate::theme::focus_selected(ui, &r, &app.brush_lib.save_name);
+            }
+        }
         let enter = r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let name = app.brush_lib.save_name.trim().to_string();
         if (ui.add_enabled(!name.is_empty(), egui::Button::new(tr!("Save Brush"))).on_hover_text(tr!("Saves the brush in hand as one of yours (one with that name is replaced)")).clicked() || enter) && !name.is_empty() {
@@ -268,10 +277,12 @@ pub fn props(app: &mut App, ui: &mut egui::Ui, row: impl Fn(&mut egui::Ui, &str,
     let as_stroke = tool == Tool::PaintBrush;
     let current = current_name(app, tool);
     let items = all(app);
+    let current_shown = current.as_deref().map(|c| items.iter().find(|(_, p, _)| p.name.eq_ignore_ascii_case(c)).map_or_else(|| c.to_string(), |(s, _, _)| s.clone()));
     let mut picked: Option<BrushPreset> = None;
     let mut library = false;
+    let mut save = false;
     row_prose(ui, tr!("Brush"), &mut |ui| {
-        let shown = current.as_deref().map_or_else(|| tr!("Custom").to_string(), |c| items.iter().find(|(_, p, _)| p.name.eq_ignore_ascii_case(c)).map_or(c.to_string(), |(s, _, _)| s.clone()));
+        let shown = current_shown.clone().unwrap_or_else(|| tr!("Custom").to_string());
         egui::ComboBox::from_id_salt(("brush_preset", slot(tool)))
             .width(130.0)
             .selected_text(shown)
@@ -293,12 +304,25 @@ pub fn props(app: &mut App, ui: &mut egui::Ui, row: impl Fn(&mut egui::Ui, &str,
         if ui.button(tr!("Library…")).on_hover_text(tr!("Window › Brush Library: every brush with a preview, and your own")).clicked() {
             library = true;
         }
+        if ui.button(tr!("Save…")).named(tr!("Save brush as preset")).on_hover_text(tr!("Save these settings as one of your brushes")).clicked() {
+            save = true;
+        }
     });
     if let Some(p) = picked {
         choose(app, &p);
     }
     if library {
         toggle(app);
+    }
+    if save {
+        app.brush_lib.open = true;
+        app.brush_lib.renaming = None;
+        app.brush_lib.focus_save = true;
+        if app.brush_lib.save_name.is_empty()
+            && let Some(name) = current_shown
+        {
+            app.brush_lib.save_name = name;
+        }
     }
     // What a stroke with these settings looks like (the renderer's own picture).
     let o = *crate::brushtool::options(app);
@@ -444,5 +468,142 @@ pub fn curve_editor(ui: &mut egui::Ui, curve: &mut PressureCurve) -> egui::Respo
         painter.circle_filled(to_screen(*p), r, if hot == Some(i) { T.accent_text } else { T.text });
     }
     resp
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::app::{App, Tool};
+    use anicraft_engine::Session;
+    use egui::accesskit::{Action, ActionRequest, NodeId, Role, TreeId, TreeUpdate};
+    use egui::{Event, Key, Modifiers, Pos2, Rect, vec2};
+
+    fn run_frame(ctx: &egui::Context, app: &mut App, extra: Vec<Event>) -> TreeUpdate {
+        let mut events = vec![Event::ModifiersChanged(Modifiers::NONE)];
+        events.extend(extra);
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1200.0))), events, ..Default::default() };
+        let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+        out.textures_delta.clear();
+        out.platform_output.accesskit_update.expect("AccessKit tree")
+    }
+
+    fn settle(ctx: &egui::Context, app: &mut App) -> TreeUpdate {
+        let mut tree = run_frame(ctx, app, Vec::new());
+        for _ in 0..3 {
+            tree = run_frame(ctx, app, Vec::new());
+        }
+        tree
+    }
+
+    fn find(tree: &TreeUpdate, role: Role, label: &str) -> Option<NodeId> {
+        tree.nodes.iter().find(|(_, n)| n.role() == role && n.label() == Some(label)).map(|(id, _)| *id)
+    }
+
+    fn click_node(ctx: &egui::Context, app: &mut App, id: NodeId) -> TreeUpdate {
+        let req = Event::AccessKitActionRequest(ActionRequest { action: Action::Click, target_tree: TreeId::ROOT, target_node: id, data: None });
+        run_frame(ctx, app, vec![req]);
+        run_frame(ctx, app, Vec::new())
+    }
+
+    /// #632: Save… in Properties' Brush row opens the Brush Library with the name field focused
+    /// (pre-filled and selected when matching a preset, else empty), and typing a name + Enter
+    /// saves the brush in hand for both Brush and Paint Brush.
+    #[test]
+    fn properties_save_opens_brush_library_focused_and_saves_preset() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.tool = Tool::Brush;
+        app.brush.size = 27.0;
+        app.brush.roundness = 40.0;
+        app.brush.jitter = 15.0;
+        assert!(!app.brush_lib.open);
+
+        let tree = settle(&ctx, &mut app);
+        let save_id = find(&tree, Role::Button, "Save brush as preset").expect("Save… button in Properties");
+        let save_node = tree.nodes.iter().find(|(id, _)| *id == save_id).map(|(_, n)| n).expect("button node");
+        assert!(save_node.supports_action(Action::Click) && save_node.supports_action(Action::Focus));
+
+        // Clicking Save… opens Brush Library and focuses the empty Name field.
+        let tree = click_node(&ctx, &mut app, save_id);
+        assert!(app.brush_lib.open, "Brush Library window opens");
+        let name_id = find(&tree, Role::TextInput, "Name for the brush").expect("Name field in Brush Library");
+        assert_eq!(tree.focus, name_id, "Name field has keyboard focus");
+        assert!(app.brush_lib.save_name.is_empty(), "custom settings leave the name empty");
+
+        // Typing a name and pressing Enter saves a brush matching the Brush in hand.
+        run_frame(&ctx, &mut app, vec![Event::Text("My Ink".into())]);
+        run_frame(&ctx, &mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        settle(&ctx, &mut app);
+        let saved = app.s.brushes.find("My Ink").expect("saved brush preset");
+        assert!(app.brush.matches(&saved), "saved preset matches Brush settings");
+
+        // With the window already open and matching a preset, Save… pre-fills and selects its name.
+        let tree = settle(&ctx, &mut app);
+        let save_id = find(&tree, Role::Button, "Save brush as preset").expect("Save… button");
+        let tree = click_node(&ctx, &mut app, save_id);
+        assert!(app.brush_lib.open, "Brush Library stays open");
+        let name_id = find(&tree, Role::TextInput, "Name for the brush").expect("Name field");
+        assert_eq!(tree.focus, name_id, "Name field regains keyboard focus");
+        assert_eq!(app.brush_lib.save_name, "My Ink", "pre-filled with current preset name");
+        // Typing replaces the selected pre-filled name.
+        run_frame(&ctx, &mut app, vec![Event::Text("Dry Ink".into())]);
+        run_frame(&ctx, &mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        settle(&ctx, &mut app);
+        let replaced = app.s.brushes.find("Dry Ink").expect("typing replaced the selected name");
+        assert!(app.brush.matches(&replaced));
+
+        // Works for Paint Brush alike.
+        app.brush_lib.open = false;
+        app.tool = Tool::PaintBrush;
+        app.paint_brush.size = 19.0;
+        app.paint_brush.taper_end = 25.0;
+        let tree = settle(&ctx, &mut app);
+        let save_id = find(&tree, Role::Button, "Save brush as preset").expect("Save… button for Paint Brush");
+        let tree = click_node(&ctx, &mut app, save_id);
+        assert!(app.brush_lib.open);
+        let name_id = find(&tree, Role::TextInput, "Name for the brush").expect("Name field");
+        assert_eq!(tree.focus, name_id);
+        run_frame(&ctx, &mut app, vec![Event::Text("Fine Stroke".into())]);
+        run_frame(&ctx, &mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        settle(&ctx, &mut app);
+        let stroke_saved = app.s.brushes.find("Fine Stroke").expect("saved Paint Brush preset");
+        assert!(app.paint_brush.matches(&stroke_saved), "saved preset matches Paint Brush settings");
+    }
+
+    /// Clicking Properties' Save… while an inline rename is active in Brush Library ends the
+    /// rename so the rename field does not steal focus back from "Name for the brush".
+    #[test]
+    fn properties_save_cancels_active_rename_and_focuses_save_field() {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.tool = Tool::Brush;
+        app.brush.size = 24.0;
+        let mut params = app.brush.preset("My Ink").params();
+        params["name"] = serde_json::json!("My Ink");
+        assert!(app.run("brush.preset_save", params).is_some());
+
+        app.brush_lib.open = true;
+        app.brush_lib.renaming = Some(("My Ink".into(), "My Ink".into()));
+        let tree = settle(&ctx, &mut app);
+        let rename_id = find(&tree, Role::TextInput, "Brush name").expect("inline rename field");
+        assert_eq!(tree.focus, rename_id, "rename field starts focused");
+
+        let save_id = find(&tree, Role::Button, "Save brush as preset").expect("Save… button in Properties");
+        click_node(&ctx, &mut app, save_id);
+        let tree = settle(&ctx, &mut app);
+        assert!(app.brush_lib.renaming.is_none(), "active rename is cleared");
+        assert!(find(&tree, Role::TextInput, "Brush name").is_none(), "rename field is no longer shown");
+        let name_id = find(&tree, Role::TextInput, "Name for the brush").expect("Name field in Brush Library");
+        assert_eq!(tree.focus, name_id, "Name field keeps keyboard focus after settling");
+
+        // Typing and pressing Enter saves a new preset without renaming the existing one.
+        run_frame(&ctx, &mut app, vec![Event::Text("Fresh Ink".into())]);
+        run_frame(&ctx, &mut app, vec![Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        settle(&ctx, &mut app);
+        assert!(app.s.brushes.find("My Ink").is_some(), "existing brush was not renamed");
+        let saved = app.s.brushes.find("Fresh Ink").expect("new brush saved from save field");
+        assert!(app.brush.matches(&saved));
+    }
 }
 

@@ -184,7 +184,9 @@ other paint, and the same stroke always comes out the same. The **Charcoal** and
 brushes in the Brush menu use them.
 
 The Brush and the Paint Brush keep their settings (size, tip, smoothing, pressure and the rest)
-when you close AniCraft, each tool its own.
+when you close AniCraft, each tool its own. Click **Save…** on the **Brush** row in Properties
+to open the **Brush Library** ready to name and save the current settings as one of your own
+brushes.
 
 **Tilt.** Brushes can follow a pen's tilt: the tip turns with the way the pen leans (so a flat
 nib follows your hand), and paints wider as it leans, up to twice as wide lying flat. A mouse
