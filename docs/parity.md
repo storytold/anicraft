@@ -171,7 +171,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Feature | Status | Notes | Headless |
 |---|---|---|---|
 | Stroke and fill colours, swap, black and white, none | **done** | |
-| Colour picker: swatches, mixer, hex, alpha | **done** | [#432](https://github.com/storytold/anicraft/issues/432) to [#437](https://github.com/storytold/anicraft/issues/437). |
+| Colour picker: swatches, mixer, hex, alpha | **done** | [#432](https://github.com/storytold/anicraft/issues/432) to [#437](https://github.com/storytold/anicraft/issues/437); a selected solid fill also has a Fill alpha row directly in Properties ([#645](https://github.com/storytold/anicraft/issues/645)). |
 | Live preview on the artwork while pointing at a swatch | **missing** | P-025 ([#436](https://github.com/storytold/anicraft/issues/436)). |
 | Solid, linear and radial fills; overflow modes; linear RGB; focal point | **done** | [ADR 0074](adr/0074-gradient-editor-gradient-transform-and-lock-fill.md). |
 | Bitmap fills | **done** | |

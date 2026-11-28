@@ -1422,6 +1422,19 @@ fn selection_props(app: &mut App, ui: &mut egui::Ui, e: &anicraft_engine::doc::E
                 }
                 mixed(ui, m.fill);
             });
+            if let Some(Paint::Solid(c)) = sh.fill {
+                let mut fc = rgba(c);
+                let mut v = f32::from(fc[3]) / 255.0 * 100.0;
+                let pct = a11y::SliderLook { suffix: " %", max_decimals: Some(0), ..Default::default() };
+                row(ui, tr!("Fill alpha"), |ui| {
+                    let tip = tr!("Fill alpha: 0 % is clear, 100 % opaque");
+                    if a11y::slider(ui, &mut v, 0.0..=100.0, tr!("Fill alpha"), pct).on_hover_text(tip).changed() {
+                        fc[3] = (v.clamp(0.0, 100.0) / 100.0 * 255.0).round() as u8;
+                        live(app, tr_noop!("Fill alpha"), "element.set_fill", json!({"color": crate::colour::to_hex(fc, true)}));
+                    }
+                    mixed(ui, m.fill_alpha);
+                });
+            }
             if let Some(Paint::Bitmap { bitmap, .. }) = &sh.fill {
                 bitmap_row(app, ui, *bitmap, m.bitmap);
             }
@@ -4167,5 +4180,97 @@ mod tests {
         assert_eq!(app.s.doc, doc, "the fill is unchanged");
         assert_eq!(app.s.history().undo_len(), steps, "no undo step");
         assert!(!app.status.as_ref().is_some_and(|s| s.error), "a fill is not reported as an error: {:?}", app.status.as_ref().map(|s| s.text.clone()));
+    }
+
+    /// #645: a selected shape with a solid fill shows a Fill alpha slider directly under Fill in
+    /// Properties; dragging it changes only the selected shape's fill alpha (RGB and other shapes
+    /// stay untouched) in one undo step, and the row hides for no fill or gradient fills.
+    #[test]
+    fn fill_alpha_row_changes_only_selected_solid_fill_alpha_and_undoes() {
+        use egui::accesskit::{Action, Node, Role};
+        use egui::{Event, Modifiers, PointerButton, Pos2};
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut app = App::with_context(&ctx, Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.show_panel(crate::dock::Panel::Properties);
+
+        let other_id = app.run("draw.rect", json!({"x": 200.0, "y": 40.0, "w": 60.0, "h": 60.0, "fill": "#cc4422", "stroke": null, "object": true})).expect("other rect")["element"].as_u64().expect("id");
+        let sel_id = app.run("draw.rect", json!({"x": 40.0, "y": 40.0, "w": 80.0, "h": 60.0, "fill": "#336699", "stroke": null, "object": true})).expect("selected rect")["element"].as_u64().expect("id");
+        app.run("element.select", json!({"ids": [sel_id]})).expect("selected");
+
+        let input = |events: Vec<Event>| egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, egui::vec2(1600.0, 1200.0))),
+            events,
+            ..Default::default()
+        };
+        let frame = |ctx: &egui::Context, app: &mut App, events: Vec<Event>| -> Vec<(egui::accesskit::NodeId, Node)> {
+            let mut out = ctx.run_ui(input(events), |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out.platform_output.accesskit_update.map(|u| u.nodes).unwrap_or_default()
+        };
+        let settle = |ctx: &egui::Context, app: &mut App| {
+            let mut nodes = Vec::new();
+            for _ in 0..4 {
+                nodes = frame(ctx, app, Vec::new());
+            }
+            nodes
+        };
+        let slider_node = |nodes: &[(egui::accesskit::NodeId, Node)]| {
+            nodes.iter().map(|(_, n)| n).find(|n| n.role() == Role::Slider && n.label().is_some_and(|l| l.starts_with("Fill alpha"))).cloned()
+        };
+        let solid_fill = |app: &App, id: u64| -> Option<anicraft_engine::doc::Rgba> {
+            app.s.visible_elements().into_iter().find(|e| e.id.0 == id).and_then(|e| match &e.kind {
+                ElementKind::Shape(sh) => match sh.fill {
+                    Some(Paint::Solid(c)) => Some(c),
+                    _ => None,
+                },
+                _ => None,
+            })
+        };
+
+        let before_sel = solid_fill(&app, sel_id).expect("selected has solid fill");
+        let before_other = solid_fill(&app, other_id).expect("other has solid fill");
+
+        let nodes = settle(&ctx, &mut app);
+        let slider = slider_node(&nodes).expect("Fill alpha slider appears for a selected solid fill");
+        assert!(slider.supports_action(Action::Focus), "Fill alpha slider is keyboard-focusable");
+        let b = slider.bounds().expect("slider bounds");
+        let y = ((b.y0 + b.y1) * 0.5) as f32;
+        let mid = Pos2::new((b.x0 + (b.x1 - b.x0) * 0.5) as f32, y);
+        let lower = Pos2::new((b.x0 + (b.x1 - b.x0) * 0.35) as f32, y);
+
+        let steps = app.s.history().undo_len();
+        frame(&ctx, &mut app, vec![Event::PointerMoved(mid)]);
+        frame(&ctx, &mut app, vec![Event::PointerButton { pos: mid, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        frame(&ctx, &mut app, vec![Event::PointerMoved(lower)]);
+        frame(&ctx, &mut app, vec![Event::PointerButton { pos: lower, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        settle(&ctx, &mut app);
+
+        let after_sel = solid_fill(&app, sel_id).expect("selected still has solid fill");
+        let after_other = solid_fill(&app, other_id).expect("other still has solid fill");
+        assert!(after_sel.a < before_sel.a && after_sel.a > 0.0, "alpha lowered without clearing: {before_sel:?} -> {after_sel:?}");
+        assert!((after_sel.r - before_sel.r).abs() < 1e-4 && (after_sel.g - before_sel.g).abs() < 1e-4 && (after_sel.b - before_sel.b).abs() < 1e-4, "RGB unchanged: {before_sel:?} -> {after_sel:?}");
+        assert_eq!(after_other, before_other, "unselected shape unchanged");
+        assert_eq!(app.s.history().undo_len(), steps + 1, "dragging Fill alpha coalesces into one undo step");
+
+        // Undo restores the original alpha.
+        app.run("edit.undo", json!({})).expect("undo");
+        settle(&ctx, &mut app);
+        let undone_sel = solid_fill(&app, sel_id).expect("selected has solid fill after undo");
+        assert!((undone_sel.a - before_sel.a).abs() < 1e-4, "undo restores alpha: {before_sel:?} vs {undone_sel:?}");
+
+        // Turning fill off hides the Fill alpha row; turning it back on shows it again.
+        app.run("element.set_fill", json!({"on": false})).expect("fill off");
+        let nodes = settle(&ctx, &mut app);
+        assert!(slider_node(&nodes).is_none(), "no Fill alpha slider when fill is off");
+        app.run("element.set_fill", json!({"on": true})).expect("fill on");
+        let nodes = settle(&ctx, &mut app);
+        assert!(slider_node(&nodes).is_some(), "Fill alpha slider returns when solid fill is back");
+
+        // A gradient fill hides the Fill alpha row too.
+        app.run("paint.set_fill", json!({"type": "linear", "stops": [{"offset": 0, "color": "#ff0000"}, {"offset": 1, "color": "#0000ff"}]})).expect("gradient fill");
+        let nodes = settle(&ctx, &mut app);
+        assert!(slider_node(&nodes).is_none(), "no Fill alpha slider for a gradient fill");
     }
 }

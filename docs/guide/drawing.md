@@ -300,7 +300,8 @@ the drawing. To fade a whole symbol instance, or to tween a fade, use the colour
 ### Line styles
 
 With shapes selected, **Properties** has a **Fill** and a **Stroke** row, each with a swatch and
-an on/off checkbox. Turning a fill or a stroke off and on again brings back the colour,
+an on/off checkbox. When the fill is a solid colour, a **Fill alpha** slider right below **Fill**
+sets its opacity directly (0–100 %). Turning a fill or a stroke off and on again brings back the colour,
 gradient or line it had. With only an outline selected (double-click it), turning **Fill** on
 fills what the outline surrounds. The stroke **width** stops at a hairline (0.1) when you drag
 it all the way down; the checkbox is what removes a stroke.
