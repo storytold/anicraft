@@ -73,3 +73,18 @@ fn a_flash_8_file_opens_with_its_symbols_tweens_and_text() {
     }).collect();
     assert!(texts.iter().any(|t| t.contains("this is not a complete test")), "Up frame texts {texts:?}");
 }
+
+/// The file's two eased tweens ease the way its maker's Flash 8 drew them. The frames they
+/// published beside the file show the ball leaving its first keyframe slowly and arriving at
+/// its last one slowly; the file stores +100 for the first tween and −100 for the last, the
+/// other way round from the Classic Ease slider.
+#[test]
+fn the_eased_tweens_of_a_flash_8_file_start_as_flash_drew_them() {
+    let (doc, _) = anicraft_fla::import(FLASH8_TESTER).expect("the Flash 8 file imports");
+    let ball = layer(&doc.scenes[0].timeline, "ball");
+    let eased: Vec<&anicraft_doc::Easing> = ball.keyframes.iter().filter_map(|k| k.tween.as_ref()).map(|t| &t.easing).filter(|e| **e != anicraft_doc::Easing::Linear).collect();
+    let (first, last) = (eased.first().expect("an eased tween"), eased.last().expect("an eased tween"));
+    assert!(eased.len() >= 2, "{eased:?}");
+    assert!(first.apply(0.25) < 0.25, "the first tween starts slowly: {first:?}");
+    assert!(last.apply(0.25) > 0.25, "the last tween starts quickly and slows down: {last:?}");
+}
