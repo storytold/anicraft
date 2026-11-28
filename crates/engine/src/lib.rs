@@ -1123,6 +1123,10 @@ impl Session {
 
     /// Moves through history until `undo_len()` equals `target` (for a History panel click).
     pub fn travel_to(&mut self, target: usize) -> Result<Value> {
+        // An open gesture (a slider still held) becomes its step first: closing it inside the
+        // first redo would drop the steps this was about to redo, and that redo then failed
+        // with "nothing to redo" after the check that there was one.
+        self.end_gesture();
         let mut moved = 0usize;
         while self.history.undo_len() > target && self.history.can_undo() {
             self.undo()?;

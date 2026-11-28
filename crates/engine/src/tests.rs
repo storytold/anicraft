@@ -116,6 +116,23 @@ fn history_is_bounded_by_memory() {
     assert!(s.can_undo());
 }
 
+/// A History click on a step ahead while an edit is still open (a slider held): the open edit
+/// becomes a step, which leaves nothing ahead, and the click is not an error.
+#[test]
+fn travel_to_ahead_with_an_open_gesture_is_not_an_error() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 10, "h": 10}));
+    run(&mut s, "draw.rect", json!({"x": 20, "y": 0, "w": 10, "h": 10}));
+    s.undo().unwrap();
+    assert!(s.can_redo());
+    s.begin_gesture("Move");
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "element.translate", json!({"dx": 5, "dy": 0}));
+    let v = s.travel_to(2).expect("no error");
+    assert!(!s.can_redo(), "the open edit replaced what was ahead");
+    assert_eq!(v["position"].as_u64(), Some(s.history_len() as u64));
+}
+
 #[test]
 fn travel_to_moves_through_history() {
     let mut s = Session::default();

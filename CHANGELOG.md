@@ -23,6 +23,8 @@
     command line the command converts and reports the symbol it made.
   * `camera.set` documents that an edit on a held frame lands on the keyframe that holds it
     (#673), and `library.new_symbol` answers `{symbol}`.
+  * **A click in History while an edit is still open** (a slider held) no longer fails with
+    "nothing to redo": the open edit becomes its step first.
   * Not in this batch: stroke joins where separately drawn lines meet (#589, outside PR #620,
     backlog P-058): the fix is held until its work for each frame is bounded.
 * **Adding a colour stop to a gradient keeps it a gradient** (#626): clicking the colour-stop bar

@@ -799,7 +799,8 @@ pub(crate) fn history(app: &mut App, ui: &mut egui::Ui) {
     if let Some(t) = target
         && let Err(e) = app.s.travel_to(t)
     {
-        app.status_err(e.to_string());
+        // The engine's English, translated when a catalog has that exact message.
+        app.status_err(crate::i18n::t_dyn(&e.to_string()).into_owned());
     }
 }
 
