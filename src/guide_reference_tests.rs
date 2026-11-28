@@ -127,16 +127,23 @@ pub fn shortcuts_md() -> String {
         Some((_, sub)) => format!("{} › {}", sub.replace('/', " › "), a.label),
         None => a.label.to_string(),
     };
-    let mut rows: Vec<(&str, String, Vec<&str>)> = crate::keymap::actions().into_iter().filter(|a| !a.defaults.is_empty()).map(|a| (a.group, name(&a), a.defaults)).collect();
+    // Each system's own defaults: the Mac has a few keys of its own (⇧⌘Z for Redo).
+    let mac_keys = crate::keymap::actions_for(Os::Mac);
+    let mut rows: Vec<(&str, String, Vec<&str>, Vec<&str>)> = crate::keymap::actions_for(Os::Linux)
+        .into_iter()
+        .zip(mac_keys)
+        .filter(|(a, m)| !a.defaults.is_empty() || !m.defaults.is_empty())
+        .map(|(a, m)| (a.group, name(&a), a.defaults, m.defaults))
+        .collect();
     for (group, label, keys) in crate::dialogs::fixed_rows() {
         let label = if matches!(label, "Quit" | "Exit") { "Exit (Quit on macOS)".to_string() } else { label.to_string() };
-        rows.push((group, label, keys));
+        rows.push((group, label, keys.clone(), keys));
     }
     for g in ordered(rows.iter().map(|r| r.0).collect()) {
         out.push_str(&format!("\n## {}\n\n| Action | Windows and Linux | macOS |\n|---|---|---|\n", esc(g)));
-        for (_, label, keys) in rows.iter().filter(|r| r.0 == g) {
+        for (_, label, keys, mac_keys) in rows.iter().filter(|r| r.0 == g) {
             let win: Vec<String> = keys.iter().map(|k| esc(k)).collect();
-            let mac: Vec<String> = keys.iter().map(|k| esc(&mac(k))).collect();
+            let mac: Vec<String> = mac_keys.iter().map(|k| esc(&mac(k))).collect();
             out.push_str(&format!("| {} | {} | {} |\n", esc(label), win.join(", "), mac.join(", ")));
         }
     }

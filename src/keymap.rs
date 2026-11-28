@@ -162,6 +162,11 @@ pub fn set_macros<'a>(names: impl IntoIterator<Item = &'a str>) {
 /// Every action that can carry a shortcut: the menu commands, any command with a default key,
 /// the tools, the view keys and the saved commands.
 pub fn actions() -> Vec<Action> {
+    actions_for(crate::platform::OS)
+}
+
+/// [`actions`] with the default keys of `os` (the shortcut reference lists every system's).
+pub fn actions_for(os: crate::platform::Os) -> Vec<Action> {
     let mut v: Vec<Action> = commands()
         .into_iter()
         .filter(|c| !c.menu.is_empty() || c.shortcut.is_some())
@@ -186,8 +191,28 @@ pub fn actions() -> Vec<Action> {
         defaults: VIEW_SHORTCUTS.iter().filter(|(_, i)| *i == id).map(|(k, _)| *k).collect(),
     }));
     MACROS.with(|m| v.extend(m.borrow().iter().map(|&(id, label)| Action { id, label, group: tr_noop!("Commands"), defaults: Vec::new() })));
+    if os == crate::platform::Os::Mac {
+        mac_defaults(&mut v);
+    }
     v
 }
+
+/// The keys every Mac app has: Redo is ⇧⌘Z (⌘Y stays), which Remove Transform gives up there, and
+/// the next and the previous document are ⇧⌘] and ⇧⌘[, first, so their menu items show them.
+fn mac_defaults(v: &mut [Action]) {
+    for a in v {
+        match a.id {
+            "edit.redo" => a.defaults.insert(0, "Ctrl+Shift+Z"),
+            "modify.remove_transform" => a.defaults.retain(|k| *k != "Ctrl+Shift+Z"),
+            "view.next_document" => a.defaults.insert(0, "Ctrl+Shift+]"),
+            "view.prev_document" => a.defaults.insert(0, "Ctrl+Shift+["),
+            _ => {}
+        }
+    }
+}
+
+/// On macOS, the keys of the system's own menu items, which take them before the app sees them.
+pub const MAC_RESERVED: &[(&str, &str)] = &[("Ctrl+H", tr_noop!("hiding AniCraft")), ("Ctrl+Alt+H", tr_noop!("hiding the other apps")), ("Ctrl+M", tr_noop!("minimizing the window"))];
 
 /// The registry spelling of a key.
 fn key_name(k: Key) -> &'static str {
@@ -245,7 +270,8 @@ pub fn normalize(s: &str) -> Option<String> {
 /// What a reserved chord is kept for.
 pub fn reserved(chord: &str) -> Option<&'static str> {
     let c = normalize(chord)?;
-    RESERVED.iter().find(|(k, _)| normalize(k).as_deref() == Some(c.as_str())).map(|(_, why)| *why)
+    let mac = if crate::platform::OS == crate::platform::Os::Mac { MAC_RESERVED } else { &[] };
+    RESERVED.iter().chain(mac).find(|(k, _)| normalize(k).as_deref() == Some(c.as_str())).map(|(_, why)| *why)
 }
 
 /// Defaults with the user's overrides applied.
@@ -463,7 +489,9 @@ mod tests {
         assert_eq!(m.primary("view.panel.align"), None, "Ctrl+K is the command palette");
         assert_eq!(m.primary("view.hide_panels"), Some("F4"));
         assert_eq!(m.owner("ctrl+z").map(|a| a.id), None, "chords are case-sensitive registry names");
-        assert_eq!(m.owner("Ctrl+Shift+Z").map(|a| a.id), Some("modify.remove_transform"));
+        // Animate's Remove Transform key; on a Mac it is Redo's, as in every Mac app.
+        let z = if crate::platform::OS == crate::platform::Os::Mac { "edit.redo" } else { "modify.remove_transform" };
+        assert_eq!(m.owner("Ctrl+Shift+Z").map(|a| a.id), Some(z));
         let mut all: Vec<String> = m.actions.iter().flat_map(|a| m.keys(a.id).to_vec()).collect();
         let n = all.len();
         all.sort();

@@ -158,6 +158,9 @@ cpal = { version = "0.18", optional = true }
 # objc2 / objc2-app-kit / objc2-foundation are the versions wgpu already brings on macOS.
 [target.'cfg(target_os = "macos")'.dependencies]
 fmv-macos-events = "=0.1.0"
+# The system menu bar (src/native_menu.rs): a safe API over AppKit's menus (MIT OR Apache-2.0), so our
+# code stays free of `unsafe`. The version Craft Anything uses; its objc2 crates are the ones wgpu brings.
+muda = { version = "0.21.2", default-features = false }
 # Waits for the answer of a file dialog shown as a sheet (`platform::start_file_dialog`).
 pollster.workspace = true
 

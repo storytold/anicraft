@@ -60,7 +60,7 @@ This page is generated from the editor's shortcut map, so it always matches the 
 | Action | Windows and Linux | macOS |
 |---|---|---|
 | Undo | Ctrl+Z | ⌘Z |
-| Redo | Ctrl+Y | ⌘Y |
+| Redo | Ctrl+Y | ⇧⌘Z, ⌘Y |
 | Timeline › Cut Frames | Ctrl+Alt+X | ⌥⌘X |
 | Timeline › Copy Frames | Ctrl+Alt+C | ⌥⌘C |
 | Timeline › Paste Frames | Ctrl+Alt+V | ⌥⌘V |
@@ -110,8 +110,8 @@ This page is generated from the editor's shortcut map, so it always matches the 
 | Hide Panels / Show Panels | F4 | F4 |
 | Close Document | Ctrl+W | ⌘W |
 | Close All Documents | Ctrl+Alt+W | ⌥⌘W |
-| Next Document | Ctrl+PageDown | ⌘PageDown |
-| Previous Document | Ctrl+PageUp | ⌘PageUp |
+| Next Document | Ctrl+PageDown | ⇧⌘\], ⌘PageDown |
+| Previous Document | Ctrl+PageUp | ⇧⌘\[, ⌘PageUp |
 | Brush Size Down | \[ | \[ |
 | Brush Size Up | \] | \] |
 | Zoom in / out | Ctrl+=, Ctrl+- | ⌘=, ⌘- |
@@ -146,7 +146,7 @@ This page is generated from the editor's shortcut map, so it always matches the 
 | Ungroup | Ctrl+Shift+G | ⇧⌘G |
 | Transform › Rotate 90° CW | Ctrl+Shift+9 | ⇧⌘9 |
 | Transform › Rotate 90° CCW | Ctrl+Shift+7 | ⇧⌘7 |
-| Transform › Remove Transform | Ctrl+Shift+Z | ⇧⌘Z |
+| Transform › Remove Transform | Ctrl+Shift+Z |  |
 | Timeline › Distribute to Layers | Ctrl+Shift+D | ⇧⌘D |
 | Align › Left | Ctrl+Alt+1 | ⌥⌘1 |
 | Align › Horizontal Center | Ctrl+Alt+2 | ⌥⌘2 |

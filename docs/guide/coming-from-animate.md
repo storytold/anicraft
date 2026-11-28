@@ -94,7 +94,7 @@ Asset Warp, the Paint Brush and Fluid Brush, Deco and the Spray Brush. More on t
 | Duplicate | **Ctrl+D** | Edit › Duplicate |
 | Paste in place | **Ctrl+Shift+V** | Edit › Paste in Place |
 | Deselect all | **Ctrl+Shift+A** | Edit › Deselect All |
-| Redo | **Ctrl+Y** | Edit › Redo |
+| Redo | **Ctrl+Y** (on a Mac also **⇧⌘Z**, which there is not Remove Transform) | Edit › Redo |
 | Cut, copy and paste frames | **Ctrl+Alt+X**, **Ctrl+Alt+C**, **Ctrl+Alt+V** | Edit › Timeline |
 | Align left to bottom | **Ctrl+Alt+1** to **Ctrl+Alt+6** | Modify › Align |
 | Rotate 90° CW and CCW | **Ctrl+Shift+9**, **Ctrl+Shift+7** | Modify › Transform |
