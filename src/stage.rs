@@ -554,7 +554,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         (Some(kind), Some(frame)) => {
                             // Moving an instance's transformation point changes the document;
                             // a point held for the selection doesn't.
-                            if kind != XfKind::Pivot {
+                            if kind == XfKind::Move && alt {
+                                begin_transform_move(app, true);
+                            } else if kind != XfKind::Pivot {
                                 app.s.begin_gesture(tr_noop!("Free Transform"));
                             } else if frame.keeps {
                                 app.s.begin_gesture(tr_noop!("Move Transformation Point"));
@@ -568,7 +570,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                 app.run("element.pick", json!({"x": sp.x, "y": sp.y, "add": shift}));
                                 match bounds_arr(app.s.selection_bounds()) {
                                     Some(bounds) => {
-                                        app.s.begin_gesture(tr_noop!("Free Transform"));
+                                        begin_transform_move(app, alt);
                                         app.xf.drag = Some(crate::xform::Frame::upright(bounds));
                                         Drag::Transform { kind: XfKind::Move, start: sp, bounds, applied: Affine::IDENTITY }
                                     }
@@ -1671,6 +1673,17 @@ fn move_raw_point(app: &mut App, c: Pos2, zoom: f32) {
         let ids: Vec<serde_json::Value> = points.as_array().into_iter().flatten().filter_map(|pt| pt.get(0).cloned()).collect();
         app.raw_points = points.clone();
         touched(app, &serde_json::Value::Array(ids));
+    }
+}
+
+/// Starts a Free Transform move. With `copy`, Alt-drag duplicates the selection into the same
+/// gesture, so the following transform moves the copy and one undo removes it again (#643).
+fn begin_transform_move(app: &mut App, copy: bool) {
+    if copy {
+        app.s.begin_gesture(tr_noop!("Copy"));
+        app.run("edit.duplicate", json!({"dx": 0, "dy": 0}));
+    } else {
+        app.s.begin_gesture(tr_noop!("Free Transform"));
     }
 }
 
@@ -5070,6 +5083,37 @@ mod draw_tests {
             let n = app.s.visible_elements().len();
             app.s.undo().expect("undo");
             assert!(app.s.visible_elements().len() < n, "one undo takes the stroke away");
+        }
+    }
+
+    #[test]
+    fn free_transform_alt_drag_moves_a_copy_in_one_undo_step() {
+        for object in [true, false] {
+            let mut app = app();
+            app.s.style.object_drawing = object;
+            app.run("draw.rect", json!({"x": 10, "y": 20, "w": 100, "h": 80, "fill": "#3366ff", "stroke": "#000000", "object": object}));
+            let before_doc = app.s.doc.clone();
+            let before: Vec<(u64, Affine)> = app.s.visible_elements().into_iter().map(|e| (e.id.0, e.transform)).collect();
+            let original_ids: Vec<u64> = before.iter().map(|(id, _)| *id).collect();
+            begin_transform_move(&mut app, true);
+            let copies = app.s.selection.id_list();
+            assert_eq!(app.s.visible_elements().len(), before.len() * 2, "object {object}: every original piece has a copy");
+            assert!(copies.iter().all(|id| !original_ids.contains(id)), "object {object}: the copies are selected");
+            let [a, b, c, d, e, f] = Affine::translate(75.0, 25.0).m;
+            app.s.execute("modify.transform", &json!({"a": a, "b": b, "c": c, "d": d, "e": e, "f": f})).expect("the stage's move command");
+            app.s.end_gesture();
+            let now = app.s.visible_elements();
+            for (id, transform) in before {
+                let original = now.iter().find(|el| el.id.0 == id).expect("the original stays");
+                assert_eq!(original.transform, transform, "object {object}: original {id} did not move");
+            }
+            for id in copies {
+                let copy = now.iter().find(|el| el.id.0 == id).expect("the copy stays");
+                let at = copy.transform.translation();
+                assert!(at.x >= 75.0 && at.y >= 25.0, "object {object}: copy {id} moved with the drag: {at:?}");
+            }
+            app.s.undo().expect("one undo for the duplicate and its move");
+            assert_eq!(app.s.doc, before_doc, "object {object}: one undo restores the whole drawing");
         }
     }
 
