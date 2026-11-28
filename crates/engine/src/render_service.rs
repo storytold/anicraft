@@ -56,7 +56,7 @@ pub struct FrameJob {
     pub view: View,
     /// Onion skin or Edit Multiple Frames (ADR 0047); `None`: the frame alone.
     pub onion: Option<OnionSkin>,
-    /// Seen through the scene's camera (View › Preview Through Camera, ADR 0027): what the
+    /// Seen through the scene's camera (ADR 0027): what the
     /// movie shows, rather than the stage as edited.
     pub camera: bool,
     /// A symbol open in place, in front of the picture (ADR 0045): onion skin composes its own

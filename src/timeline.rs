@@ -497,8 +497,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         let gone = sel.layers(&app.s.timeline().layers).is_empty();
         if gone || app.playing || (app.tl_drag == TlDrag::None && !(f0..=f1).contains(&app.s.frame)) {
             app.frame_sel = None;
+            app.camera_key_sel.clear();
         }
     }
+    crate::camera_tool::sync_key_selection(app);
 
     // ---- body -----------------------------------------------------------------------------
     let body = ui.available_rect_before_wrap();
@@ -719,6 +721,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             // and Shift+F6 on every layer that reaches the playhead, F6 and F7 on the active
             // layer (ADR 0131).
             app.frame_sel = None;
+            app.camera_key_sel.clear();
         }
     // The onion menu on a right-click, as the markers live here (ADR 0047).
     ruler_resp.context_menu(|ui| crate::onion::menu(app, ui));
@@ -1028,10 +1031,6 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     ui.close();
                 }
                 ui.separator();
-                if ui.button(tr!("Preview Through Camera")).clicked() {
-                    app.toggle_camera_preview();
-                    ui.close();
-                }
                 if ui.button(tr!("Remove Camera")).clicked() {
                     app.request("camera.remove", json!({}));
                     ui.close();
@@ -1191,7 +1190,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 let er = Rect::from_center_size(pos2(x1 - cell_w * 0.5 - 1.0, kc.y + 2.0), vec2(5.0, 7.0));
                 cp.rect_stroke(er, 0.0, Stroke::new(1.2, mark), StrokeKind::Inside);
             }
-            if empty {
+            if is_camera {
+                let selected_cam = app.camera_key_sel.contains(&k.start);
+                let fill = if selected_cam { to_color32(layer.color) } else { mark };
+                let r = if selected_cam { 5.0 } else { 4.0 };
+                let pts = vec![kc + vec2(0.0, -r), kc + vec2(r, 0.0), kc + vec2(0.0, r), kc + vec2(-r, 0.0)];
+                if empty {
+                    cp.add(egui::Shape::closed_line(pts, Stroke::new(1.5, fill)));
+                } else {
+                    cp.add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, T.ink)));
+                }
+                if selected_cam {
+                    let r2 = r + 2.5;
+                    let ring = vec![kc + vec2(0.0, -r2), kc + vec2(r2, 0.0), kc + vec2(0.0, r2), kc + vec2(-r2, 0.0)];
+                    cp.add(egui::Shape::closed_line(ring, Stroke::new(1.5, T.text)));
+                }
+            } else if empty {
                 cp.circle_stroke(kc, 3.5, Stroke::new(1.5, mark));
             } else {
                 cp.circle_filled(kc, 4.0, mark);
@@ -1340,6 +1354,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let grab = app.frame_sel.is_some_and(|s| s.contains(&layers, i, f) && s.has_keys(&layers));
             if !grab && !m.shift && !m.command && span_end_at(p.x).is_none() {
                 app.frame_sel = Some(whole_motion_span(layer, f).unwrap_or(FrameSel::cell(layer.id, f)));
+                if is_camera {
+                    app.camera_key_sel.clear();
+                    if layer.keyframe_starting_at(f).is_some() {
+                        app.camera_key_sel.insert(f);
+                    }
+                }
                 select_here(app, f);
             }
         }
@@ -1381,6 +1401,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     let row = rows.get(r.min(rows.len().saturating_sub(1))).copied().unwrap_or(0);
                     if let Some(l) = layers.get(row) {
                         sel.head = (l.id, f);
+                    }
+                    if let Some(cam) = layers.iter().find(|l| l.kind == LayerKind::Camera)
+                        && sel.layers(&layers).contains(&cam.id)
+                    {
+                        let (f0, f1) = sel.frames();
+                        app.camera_key_sel = cam.keyframes.iter().map(|k| k.start).filter(|s| *s >= f0 && *s <= f1).collect();
                     }
                     // The playhead follows the selection's end as it is dragged (#561).
                     if app.s.frame != f {
@@ -1469,9 +1495,30 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             let f = frame_at(p.x);
             let ctrl = ui.input(|inp| inp.modifiers.command);
             match app.frame_sel.as_mut() {
-                Some(sel) if shift => sel.head = (layer.id, f),
+                Some(sel) if shift => {
+                    sel.head = (layer.id, f);
+                    if is_camera {
+                        let (f0, f1) = sel.frames();
+                        app.camera_key_sel = layer.keyframes.iter().map(|k| k.start).filter(|s| *s >= f0 && *s <= f1).collect();
+                    }
+                }
+                // Ctrl-click on a camera keyframe toggles it in the multi-keyframe selection.
+                _ if is_camera && ctrl && layer.keyframe_starting_at(f).is_some() => {
+                    if !app.camera_key_sel.remove(&f) {
+                        app.camera_key_sel.insert(f);
+                    }
+                    app.frame_sel = Some(FrameSel::cell(layer.id, f));
+                }
                 // A click on a motion tween picks the whole span (Ctrl-click: one frame).
-                _ => app.frame_sel = Some(whole_motion_span(layer, f).filter(|_| !ctrl).unwrap_or(FrameSel::cell(layer.id, f))),
+                _ => {
+                    app.frame_sel = Some(whole_motion_span(layer, f).filter(|_| !ctrl).unwrap_or(FrameSel::cell(layer.id, f)));
+                    if is_camera {
+                        app.camera_key_sel.clear();
+                        if layer.keyframe_starting_at(f).is_some() {
+                            app.camera_key_sel.insert(f);
+                        }
+                    }
+                }
             }
             select_here(app, f);
         }

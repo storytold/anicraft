@@ -286,10 +286,12 @@ pub enum Drag {
     /// Moving the whole motion path (ADR 0038), from stage point `last` last frame.
     MotionMove { last: egui::Pos2 },
     /// Camera tool (ADR 0027): panning from screen point `last`, turning from pointer angle
-    /// `last` (radians about the camera centre), or zooming with the wheel until `until`
-    /// (seconds; the turns of one burst are one undo step).
-    CameraPan { last: egui::Pos2 },
-    CameraRotate { last: f32 },
+    /// `last` (radians about the camera centre), trucking from corner distance `last_dist` on
+    /// `frame`, or zooming with the wheel until `until` (seconds; the turns of one burst are one
+    /// undo step).
+    CameraPan { frame: u32, last: egui::Pos2 },
+    CameraRotate { frame: u32, last: f32 },
+    CameraZoom { frame: u32, last_dist: f32 },
     CameraWheel { until: f64 },
     /// Bone tool (ADR 0043): drawing a bone from instance `from` (or inside shape `from`, or on
     /// from a shape bone's joint node, ADR 0071), joint `head` to `cur` (stage). `parent`: the
@@ -400,8 +402,8 @@ pub struct App {
     /// Onion skin and Edit Multiple Frames (ADR 0047): view state, passed with each render.
     pub onion: anicraft_engine::onion::OnionSkin,
     pub onion_ui: crate::onion::OnionUi,
-    /// View › Preview Through Camera: the stage shows what the movie shows (ADR 0027).
-    pub camera_preview: bool,
+    /// Selected camera keyframe start frames in the Timeline (authoritative target for the active camera box).
+    pub camera_key_sel: std::collections::BTreeSet<u32>,
     /// The tool in hand last frame (picking the Camera tool adds a camera).
     pub last_tool: Tool,
     pub status: Option<Status>,
@@ -841,7 +843,7 @@ impl App {
             play_acc: 0.0,
             onion: crate::onion::from_prefs(&prefs.onion),
             onion_ui: crate::onion::OnionUi::default(),
-            camera_preview: false,
+            camera_key_sel: std::collections::BTreeSet::new(),
             last_tool: Tool::Select,
             status: None,
             left_out_said: false,
@@ -1032,19 +1034,6 @@ impl App {
         app
     }
 
-    /// View › Preview Through Camera (ADR 0027). With no camera yet there is nothing to look
-    /// through, so it says how to add one; when the camera layer is hidden, it reminds to show it.
-    pub fn toggle_camera_preview(&mut self) {
-        self.camera_preview = !self.camera_preview;
-        if self.camera_preview {
-            if self.s.timeline().camera_layer().is_none() {
-                self.status_ok(tr!("Preview through camera is on; add a camera (the camera button on the timeline, or the Camera tool) to look through it."));
-            } else if self.s.timeline().camera_layer().is_some_and(|l| !l.visible) {
-                self.status_ok(tr!("Preview through camera is on, but the camera layer is hidden. Show the layer to look through it."));
-            }
-        }
-    }
-
     /// The Undo key as this computer shows it (rebindable; ⌘Z on macOS), for messages that
     /// say how to undo.
     pub fn undo_key(&self) -> String {
@@ -1104,6 +1093,16 @@ impl App {
                 }
                 if id == "view.hide_edges" {
                     self.status_ok(if self.s.aids.hide_edges { tr!("Selection edges hidden") } else { tr!("Selection edges shown") });
+                }
+                if id == "layer.select" {
+                    let is_cam = self.s.timeline().camera_layer().is_some_and(|c| c.id == self.s.layer);
+                    if is_cam {
+                        self.tool = Tool::Camera;
+                        self.last_tool = Tool::Camera;
+                    } else if self.tool == Tool::Camera {
+                        self.tool = Tool::Select;
+                        self.last_tool = Tool::Select;
+                    }
                 }
                 Some(v)
             }
@@ -2991,7 +2990,7 @@ impl App {
                 }
                 self.run("timeline.goto", json!({"frame": if which == "hints" { 0 } else { 15 }}));
             }
-            Some(which @ ("camera" | "cameraview")) => {
+            Some("camera" | "cameraview") => {
                 // The sample seen by a camera that pushes in and turns over the first second,
                 // the far background a layer deep; the Camera tool in hand at frame 12.
                 self.run("camera.add", json!({}));
@@ -3004,9 +3003,8 @@ impl App {
                 self.run("timeline.goto", json!({"frame": 12}));
                 self.tool = Tool::Camera;
                 self.last_tool = Tool::Camera;
-                self.camera_preview = which == "cameraview";
             }
-            Some(which @ ("layerdepth" | "layerdepthview")) => {
+            Some("layerdepth" | "layerdepthview") => {
                 // A parallax scene mid-pan (ADR 0082): the camera pans right and pushes in over
                 // the first second; the sky is far back, the sun and hills between, the star
                 // attached to the camera like a title; the Layer Depth panel open, frame 12.
@@ -3025,7 +3023,6 @@ impl App {
                 }
                 self.run("timeline.goto", json!({"frame": 12}));
                 self.tool = Tool::Select;
-                self.camera_preview = which == "layerdepthview";
                 self.show_panel(crate::dock::Panel::LayerDepth);
             }
             Some("bones") => {
@@ -4390,7 +4387,8 @@ impl App {
         if swallowed && self.paste_from_system() {
             return;
         }
-        let control = keys == crate::a11y::Keyboard::Control;
+        let cam_box_focused = ctx.memory(|m| m.focused()) == Some(egui::Id::unique("stage_camera_box"));
+        let control = keys == crate::a11y::Keyboard::Control && !cam_box_focused;
         if !control {
             crate::motion_path::consume_keys(self, ctx);
             pathtools::consume_keys(self, ctx);
@@ -4404,10 +4402,13 @@ impl App {
         let mut tool = None;
         let mut play = false;
         let mut nudge = egui::Vec2::ZERO;
+        let mut cam_rotate_deg = 0.0f32;
+        let mut cam_zoom_by = 1.0f32;
         let surface_focused = ctx.memory(|m| m.focused().is_some());
         // On the focused timeline the arrows move the playhead (Left, Right) and the active
         // layer (Up, Down) instead of nudging artwork (ADR 0064).
         let on_timeline = surface_focused && crate::a11y::focused_region(ctx) == Some(crate::a11y::Region::Timeline);
+        let camera_tool_active = !on_timeline && self.tool == Tool::Camera && crate::camera_tool::active_camera(self).is_some();
         let (mut frame_step, mut layer_step, mut layer_extend) = (0i64, 0i64, 0i64);
         ctx.input_mut(|i| {
             for (m, k, id) in &self.shortcuts {
@@ -4438,8 +4439,21 @@ impl App {
                 } else if on_timeline && matches!(k, Key::ArrowUp | Key::ArrowDown) && i.consume_key(Modifiers::SHIFT, k) {
                     // Shift+Up/Down: one more layer selected, or one fewer (#512).
                     layer_extend += if k == Key::ArrowUp { -1 } else { 1 };
+                } else if camera_tool_active && matches!(k, Key::ArrowLeft | Key::ArrowRight) && i.modifiers.alt && !i.modifiers.command {
+                    let deg = if i.modifiers.shift { 15.0 } else { 1.0 };
+                    if i.consume_key(i.modifiers, k) {
+                        cam_rotate_deg += if k == Key::ArrowLeft { -deg } else { deg };
+                    }
                 } else if i.key_pressed(k) && !i.modifiers.command {
                     nudge += d;
+                }
+            }
+            if camera_tool_active && !i.modifiers.command && !i.modifiers.alt {
+                if i.consume_key(Modifiers::NONE, Key::Equals) || i.consume_key(Modifiers::SHIFT, Key::Plus) || i.consume_key(Modifiers::NONE, Key::Plus) {
+                    cam_zoom_by *= 1.1;
+                }
+                if i.consume_key(Modifiers::NONE, Key::Minus) {
+                    cam_zoom_by /= 1.1;
                 }
             }
         });
@@ -4514,7 +4528,40 @@ impl App {
         if play {
             self.toggle_play();
         }
-        if nudge != egui::Vec2::ZERO && crate::onion::editing(self) {
+        if cam_rotate_deg.abs() > 1e-4 && self.tool == Tool::Camera && crate::camera_tool::active_camera(self).is_some() {
+            let frame = crate::camera_tool::active_target_frame(self);
+            let own = !self.s.in_gesture();
+            if own {
+                self.s.begin_gesture(tr_noop!("Rotate Camera")); // i18n-exempt: an undo label
+            }
+            self.run("camera.set", json!({"frame": frame, "rotate_by": cam_rotate_deg}));
+            if own {
+                self.s.end_gesture();
+            }
+        }
+        if (cam_zoom_by - 1.0).abs() > 1e-4 && self.tool == Tool::Camera && crate::camera_tool::active_camera(self).is_some() {
+            let frame = crate::camera_tool::active_target_frame(self);
+            let own = !self.s.in_gesture();
+            if own {
+                self.s.begin_gesture(tr_noop!("Zoom Camera")); // i18n-exempt: an undo label
+            }
+            self.run("camera.set", json!({"frame": frame, "zoom_by": cam_zoom_by}));
+            if own {
+                self.s.end_gesture();
+            }
+        }
+        if nudge != egui::Vec2::ZERO && self.tool == Tool::Camera && crate::camera_tool::active_camera(self).is_some() {
+            // While the Camera tool is active, arrow keys move the camera without touching artwork.
+            let frame = crate::camera_tool::active_target_frame(self);
+            let own = !self.s.in_gesture();
+            if own {
+                self.s.begin_gesture(tr_noop!("Move Camera")); // i18n-exempt: an undo label
+            }
+            self.run("camera.set", json!({"frame": frame, "dx": nudge.x, "dy": nudge.y}));
+            if own {
+                self.s.end_gesture();
+            }
+        } else if nudge != egui::Vec2::ZERO && crate::onion::editing(self) {
             crate::onion::nudge(self, anicraft_engine::geom::Vec2::new(nudge.x, nudge.y));
         } else if nudge != egui::Vec2::ZERO && !self.s.selection.is_empty() {
             // One undo step: the move, with raw shapes left floating where they land (ADR 0122).

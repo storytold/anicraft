@@ -379,10 +379,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let to_screen = |p: Vec2| pos2(origin.x + p.x * zoom, origin.y + p.y * zoom);
     let to_stage = |p: Pos2| pos2((p.x - origin.x) / zoom, (p.y - origin.y) / zoom);
     let painter = ui.painter_at(canvas);
-    // View > Preview Through Camera: the stage shows the movie's picture (ADR 0027). The
-    // Selection tool picks and moves artwork there, the pointer mapped back through the camera
-    // and each layer's depth (ADR 0082); the other artwork tools pause (what they'd edit is in
-    // stage space, not where it shows).
+    // Camera rendering: when a visible camera layer exists, the stage shows the movie's picture
+    // automatically (ADR 0027). The Selection tool picks and moves artwork there, the pointer
+    // mapped back through the camera and each layer's depth (ADR 0082); the other artwork tools
+    // pause (what they'd edit is in stage space, not where it shows).
     let preview = crate::camera_tool::previewing(app);
     let cam_geo = crate::camera_tool::Geo { origin: st_origin, zoom: st_zoom, stage_rect, preview };
     // Library items dragged onto the stage land at the pointer (ADR 0053).
@@ -403,7 +403,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     crate::rulers::input(app, ui, &bars, geo, preview);
     let guide_hot = if app.drag == Drag::None && !panning && !preview { pointer.and_then(|p| crate::rulers::guide_at(app, geo, p)) } else { None };
     if paused && (resp.drag_started() || resp.clicked()) {
-        app.status_ok(tr!("Previewing through the camera: the Selection tool picks and moves artwork here; other tools wait. Turn off View › Preview Through Camera to draw."));
+        app.status_ok(tr!("Camera active: the Selection tool picks and moves artwork here; other tools wait. Hide the Camera layer to draw in stage space."));
     }
     // Selection box in screen space (free transform handles live on it).
     // Edit Multiple Frames takes the Selection and Free Transform tools' input (ADR 0047); Free
@@ -453,7 +453,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             _ if matches!(app.drag, Drag::ArmatureMove { .. }) => CursorIcon::Move,
             Tool::Select if app.drag == Drag::None && pointer.is_some_and(|p| crate::bone_tool::hit(app, xf, p).is_some()) => CursorIcon::Grab,
             _ if paused => CursorIcon::NotAllowed,
-            Tool::Camera if app.drag == Drag::None && pointer.is_some_and(|p| crate::camera_tool::on_knob(app, &cam_geo, p)) => CursorIcon::Alias,
+            Tool::Camera if app.drag == Drag::None => pointer.map_or(CursorIcon::Grab, |p| crate::camera_tool::cursor(app, &cam_geo, p)),
+            Tool::Camera if matches!(app.drag, Drag::CameraRotate { .. } | Drag::CameraZoom { .. }) => CursorIcon::None,
             Tool::Camera => CursorIcon::Grab,
             _ if hint_hot.is_some() && app.drag == Drag::None => CursorIcon::Grab,
             _ if matches!(app.drag, Drag::MotionPath { .. }) => CursorIcon::Grabbing,
@@ -499,14 +500,18 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             _ => CursorIcon::Default,
         };
         ui.ctx().set_cursor_icon(icon);
-        // Free Transform outside a corner, and while turning: the curved arrow, bent around
-        // the box so it reads as "drag to rotate".
+        // Free Transform outside a corner and while turning, or Camera tool on its corner/rotate
+        // zones: the stage paints the curved rotate or diagonal truck cursor on the tooltip layer.
         if icon == CursorIcon::None
-            && app.tool == Tool::Transform
             && let Some(p) = pointer
         {
-            let centre = sel_rect.map_or(canvas.center(), |r| r.center());
-            rotate_cursor(&ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("stage_cursor"))), p, p - centre);
+            let cursor_painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("stage_cursor")));
+            if app.tool == Tool::Transform {
+                let centre = sel_rect.map_or(canvas.center(), |r| r.center());
+                rotate_cursor(&cursor_painter, p, p - centre);
+            } else if app.tool == Tool::Camera {
+                crate::camera_tool::draw_cursor(app, &cam_geo, &cursor_painter, p);
+            }
         }
     }
     if let Some(picker) = picker {
@@ -528,6 +533,10 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             Drag::Pan
         } else if paused {
             Drag::None
+        } else if app.tool == Tool::Camera {
+            // Camera handles and panning take priority over guides/hints so artwork cannot be
+            // modified accidentally while manipulating the camera.
+            crate::camera_tool::drag_start(app, &cam_geo, press)
         } else if through {
             crate::camera_tool::select_press(app, to_v(sp), shift)
         } else if let Some(i) = crate::rulers::guide_at(app, geo, press) {
@@ -617,7 +626,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
     if resp.dragged()
         && let Some(p) = resp.interact_pointer_pos()
-        && matches!(app.drag, Drag::CameraPan { .. } | Drag::CameraRotate { .. })
+        && matches!(app.drag, Drag::CameraPan { .. } | Drag::CameraRotate { .. } | Drag::CameraZoom { .. })
     {
         let mut d = app.drag;
         crate::camera_tool::drag_to(app, &cam_geo, &mut d, p);
@@ -803,7 +812,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.s.end_gesture();
             }
             Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. } => end_raw_drag(app),
-            Drag::Transform { .. } | Drag::SliceGuide { .. } | Drag::Points { .. } | Drag::Hint { .. } | Drag::MotionMove { .. } | Drag::CameraPan { .. } | Drag::CameraRotate { .. } | Drag::BonePose { .. } | Drag::ArmatureMove { .. } | Drag::WarpPin { .. } => app.s.end_gesture(),
+            Drag::Transform { .. } | Drag::SliceGuide { .. } | Drag::Points { .. } | Drag::Hint { .. } | Drag::MotionMove { .. } | Drag::CameraPan { .. } | Drag::CameraRotate { .. } | Drag::CameraZoom { .. } | Drag::BonePose { .. } | Drag::ArmatureMove { .. } | Drag::WarpPin { .. } => app.s.end_gesture(),
             Drag::Bone { from, parent, head, cur } => crate::bone_tool::drag_end(app, xf, from, parent, head, cur),
             Drag::Guide { index, .. } => crate::rulers::drag_end(app, index, geo, ui.input(|i| i.pointer.latest_pos())),
             Drag::Width { .. } => crate::widthtool::drag_end(app),
@@ -916,6 +925,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     if resp.secondary_clicked()
         && app.hint_menu.is_none()
         && !preview
+        && app.tool != Tool::Camera
         && let Some(p) = resp.interact_pointer_pos()
     {
         let sp = to_stage(p);
@@ -1266,12 +1276,16 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     // The camera frame (or, previewing, the Camera tool's handle) comes first, under the
     // selection.
     crate::camera_tool::draw(app, &painter, &cam_geo, pointer);
+    crate::camera_tool::a11y_control(app, ui, &cam_geo, canvas);
     if preview {
         // The movie's picture: stage-space overlays don't belong on it.
         painter.text(stage_rect.left_top() + vec2(0.0, -6.0), egui::Align2::LEFT_BOTTOM, tr!("Camera view"), crate::theme::font(crate::theme::Type::Caption), T.text_dim);
         let badge = format!("{:.0}%", st_zoom * ppp * 100.0);
         painter.text(canvas.right_bottom() + vec2(-10.0, -8.0), egui::Align2::RIGHT_BOTTOM, badge, crate::theme::font(crate::theme::Type::Data), T.text_dim);
         crate::a11y::surface(ui, &resp, &tr!("Stage · previewing through the camera · {tool} tool · frame {frame}", tool = crate::i18n::t(app.tool.label()), frame = app.s.frame + 1));
+        let cam_view = crate::camera_tool::camera(app).map_or(Affine::IDENTITY, |c| c.stage_view(&app.s.doc.stage));
+        let cam_to_screen = |p: Vec2| to_screen(cam_view.apply(p));
+        crate::stage_a11y::show(app, ui, &resp, cam_to_screen);
         return;
     }
     // Mask artwork is never painted; while its layer is unlocked (editable), its edge shows in
@@ -4861,7 +4875,7 @@ fn rt_size(te: &crate::app::TextEditing) -> f32 {
 
 /// The rotate cursor at `at`: an arc with an arrowhead at each end, curving around the box whose
 /// centre lies against `outward`. Dark with a light edge, so it shows on any artwork.
-fn rotate_cursor(painter: &egui::Painter, at: Pos2, outward: egui::Vec2) {
+pub(crate) fn rotate_cursor(painter: &egui::Painter, at: Pos2, outward: egui::Vec2) {
     const R: f32 = 9.0;
     const SWEEP: f32 = 1.05;
     let dir = if outward.length() > 1e-3 { outward.normalized() } else { vec2(std::f32::consts::FRAC_1_SQRT_2, -std::f32::consts::FRAC_1_SQRT_2) };

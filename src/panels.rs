@@ -448,11 +448,14 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
                 {
                     app.zoom_about(canvas, canvas.center(), pct / (100.0 * ppp), ppp);
                 }
+                app.zoom_text = None;
                 if enter {
                     ui.memory_mut(|m| m.surrender_focus(field.id));
                 }
             } else if field.has_focus() {
                 app.zoom_text = Some(draft);
+            } else {
+                app.zoom_text = None;
             }
             // Beside the zoom, as in Animate (#251): a toggle, on = the pasteboard is hidden.
             let clip = app.view.clip_to_stage;
@@ -1031,7 +1034,12 @@ fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: cra
         egui::ComboBox::from_id_salt(if camera { "prop_camera_color_style" } else { "prop_color_style" }).selected_text(crate::i18n::t(current.label())).show_ui(ui, |ui| {
             for st in ColorStyle::ALL.into_iter().filter(|st| !camera || *st != ColorStyle::Alpha) {
                 if ui.selectable_label(st == current, crate::i18n::t(st.label())).clicked() && (st != current || m.style) {
-                    app.run(cmd, json!({"style": st.key()}));
+                    let p = if camera {
+                        json!({"frame": crate::camera_tool::active_target_frame(app), "style": st.key()})
+                    } else {
+                        json!({"style": st.key()})
+                    };
+                    app.run(cmd, p);
                 }
             }
         })
@@ -1040,7 +1048,16 @@ fn colour_effect_rows(app: &mut App, ui: &mut egui::Ui, fx: &ColorEffect, m: cra
         mixed(ui, m.style);
     });
     let pct = a11y::SliderLook { suffix: " %", max_decimals: Some(0), ..Default::default() };
-    let set = |app: &mut App, p: Value| live(app, if camera { tr_noop!("Camera Colour Effect") } else { tr_noop!("Colour Effect") }, cmd, p);
+    let cam_frame = camera.then(|| crate::camera_tool::active_target_frame(app));
+    let with_frame = |mut p: Value| {
+        if let Some(f) = cam_frame
+            && let Some(obj) = p.as_object_mut()
+        {
+            obj.insert("frame".into(), json!(f));
+        }
+        p
+    };
+    let set = |app: &mut App, p: Value| live(app, if camera { tr_noop!("Camera Colour Effect") } else { tr_noop!("Colour Effect") }, cmd, with_frame(p));
     match *fx {
         ColorEffect::None => {}
         ColorEffect::Alpha(a) => {
@@ -2535,13 +2552,14 @@ pub fn text_style_rows(app: &mut App, ui: &mut egui::Ui, st: &mut anicraft_engin
 /// preview switch.
 /// Edits key the playhead like any edit of a tweened object.
 fn camera_props(app: &mut App, ui: &mut egui::Ui) {
-    let Some(cam) = crate::camera_tool::camera(app) else { return };
+    let Some(cam) = crate::camera_tool::active_camera(app) else { return };
+    let target_frame = crate::camera_tool::active_target_frame(app);
     let (mut x, mut y) = (cam.center.x, cam.center.y);
     row(ui, tr!("Position"), |ui| {
         let a = ui.add(egui::DragValue::new(&mut x).prefix("x ").suffix(" px").speed(1.0).max_decimals(1)).named(tr!("Camera X"));
         let b = ui.add(egui::DragValue::new(&mut y).prefix("y ").suffix(" px").speed(1.0).max_decimals(1)).named(tr!("Camera Y"));
         if a.changed() || b.changed() {
-            live(app, tr_noop!("Move Camera"), "camera.set", json!({"x": x, "y": y}));
+            live(app, tr_noop!("Move Camera"), "camera.set", json!({"frame": target_frame, "x": x, "y": y}));
         }
     });
     let mut zoom = cam.zoom * 100.0;
@@ -2549,24 +2567,20 @@ fn camera_props(app: &mut App, ui: &mut egui::Ui) {
     row(ui, tr!("Zoom"), |ui| {
         ui.spacing_mut().slider_width = 96.0;
         if a11y::slider(ui, &mut zoom, lo..=hi, tr!("Camera zoom"), a11y::SliderLook { suffix: " %", max_decimals: Some(0), logarithmic: true, ..Default::default() }).changed() {
-            live(app, tr_noop!("Zoom Camera"), "camera.set", json!({"zoom": zoom}));
+            live(app, tr_noop!("Zoom Camera"), "camera.set", json!({"frame": target_frame, "zoom": zoom}));
         }
     });
     let mut rot = cam.rotation.to_degrees();
     row(ui, tr!("Rotation"), |ui| {
         if ui.add(egui::DragValue::new(&mut rot).suffix("°").speed(0.5).max_decimals(1)).named(tr!("Camera rotation")).changed() {
-            live(app, tr_noop!("Rotate Camera"), "camera.set", json!({"rotation": rot}));
+            live(app, tr_noop!("Rotate Camera"), "camera.set", json!({"frame": target_frame, "rotation": rot}));
         }
     });
     // Brightness, Tint or Advanced over the whole view, as on an instance (ADR 0082).
     colour_effect_rows(app, ui, &cam.color, crate::mixed::ColorMixed::default(), EffectOf::Camera);
     ui.horizontal_wrapped(|ui| {
-        let mut on = app.camera_preview;
-        if crate::theme::checkbox(ui, &mut on, tr!("Preview through camera")).on_hover_text(tr!("Show the stage as the movie shows it (View › Preview Through Camera)")).changed() {
-            app.toggle_camera_preview();
-        }
         if ui.button(tr!("Reset")).named(tr!("Reset camera")).on_hover_text(tr!("Back to the stage as it is: centred, 100 %, no turn, no colour effect")).clicked() {
-            app.run("camera.set", json!({"reset": true}));
+            app.run("camera.set", json!({"frame": target_frame, "reset": true}));
         }
     });
     let hidden = app.s.timeline().camera_layer().is_some_and(|l| !l.visible);

@@ -224,7 +224,6 @@ fn entries() -> Vec<Entry> {
     // English keys, translated where they are drawn (`Entry::title`).
     v.push(Entry::View(tr_noop!("Play / Stop"), "Enter", App::toggle_play));
     v.push(Entry::View(tr_noop!("Onion Skin"), "", crate::onion::toggle_ghosts));
-    v.push(Entry::View(tr_noop!("Preview Through Camera"), "", App::toggle_camera_preview));
     v.push(Entry::View(tr_noop!("Fit Stage in Window"), "Ctrl+0", |a| a.view.fit = true));
     v.push(Entry::View(tr_noop!("Keyboard Shortcuts"), "Ctrl+Alt+Shift+K", |a| a.show_shortcuts = true));
     v.push(Entry::View(tr_noop!("User Guide"), "", App::open_user_guide));
