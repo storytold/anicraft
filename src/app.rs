@@ -5220,6 +5220,23 @@ mod clipboard_key_tests {
         RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 940.0))), events, ..Default::default() }
     }
 
+    /// In a browser the editor keeps from the browser the keys of its shortcut table as the user
+    /// set it (ADR 0137): a key bound in Edit › Keyboard Shortcuts is taken from then on, and
+    /// the browser's own keys stay the browser's.
+    #[test]
+    fn the_keys_kept_from_the_browser_follow_the_shortcut_table() {
+        use egui::Key;
+        let (_ctx, mut app) = app();
+        let takes = |app: &App, m: Modifiers, k: Key| crate::platform::claims_key(&app.browser_keys(), crate::platform::menu_bar_keys(), m, Some(k));
+        assert!(takes(&app, Modifiers::NONE, Key::F5), "F5 is Insert Frame, not the browser's reload");
+        assert_eq!(takes(&app, Modifiers::ALT, Key::F), crate::platform::menu_bar_keys(), "Alt+F is the File menu where Alt reaches the menu bar");
+        assert!(!takes(&app, Modifiers::NONE, Key::F12), "a key the editor doesn't use");
+        let id = app.shortcuts.iter().find(|(_, k, _)| *k == Key::F5).map(|(_, _, id)| *id).expect("F5 is bound");
+        app.prefs.shortcuts = crate::keymap::assign(&app.prefs.shortcuts, id, None, "F12", false).expect("F12 is free");
+        app.refresh_keymap();
+        assert!(takes(&app, Modifiers::NONE, Key::F12), "bound by the user: the editor's from now on");
+    }
+
     /// One frame; what it asked the system clipboard to hold.
     fn frame(ctx: &egui::Context, app: &mut App, input: RawInput) -> Vec<String> {
         let mut out = ctx.run_ui(input, |ui| app.frame(ui));
