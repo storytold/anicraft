@@ -201,10 +201,14 @@ fn code(key: egui::Key) -> Option<Code> {
 /// The key press an item's shortcut stands for, when the modifiers held now are the shortcut's:
 /// the item was chosen from the keyboard. `None` for a click (or an item without a ⌘ shortcut).
 pub(crate) fn as_key(keys: &str, held: egui::Modifiers) -> Option<(egui::Key, egui::Modifiers)> {
+    chord(keys).filter(|(_, m)| held.command && held.shift == m.shift && held.alt == m.alt)
+}
+
+/// The key press of a ⌘ chord.
+fn chord(keys: &str) -> Option<(egui::Key, egui::Modifiers)> {
     accelerator(keys)?;
     let (m, key) = crate::keymap::parse(keys)?;
-    (held.command && held.shift == m.shift && held.alt == m.alt)
-        .then_some((key, egui::Modifiers { command: true, mac_cmd: true, shift: m.shift, alt: m.alt, ctrl: false }))
+    Some((key, egui::Modifiers { command: true, mac_cmd: true, shift: m.shift, alt: m.alt, ctrl: false }))
 }
 
 struct Builder<'a> {
@@ -334,8 +338,8 @@ impl NativeMenu {
                     // A click on Undo, Redo or Select All while a text field has the keys is the field's,
                     // as on a Mac.
                     let field = text && matches!(act, Act::Cmd("edit.undo" | "edit.redo" | "edit.select_all"));
-                    let key = as_key(&slot.keys, held)
-                        .or_else(|| field.then(|| as_key(&slot.keys, egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND)).flatten());
+                    // Quit is run, not pressed: a dialog holding the keys would swallow ⌘Q.
+                    let key = if *act == Act::Quit { None } else { as_key(&slot.keys, held).or_else(|| field.then(|| chord(&slot.keys)).flatten()) };
                     match key {
                         Some((key, modifiers)) => {
                             ctx.input_mut(|i| i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }))
@@ -356,7 +360,6 @@ impl NativeMenu {
         if shape(&tree) != self.shape {
             let events = std::mem::replace(&mut self.events, channel().1);
             *self = Self::build(app, events);
-            return;
         }
         // While a dialog holds the keys, the menus wait too; Quit still asks about unsaved work.
         let held = app.modal_open() || app.key_capture.is_some();
@@ -437,5 +440,7 @@ mod tests {
         assert!(as_key("Ctrl+S", egui::Modifiers::NONE).is_none(), "a click");
         assert!(as_key("Ctrl+Shift+S", cmd).is_none(), "⌘S held is not ⇧⌘S's item");
         assert!(as_key("F6", cmd).is_none(), "no menu key");
+        // A click on Redo for a text field is the field's own chord, with its Shift.
+        assert_eq!(chord("Ctrl+Shift+Z").map(|(_, m)| m.shift), Some(true));
     }
 }

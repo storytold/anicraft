@@ -947,14 +947,15 @@ fn recent_rows(app: &App) -> Vec<Row> {
     }
     let mut v = Vec::new();
     let mut last_pinned = list.first().is_some_and(|(_, e, _)| e.pinned);
-    for (i, e, missing) in &list {
+    // By path: a click queued while the list reorders still opens the file it named.
+    for (_, e, missing) in &list {
         if last_pinned && !e.pinned {
             v.push(Row::Sep);
             last_pinned = false;
         }
         let name = crate::recent::display_name(&e.path);
         let label = if *missing { tr!("{name} (missing)", name = name) } else { name };
-        v.push(Row::Item { label, keys: String::new(), enabled: !*missing, checked: None, act: Act::Recent("file.open_recent", serde_json::json!({"index": i})) });
+        v.push(Row::Item { label, keys: String::new(), enabled: !*missing, checked: None, act: Act::Recent("file.open_recent", serde_json::json!({"path": e.path})) });
     }
     v.push(Row::Sep);
     v.push(row(tr!("Clear Recent Files"), "", None, Act::Recent("prefs.recent_clear", serde_json::json!({}))));
