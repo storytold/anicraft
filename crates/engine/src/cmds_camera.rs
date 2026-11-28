@@ -71,9 +71,9 @@ fn add(s: &mut Session, _: &Value) -> Result<Value> {
     let frames = s.frame_count().max(1);
     let mut layer = Layer::new(id, "Camera");
     layer.kind = LayerKind::Camera;
-    // The frame outline on the stage is drawn in the layer colour: an orange that reads on
+    // The frame outline on the stage is drawn in the layer colour: a blue that reads on
     // light and dark artwork alike.
-    layer.color = anicraft_doc::Rgba::hex(0xe8833a);
+    layer.color = anicraft_doc::Rgba::hex(0x2b7fff);
     let mut k = Keyframe::new(0, frames);
     k.elements.push(Arc::new(Camera::rest(&s.doc.stage).to_element(el)));
     layer.keyframes = vec![Arc::new(k)];

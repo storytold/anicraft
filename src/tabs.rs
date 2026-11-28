@@ -60,7 +60,6 @@ macro_rules! doc_view {
 
 doc_view! { app;
     view: StageView = StageView { zoom: 1.0, pixels_per_point: None, pan: egui::Vec2::ZERO, fit: true, fitted: None, clip_to_stage: app.view.clip_to_stage },
-    camera_preview: bool = false,
     tl_scroll: f32 = 0.0,
     tl_cell_w: f32 = crate::timeline::CELL_DEFAULT,
     tl_button_zoom: Option<(f32, f32)> = None,

@@ -697,9 +697,6 @@ pub(crate) fn menu_contents(app: &mut App, ui: &mut egui::Ui, top: &str, cmds: &
             if ui_item(ui, tr!("Clip Content Outside the Stage"), "", Some(app.view.clip_to_stage)) {
                 app.view.clip_to_stage = !app.view.clip_to_stage;
             }
-            if ui_item(ui, tr!("Preview Through Camera"), "", Some(app.camera_preview)) {
-                app.toggle_camera_preview();
-            }
             ui.menu_button(tr!("Stage Rendering"), |ui| {
                 for (mode, name, tip) in crate::prefs::RenderMode::ALL {
                     if ui_item(ui, crate::i18n::t(name), "", Some(app.prefs.render_mode == mode)) {

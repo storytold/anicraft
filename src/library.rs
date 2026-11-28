@@ -329,7 +329,7 @@ pub fn stage_drop(app: &mut App, ui: &egui::Ui, resp: &egui::Response, to_stage:
     }
     if let Some(_payload) = resp.dnd_release_payload::<Vec<LibraryEntry>>() {
         if paused {
-            app.status_ok(tr!("Previewing through the camera: artwork edits are paused. Turn off View › Preview Through Camera to edit."));
+            app.status_ok(tr!("Camera active: artwork edits are paused. Hide the Camera layer to edit in stage space."));
             return;
         }
         let at = to_stage(p);
