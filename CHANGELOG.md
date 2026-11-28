@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+## 0.3.0 (2026-11-28)
+
+The first release since 0.2.1 (2026-11-12). It carries everything listed below, from the Flash 8 to
+CS4 `.fla` import to the start-up fixes (#430) that address the "app won't open" reports. The
+entries between here and the `.fla` import are the last changes before the release.
+
+* **`anicraft-cli` follows RFC-0018** (#662, #665; storytold/craft-contrib#95): the same exit codes,
+  help, errors, completions and man pages as the other Craft CLIs.
+  * **Scripts to check.** A usage error (an unknown flag, a bad number, malformed JSON in `--options`
+    or in `exec`'s parameters) now exits 2 with the usage on stderr, before anything is opened or
+    written; it was 1, or silently ignored. A malformed script file given to `run` still exits 1,
+    after the document is opened.
+    A flag the subcommand does not take is refused instead of dropped, a flag given twice is
+    refused, and `anicraft-cli` with no arguments prints the help on stderr and exits 2. The
+    `version` word is gone; `--version` and `-V` work everywhere.
+  * **Nothing replaces an input by accident.** `render`, `render-seq`, `gif`, `apng`, `webp` and
+    `export` refuse an output that is the document they render, and `run` and `exec` refuse
+    `--save` onto the document they opened unless `--in-place` is given.
+  * `--overwrite`, `--background` and `guide search --json` take an optional `yes|no`
+    (`--overwrite yes` still works). A non-Unicode document path opens.
+  * The Linux tarball, deb and rpm install bash, zsh and fish completions and a man page per
+    subcommand.
+* **Filtered GPU renders count their temporary memory** (#664, extracted from #660 by Untoldent):
+  overlapping filtered renders no longer hold GPU scratch buffers beyond the limits; one render
+  falls back to the CPU under pressure instead of disabling a healthy GPU.
+* **Stale pasteboard fragments no longer show while a tile redraws** (#669 by Untoldent): dragging
+  across the stage edge or zooming keeps one placeholder per missing tile and stops painting it once
+  its replacement is ready.
+* **Fit zoom survives leaving the Zoom field, and panning is right at very small zoom** (#633 by
+  ViktorBystrov72, follow-up to #590): focus loss applies the Zoom field only if it was edited, and
+  the centre conversion uses the real zoom below 0.1 %.
+* **A batch taken just before `forget_pictures` is always thrown away** (#672, M8).
+
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.
