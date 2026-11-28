@@ -274,8 +274,10 @@ You can also open a menu directly: **Alt+F** File, **Alt+E** Edit, **Alt+V** Vie
 Insert, **Alt+M** Modify, **Alt+C** Commands, **Alt+O** Control, **Alt+W** Window and **Alt+H**
 Help. If you bind one of these to something else in the shortcut editor, your binding wins.
 
-On macOS the menu bar has no keyboard route yet. Use **⌘K**: the command palette reaches every
-menu command.
+On macOS the menus are in the system menu bar, which the keyboard reaches as in every Mac app: turn on
+**Keyboard navigation** in System Settings › Keyboard, then press **⌃F2**. **⌘K**, the command palette,
+reaches every menu command too. **⌘H**, **⌥⌘H** and **⌘M** are the system's (hide AniCraft, hide the
+other apps, minimize the window), so the shortcut editor doesn't give them to a command.
 
 ### Screen readers
 

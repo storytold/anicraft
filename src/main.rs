@@ -65,6 +65,8 @@ mod keymap;
 mod launch_profile;
 mod library;
 mod menus;
+#[cfg(target_os = "macos")]
+mod native_menu;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates;
 mod mixed;
@@ -753,6 +755,8 @@ mod guide_reference_tests;
 mod guidelines_tests;
 #[cfg(test)]
 mod dock_narrow_tests;
+#[cfg(test)]
+mod native_menu_tests;
 #[cfg(test)]
 mod architecture_tests;
 #[cfg(test)]

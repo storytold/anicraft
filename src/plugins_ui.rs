@@ -47,7 +47,7 @@ fn plugin(app: &App, id: &str) -> Option<Arc<Plugin>> {
 }
 
 /// Why `p` can't run now (it works on the selection and nothing is selected).
-fn blocked(s: &Session, p: &Plugin) -> Option<&'static str> {
+pub(crate) fn blocked(s: &Session, p: &Plugin) -> Option<&'static str> {
     match p.manifest().kind {
         anicraft_engine::plugins::Kind::FrameScript => return Some(tr!("A frame script: it runs while the movie plays. Pick it for a keyframe in the Actions panel (F9)")),
         anicraft_engine::plugins::Kind::Exporter => return Some(tr!("An export format: find it in File › Export")),

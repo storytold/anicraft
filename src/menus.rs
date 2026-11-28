@@ -506,11 +506,16 @@ fn checked(app: &App, id: &str) -> Option<bool> {
     }
 }
 
-fn item(app: &mut App, ui: &mut egui::Ui, spec: &CommandSpec) {
-    let label = match spec.id {
+/// A registry item's label: its command's, and Undo's names what it undoes.
+fn item_label(app: &App, spec: &CommandSpec) -> String {
+    match spec.id {
         "edit.undo" => app.s.undo_label().map_or_else(|| crate::i18n::t_cmd(spec.id, spec.label).to_string(), |l| tr!("Undo {action}", action = crate::i18n::t_dyn(l))),
         _ => crate::i18n::t_cmd(spec.id, spec.label).to_string(),
-    };
+    }
+}
+
+fn item(app: &mut App, ui: &mut egui::Ui, spec: &CommandSpec) {
+    let label = item_label(app, spec);
     // Settings show whether they are on, as check items do.
     let on = checked(app, spec.id);
     let name = label.clone();
@@ -843,5 +848,340 @@ pub(crate) fn menu_contents(app: &mut App, ui: &mut egui::Ui, top: &str, cmds: &
             ui.label(text(Type::Caption, trn!("{n} command is scriptable with anicraft-cli", "{n} commands are scriptable with anicraft-cli", cmds.len())));
         }
         _ => {}
+    }
+}
+
+// ----- the macOS menu bar --------------------------------------------------------------------
+
+/// What a row of the macOS menu bar does when chosen: what its in-window item does.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Act {
+    /// A registry command, as its item runs it (`App::invoke`).
+    Cmd(&'static str),
+    /// A command with parameters from Open Recent (`recent::open_or_run`).
+    Recent(&'static str, serde_json::Value),
+    About,
+    Settings,
+    Quit,
+    StartScreen,
+    CloseDocument,
+    CloseAll,
+    Exporter(String),
+    Plugin(String),
+    Saved(String),
+    ZoomIn,
+    ZoomOut,
+    Fit,
+    ActualSize,
+    OnionSkin,
+    EditMultiple,
+    Onion(crate::onion::OnionOption),
+    Parenting,
+    ClipToStage,
+    CameraPreview,
+    RenderMode(crate::prefs::RenderMode),
+    Renderer(crate::prefs::StageRenderer),
+    Play,
+    Loop,
+    Mute,
+    Scrubbing,
+    Workspace(String),
+    SaveWorkspace,
+    ManageWorkspaces,
+    ResetWorkspace,
+    Panel(crate::dock::Panel),
+    HidePanels,
+    BrushLibrary,
+    NextDocument,
+    PreviousDocument,
+    Document(u64),
+    UserGuide,
+    HelpForThis,
+    SearchGuide,
+    Updates,
+    Palette,
+    Shortcuts,
+    Files,
+    Licenses,
+}
+
+/// A row of the macOS menu bar. `keys` is a chord in registry notation (empty: none).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Row {
+    Item { label: String, keys: String, enabled: bool, checked: Option<bool>, act: Act },
+    Sub(String, Vec<Row>),
+    Sep,
+}
+
+fn row(label: impl Into<String>, keys: &str, checked: Option<bool>, act: Act) -> Row {
+    Row::Item { label: label.into(), keys: keys.to_string(), enabled: true, checked, act }
+}
+
+/// A caption of the in-window menus, shown greyed.
+fn note(label: impl Into<String>) -> Row {
+    Row::Item { label: label.into(), keys: String::new(), enabled: false, checked: None, act: Act::Palette }
+}
+
+fn key(app: &App, id: &str) -> String {
+    app.keymap.primary(id).unwrap_or("").to_string()
+}
+
+fn cmd_row(app: &App, spec: &CommandSpec) -> Row {
+    let enabled = enabled(app, spec.id) && platform::unavailable(spec.id).is_none();
+    Row::Item { label: item_label(app, spec), keys: key(app, spec.id), enabled, checked: checked(app, spec.id), act: Act::Cmd(spec.id) }
+}
+
+/// The macOS menu bar's menus after the application menu: the in-window bar's, item for item,
+/// with what a native menu cannot hold left out (the onion colours, the recent files' Pin and
+/// Remove: the timeline's onion menu and the start screen have them).
+/// Each menu as `(English key, title, rows)`.
+pub(crate) fn native_tree(app: &App) -> Vec<(&'static str, String, Vec<Row>)> {
+    let cmds = commands();
+    TOP_MENUS.into_iter().zip(top_labels()).map(|(top, label)| (top, label, native_rows(app, top, &cmds))).collect()
+}
+
+fn recent_rows(app: &App) -> Vec<Row> {
+    let list = crate::recent::entries(app);
+    if list.is_empty() {
+        return vec![note(tr!("No recent files yet. Documents you open or save show here."))];
+    }
+    let mut v = Vec::new();
+    let mut last_pinned = list.first().is_some_and(|(_, e, _)| e.pinned);
+    // By path: a click queued while the list reorders still opens the file it named.
+    for (_, e, missing) in &list {
+        if last_pinned && !e.pinned {
+            v.push(Row::Sep);
+            last_pinned = false;
+        }
+        let name = crate::recent::display_name(&e.path);
+        let label = if *missing { tr!("{name} (missing)", name = name) } else { name };
+        v.push(Row::Item { label, keys: String::new(), enabled: !*missing, checked: None, act: Act::Recent("file.open_recent", serde_json::json!({"path": e.path})) });
+    }
+    v.push(Row::Sep);
+    v.push(row(tr!("Clear Recent Files"), "", None, Act::Recent("prefs.recent_clear", serde_json::json!({}))));
+    v
+}
+
+/// [`registry_items`] as rows.
+fn registry_rows(app: &App, top: &str, cmds: &[CommandSpec], v: &mut Vec<Row>) {
+    for spec in cmds.iter().filter(|c| c.menu == top) {
+        v.push(cmd_row(app, spec));
+        if spec.id == "file.open" {
+            v.push(Row::Sub(tr!("Open Recent").to_string(), recent_rows(app)));
+            v.push(row(tr!("Start Screen"), "", None, Act::StartScreen));
+            v.push(row(tr!("Close"), &key(app, "view.close_document"), None, Act::CloseDocument));
+            v.push(row(tr!("Close All"), &key(app, "view.close_all_documents"), None, Act::CloseAll));
+        }
+    }
+    let mut subs: Vec<&str> = Vec::new();
+    for c in cmds {
+        if let Some(sub) = c.menu.strip_prefix(top).and_then(|r| r.strip_prefix('/'))
+            && !subs.contains(&sub)
+        {
+            subs.push(sub);
+        }
+    }
+    for sub in subs {
+        let path = format!("{top}/{sub}");
+        let mut rows: Vec<Row> = cmds.iter().filter(|c| c.menu == path).map(|spec| cmd_row(app, spec)).collect();
+        if path == "File/Export" {
+            let list = anicraft_engine::plugin_export::exporters(&app.s);
+            if !list.is_empty() {
+                rows.push(Row::Sep);
+            }
+            for p in list {
+                let name = p.manifest().format.as_ref().map_or_else(|| p.manifest().name.clone(), |f| f.name.clone());
+                rows.push(row(format!("{name}…"), "", None, Act::Exporter(p.id().to_string())));
+            }
+        }
+        if path == "View/Snapping" {
+            rows.extend(["view.grid_snap", "view.guides_snap"].into_iter().filter_map(anicraft_engine::find_command).map(|spec| cmd_row(app, &spec)));
+        }
+        v.push(Row::Sub(crate::i18n::t(sub).to_string(), rows));
+    }
+}
+
+/// [`menu_contents`] as rows, for macOS (the Windows and Linux items left out).
+fn native_rows(app: &App, top: &str, cmds: &[CommandSpec]) -> Vec<Row> {
+    let mut v = Vec::new();
+    if top == "Commands" {
+        let list: Vec<_> = app.s.plugins.list().filter(|p| crate::plugins_ui::is_command(p)).cloned().collect();
+        let plugins = if list.is_empty() {
+            vec![note(tr!("No plug-ins installed yet"))]
+        } else {
+            list.iter()
+                .map(|p| Row::Item { label: crate::plugins_ui::label(p), keys: String::new(), enabled: crate::plugins_ui::blocked(&app.s, p).is_none(), checked: None, act: Act::Plugin(p.id().to_string()) })
+                .collect()
+        };
+        v.push(Row::Sub(tr!("Plug-ins").to_string(), plugins));
+        v.push(Row::Sep);
+        v.extend(cmds.iter().filter(|c| c.menu == "Commands").map(|spec| cmd_row(app, spec)));
+        if crate::macros_ui::folder(app).is_some() {
+            v.push(Row::Sep);
+            if app.macros.list.is_empty() {
+                v.push(note(tr!("No saved commands yet: pick steps in the History panel and Save As Command")));
+            }
+            for c in &app.macros.list {
+                v.push(row(c.name.clone(), &key(app, &crate::keymap::macro_id(&c.name)), None, Act::Saved(c.name.clone())));
+            }
+        }
+        return v;
+    }
+    if top != "View" {
+        registry_rows(app, top, cmds, &mut v);
+    }
+    match top {
+        "View" => {
+            v.push(row(tr!("Zoom In"), "Ctrl+=", None, Act::ZoomIn));
+            v.push(row(tr!("Zoom Out"), "Ctrl+-", None, Act::ZoomOut));
+            v.push(row(tr!("Fit in Window"), "Ctrl+0", None, Act::Fit));
+            v.push(row("100%", "Ctrl+1", None, Act::ActualSize));
+            v.push(Row::Sep);
+            v.push(row(tr!("Onion Skin"), &key(app, "view.onion"), Some(app.onion.ghosts), Act::OnionSkin));
+            v.push(row(tr!("Edit Multiple Frames"), "", Some(app.onion.edit_multiple), Act::EditMultiple));
+            let onion = crate::onion::options(app).into_iter().map(|o| o.map_or(Row::Sep, |(o, label, on)| row(label, "", Some(on), Act::Onion(o)))).collect();
+            v.push(Row::Sub(tr!("Onion Skin Options").to_string(), onion));
+            v.push(row(tr!("Parenting View"), "", Some(app.prefs.timeline_parenting), Act::Parenting));
+            v.push(row(tr!("Clip Content Outside the Stage"), "", Some(app.view.clip_to_stage), Act::ClipToStage));
+            v.push(row(tr!("Preview Through Camera"), "", Some(app.camera_preview), Act::CameraPreview));
+            let mut rendering: Vec<Row> = crate::prefs::RenderMode::ALL.into_iter().map(|(mode, name, _)| row(crate::i18n::t(name), "", Some(app.prefs.render_mode == mode), Act::RenderMode(mode))).collect();
+            if crate::gpu_stage::AVAILABLE {
+                rendering.push(Row::Sep);
+                rendering.extend(crate::prefs::StageRenderer::ALL.into_iter().map(|(r, name, _)| row(crate::i18n::t(name), "", Some(app.prefs.stage_renderer == r), Act::Renderer(r))));
+            }
+            v.push(Row::Sub(tr!("Stage Rendering").to_string(), rendering));
+            v.push(Row::Sep);
+            registry_rows(app, top, cmds, &mut v);
+        }
+        "Control" => {
+            v.push(Row::Sep);
+            v.push(row(if app.playing { tr!("Stop") } else { tr!("Play") }, "Enter", None, Act::Play));
+            v.push(row(tr!("Loop Playback"), "", Some(app.looping), Act::Loop));
+            v.push(Row::Sep);
+            v.push(row(tr!("Mute Sounds"), "", Some(app.prefs.sound_muted), Act::Mute));
+            v.push(row(tr!("Audio Scrubbing"), "", Some(app.prefs.audio_scrubbing), Act::Scrubbing));
+        }
+        "Window" => {
+            let current = app.prefs.workspaces.current.clone();
+            let mut spaces: Vec<Row> = app
+                .prefs
+                .workspaces
+                .keys()
+                .into_iter()
+                .map(|k| row(crate::i18n::t_dyn(crate::dock::Workspaces::name(&k)).into_owned(), "", Some(k == current), Act::Workspace(k)))
+                .collect();
+            spaces.push(Row::Sep);
+            spaces.push(row(tr!("Save Workspace…"), "", None, Act::SaveWorkspace));
+            spaces.push(row(tr!("Manage Workspaces…"), "", None, Act::ManageWorkspaces));
+            let name = crate::i18n::t_dyn(crate::dock::Workspaces::name(&current)).into_owned();
+            spaces.push(row(tr!("Reset “{name}”", name = name), "", None, Act::ResetWorkspace));
+            v.push(Row::Sub(tr!("Workspace").to_string(), spaces));
+            v.push(Row::Sep);
+            for p in crate::dock::Panel::ALL {
+                v.push(row(crate::i18n::t(p.label()), &key(app, p.action()), Some(app.panel_visible(p)), Act::Panel(p)));
+            }
+            v.push(row(if app.hidden_panels.is_some() { tr!("Show Panels") } else { tr!("Hide Panels") }, &key(app, "view.hide_panels"), None, Act::HidePanels));
+            v.push(row(tr!("Brush Library"), "", Some(app.brush_lib.open), Act::BrushLibrary));
+            v.push(Row::Sep);
+            v.push(row(tr!("Onion Skin"), "", Some(app.onion.ghosts), Act::OnionSkin));
+            v.push(Row::Sep);
+            v.push(row(tr!("Next Document"), &key(app, "view.next_document"), None, Act::NextDocument));
+            v.push(row(tr!("Previous Document"), &key(app, "view.prev_document"), None, Act::PreviousDocument));
+            // A document's own name: not translated.
+            v.extend(crate::tabs::infos(app).into_iter().map(|t| row(t.name, "", Some(t.active), Act::Document(t.id))));
+        }
+        "Help" => {
+            v.push(row(tr!("User Guide"), "", None, Act::UserGuide));
+            v.push(row(tr!("Help for This"), "F1", None, Act::HelpForThis));
+            v.push(row(tr!("Search the User Guide"), "", None, Act::SearchGuide));
+            v.push(Row::Sep);
+            v.push(row(tr!("Check for Updates…"), "", None, Act::Updates));
+            v.push(row(tr!("Command Palette…"), "Ctrl+K", None, Act::Palette));
+            v.push(row(tr!("Keyboard Shortcuts"), "Ctrl+Alt+Shift+K", None, Act::Shortcuts));
+            v.push(Row::Sep);
+            v.push(row(tr!("Project Files & Docs…"), "", None, Act::Files));
+            v.push(row(tr!("Licenses & Notices"), "", None, Act::Licenses));
+        }
+        _ => {}
+    }
+    v
+}
+
+/// Runs a row of the macOS menu bar, as a click on its in-window item would.
+pub(crate) fn run_native(app: &mut App, ctx: &egui::Context, act: &Act) {
+    let canvas = app.stage_cache.canvas;
+    let ppp = ctx.pixels_per_point();
+    match act.clone() {
+        Act::Cmd(id) => app.invoke(id),
+        Act::Recent(id, params) => crate::recent::open_or_run(app, id, params),
+        Act::About => app.show_about = true,
+        Act::Settings => app.open_prefs(),
+        // Through the close guard, so unsaved work is never lost.
+        Act::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+        Act::StartScreen => crate::start::open(app),
+        Act::CloseDocument => crate::tabs::close_active(app),
+        Act::CloseAll => crate::tabs::close_all(app),
+        Act::Exporter(id) => crate::plugin_export_ui::open(app, &id),
+        Act::Plugin(id) => crate::plugins_ui::run_or_ask(app, &id),
+        Act::Saved(name) => crate::macros_ui::run_saved(app, &name),
+        Act::ZoomIn => app.zoom_by(canvas, canvas.center(), 1.5, ppp),
+        Act::ZoomOut => app.zoom_by(canvas, canvas.center(), 1.0 / 1.5, ppp),
+        Act::Fit => app.view.fit = true,
+        Act::ActualSize => app.zoom_about(canvas, canvas.center(), 1.0 / ppp, ppp),
+        Act::OnionSkin => crate::onion::toggle_ghosts(app),
+        Act::EditMultiple => crate::onion::toggle_edit_multiple(app),
+        Act::Onion(o) => crate::onion::apply(app, ctx, o),
+        Act::Parenting => crate::parenting::toggle_view(app),
+        Act::ClipToStage => app.view.clip_to_stage = !app.view.clip_to_stage,
+        Act::CameraPreview => app.toggle_camera_preview(),
+        Act::RenderMode(mode) => {
+            let mut p = app.prefs.clone();
+            p.render_mode = mode;
+            app.set_prefs(ctx, p);
+        }
+        Act::Renderer(r) => {
+            let mut p = app.prefs.clone();
+            p.stage_renderer = r;
+            app.set_prefs(ctx, p);
+        }
+        Act::Play => app.toggle_play(),
+        Act::Loop => app.looping = !app.looping,
+        Act::Mute => {
+            app.prefs.sound_muted = !app.prefs.sound_muted;
+            app.save_prefs();
+        }
+        Act::Scrubbing => {
+            app.prefs.audio_scrubbing = !app.prefs.audio_scrubbing;
+            app.save_prefs();
+        }
+        Act::Workspace(k) => {
+            if k != app.prefs.workspaces.current {
+                app.switch_workspace(&k);
+            }
+        }
+        Act::SaveWorkspace => {
+            app.prompt = Some(crate::app::Prompt { title: tr_noop!("Save Workspace"), cmd: "view.save_workspace", key: "name", text: String::new(), focus: true });
+        }
+        Act::ManageWorkspaces => crate::workspaces_window::open(app),
+        Act::ResetWorkspace => app.reset_workspace(),
+        Act::Panel(p) => app.window_menu_panel(p),
+        Act::HidePanels => app.toggle_hide_panels(),
+        Act::BrushLibrary => crate::brush_panel::toggle(app),
+        Act::NextDocument => crate::tabs::step(app, true),
+        Act::PreviousDocument => crate::tabs::step(app, false),
+        Act::Document(id) => {
+            crate::tabs::activate_id(app, id);
+        }
+        Act::UserGuide => app.open_user_guide(),
+        Act::HelpForThis => crate::context_help::help_for_this(app, ctx, false),
+        Act::SearchGuide => app.open_guide_search(),
+        #[cfg(not(target_arch = "wasm32"))]
+        Act::Updates => app.updates.check(ctx),
+        #[cfg(target_arch = "wasm32")]
+        Act::Updates => {}
+        Act::Palette => app.palette = Some(crate::dialogs::Palette::default()),
+        Act::Shortcuts => app.show_shortcuts = true,
+        Act::Files => app.show_files = true,
+        Act::Licenses => app.show_licenses = true,
     }
 }

@@ -683,6 +683,11 @@ pub struct App {
     pub tl_refocus: bool,
     /// The menu bar from the keyboard: Alt, F10 and the arrows (ADR 0064).
     pub menu_keys: menus::MenuKeys,
+    /// macOS: the system menu bar, once the window is open; the in-window one is not drawn then.
+    #[cfg(target_os = "macos")]
+    pub native_menu: Option<crate::native_menu::NativeMenu>,
+    #[cfg(target_os = "macos")]
+    native_menu_tried: bool,
     /// What the system last said about contrast and light or dark (ADR 0064, ADR 0077): each part
     /// `None` until it has, or if it can't. Screenshot runs never ask, so they look the same
     /// everywhere.
@@ -989,6 +994,10 @@ impl App {
             tl_heard: None,
             tl_refocus: false,
             menu_keys: Default::default(),
+            #[cfg(target_os = "macos")]
+            native_menu: None,
+            #[cfg(target_os = "macos")]
+            native_menu_tried: false,
             hidden_panels: None,
             system_look: platform::SystemLook::default(),
             themes: Default::default(),
@@ -4850,7 +4859,14 @@ impl eframe::App for App {
         let _in_frame = crate::gpu_stage::in_frame(ui.ctx());
         #[cfg(not(target_arch = "wasm32"))]
         self.poll_file_dialog();
+        #[cfg(target_os = "macos")]
+        self.native_menu_before(ui.ctx());
         self.frame(ui);
+        #[cfg(target_os = "macos")]
+        if let Some(mut menu) = self.native_menu.take() {
+            menu.sync(self);
+            self.native_menu = Some(menu);
+        }
         // A few frames drawn: the window started (#207).
         crate::startup::frame();
         #[cfg(not(target_arch = "wasm32"))]
@@ -4871,6 +4887,28 @@ impl eframe::App for App {
 }
 
 impl App {
+    /// macOS: puts the system menu bar up on the first frame of a window (not for a screenshot),
+    /// then runs what was chosen in it before this frame reads its keys.
+    #[cfg(target_os = "macos")]
+    fn native_menu_before(&mut self, ctx: &egui::Context) {
+        if self.native_menu.is_none() && self.shot.is_none() && !self.native_menu_tried {
+            self.native_menu_tried = true;
+            self.native_menu = crate::native_menu::NativeMenu::install(ctx, self);
+        }
+        if let Some(mut menu) = self.native_menu.take() {
+            menu.poll(self, ctx);
+            self.native_menu = Some(menu);
+        }
+    }
+
+    /// Whether the system menu bar stands in for the in-window one.
+    pub fn native_menu_shown(&self) -> bool {
+        #[cfg(target_os = "macos")]
+        return self.native_menu.is_some();
+        #[cfg(not(target_os = "macos"))]
+        false
+    }
+
     /// The file dialog's answer, once given, runs its command (through `request`: it may ask first).
     #[cfg(not(target_arch = "wasm32"))]
     fn poll_file_dialog(&mut self) {
@@ -4973,9 +5011,13 @@ impl App {
 
         let bar = |fill| egui::Frame::NONE.fill(fill).inner_margin(egui::Margin::symmetric(8, 2));
         crate::drop::begin_frame(self);
-        let menu = egui::Panel::top("menu_bar").frame(bar(T.chrome)).show(ui, |ui| menus::bar(self, ui));
-        // Floating windows stay below the menu bar (crate::windows).
-        crate::windows::set_work_area(&ctx, menu.response.rect.max.y);
+        // Floating windows stay below the menu bar (crate::windows); on macOS it is the system's.
+        let top = if self.native_menu_shown() {
+            ui.max_rect().top()
+        } else {
+            egui::Panel::top("menu_bar").frame(bar(T.chrome)).show(ui, |ui| menus::bar(self, ui)).response.rect.max.y
+        };
+        crate::windows::set_work_area(&ctx, top);
         if self.start.is_some() {
             // The start screen takes the workspace's place (ADR 0059); the menus stay.
             egui::Panel::bottom("status_bar").exact_size(28.0).frame(bar(T.chrome)).show(ui, |ui| panels::status_bar(self, ui));

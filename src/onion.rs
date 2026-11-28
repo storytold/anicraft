@@ -198,6 +198,56 @@ pub fn menu(app: &mut App, ui: &mut egui::Ui) {
     });
 }
 
+/// An onion option of the macOS menu bar's View › Onion Skin Options (its colours stay in the
+/// timeline's onion menu: a native menu has no colour buttons).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnionOption {
+    Outlines,
+    KeyframesOnly,
+    AlwaysMarkers,
+    Anchored,
+    Preset(u32),
+    All,
+    Tint,
+    Fade,
+}
+
+/// The options in the onion menu's order, each with its label and whether it is on; `None` between
+/// groups.
+pub fn options(app: &App) -> Vec<Option<(OnionOption, String, bool)>> {
+    let o = app.onion;
+    let mut v = vec![
+        Some((OnionOption::Outlines, tr!("Outlines").to_string(), o.outlines)),
+        Some((OnionOption::KeyframesOnly, tr!("Keyframes Only").to_string(), o.keyframes_only)),
+        None,
+        Some((OnionOption::AlwaysMarkers, tr!("Always Show Markers").to_string(), app.prefs.onion.always_markers)),
+        Some((OnionOption::Anchored, tr!("Anchor Markers").to_string(), o.anchored())),
+    ];
+    v.extend(PRESETS.into_iter().map(|n| Some((OnionOption::Preset(n), tr!("Onion {n}", n = n), o.markers == Markers::Relative { before: n, after: n }))));
+    v.push(Some((OnionOption::All, tr!("Onion All").to_string(), o.is_all())));
+    v.push(None);
+    v.push(Some((OnionOption::Tint, tr!("Tint").to_string(), o.tint)));
+    v.push(Some((OnionOption::Fade, tr!("Fade by Distance").to_string(), o.fade)));
+    v
+}
+
+/// Chooses `option`, as its row in the onion menu does.
+pub fn apply(app: &mut App, ctx: &egui::Context, option: OnionOption) {
+    match option {
+        OnionOption::Outlines => change(app, ctx, |o, _| o.outlines = !o.outlines),
+        OnionOption::KeyframesOnly => change(app, ctx, |o, _| o.keyframes_only = !o.keyframes_only),
+        OnionOption::AlwaysMarkers => change(app, ctx, |_, p| p.always_markers = !p.always_markers),
+        OnionOption::Anchored => {
+            let (f, n) = (app.s.frame, app.s.frame_count());
+            change(app, ctx, |o, _| o.set_anchored(!o.anchored(), f, n));
+        }
+        OnionOption::Preset(n) => change(app, ctx, |o, _| o.preset(n)),
+        OnionOption::All => change(app, ctx, |o, _| o.all()),
+        OnionOption::Tint => change(app, ctx, |o, _| o.tint = !o.tint),
+        OnionOption::Fade => change(app, ctx, |o, _| o.fade = !o.fade),
+    }
+}
+
 /// A checkbox label with its shortcut, as menus show it.
 fn a11y_key(name: &str, key: &str) -> String {
     crate::a11y::with_key(name, Some(key))

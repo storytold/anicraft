@@ -16,7 +16,7 @@ every panel (see [Arranging panels and workspaces](#arranging-panels-and-workspa
 
 | Area | Where | What it's for |
 |---|---|---|
-| Menu bar | top | Every command, grouped as in Animate: File, Edit, View, Insert, Modify, Commands, Control, Window, Help. On macOS there's also the AniCraft menu, with About, Settings… and Quit. |
+| Menu bar | top | Every command, grouped as in Animate: File, Edit, View, Insert, Modify, Commands, Control, Window, Help. On macOS the menus are in the system menu bar at the top of the screen, after the AniCraft menu (About, Settings…, Hide AniCraft and Quit). |
 | Document tabs | below the menu bar | One tab for each open document. See [Document tabs](#document-tabs). |
 | Edit bar | above the stage | The scene menu, the path to the symbol you're editing, the active layer, the stage size, an **Onion skin** switch, the **Clip content outside the stage** button and the zoom menu. |
 | Tools | left | The drawing and editing tools, the **Snap to Objects** magnet, and the current fill and stroke colours. Drag the dotted grip at the top to move them. |
@@ -168,7 +168,7 @@ Animate.
 | Close the document | **Ctrl+W** (**File › Close**) |
 | Close every document | **Ctrl+Alt+W** (**File › Close All**) |
 
-On a Mac, the tab keys use the Control key, because ⌘+Tab switches apps.
+On a Mac, the tab keys use the Control key, because ⌘+Tab switches apps. **⇧⌘]** and **⇧⌘[** show the next and the previous document too, as in other Mac apps.
 
 Each document keeps its own undo history, selection, playhead, zoom and scroll position, so
 you find it as you left it. Your tools, colours and panel layout stay the same from one
