@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+* **Alt draws a rectangle or oval from its centre** (#637): holding Alt while dragging with the
+  Rectangle or Oval tool grows the shape symmetrically about the press point, and combines with
+  Shift for a centred square or circle.
+
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.

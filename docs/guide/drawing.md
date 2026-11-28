@@ -115,9 +115,9 @@ unlocked layer at once. **Edit › Deselect All** is **Ctrl+Shift+A**.
 
 ## Drawing shapes and lines
 
-* **Rectangle** (**R**): drag to draw. **Shift** draws a square. Set **Corners** in the
-  options for rounded corners.
-* **Oval** (**O**): drag to draw. **Shift** draws a circle.
+* **Rectangle** (**R**): drag to draw. **Shift** draws a square, **Alt** draws from the
+  centre. Set **Corners** in the options for rounded corners.
+* **Oval** (**O**): drag to draw. **Shift** draws a circle, **Alt** draws from the centre.
 * **PolyStar**: drag from the centre to draw a polygon or a star. Its options (Animate's Tool
   Settings) are the **Shape**, **Polygon** or **Star**; **Sides** (or **Points**), 3 to 32;
   and for a star, the **Point size**, 0 to 1: near 0 the points are thin spikes, and at 1 the

@@ -814,7 +814,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // it touches (ADR 0041, #522).
                 app.run("raw.select_rect", json!({"x0": start.x, "y0": start.y, "x1": cur.x, "y1": cur.y, "add": shift}));
             }
-            Drag::Shape { start, cur } => create_shape(app, start, cur),
+            Drag::Shape { start, cur } => create_shape(app, start, cur, shift, alt),
             Drag::Pan | Drag::None | Drag::CameraWheel { .. } => {}
         }
         app.drag = Drag::None;
@@ -1482,7 +1482,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             painter.rect_filled(r, 0.0, T.selection.gamma_multiply(0.12));
             painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
         }
-        Drag::Shape { start, cur } => draw_preview(app, &painter, to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)), zoom),
+        Drag::Shape { start, cur } => draw_preview(app, &painter, start, cur, shift, alt, xf),
         _ => {}
     }
     // The drawing tools show where a press would start, snapped (ADR 0045).
@@ -4980,17 +4980,35 @@ fn constrain(tool: Tool, start: Pos2, cur: Pos2, shift: bool) -> Pos2 {
     }
 }
 
-fn create_shape(app: &mut App, start: Pos2, cur: Pos2) {
-    let d = cur - start;
+/// Bounding box `(origin, size)` for a Rectangle or Oval drag from `start` to `cur`:
+/// Shift makes width and height equal, and Alt centres the box on `start` with half-extent
+/// `cur - start` (doubling its size).
+fn shape_box(tool: Tool, start: Pos2, cur: Pos2, shift: bool, alt: bool) -> (Pos2, egui::Vec2) {
+    let end = constrain(tool, start, cur, shift);
+    let d = end - start;
+    let (a, b) = if alt && matches!(tool, Tool::Rect | Tool::Oval) {
+        (start - d, start + d)
+    } else {
+        (start, end)
+    };
+    let r = Rect::from_two_pos(a, b);
+    (r.min, r.max - r.min)
+}
+
+fn create_shape(app: &mut App, start: Pos2, cur: Pos2, shift: bool, alt: bool) {
+    let end = constrain(app.tool, start, cur, shift);
+    let d = end - start;
     if d.length() < 1.0 {
         return;
     }
     match app.tool {
         Tool::Rect => {
-            app.draw("draw.rect", json!({"x": start.x, "y": start.y, "w": d.x, "h": d.y, "radius": app.rect_radius}));
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            app.draw("draw.rect", json!({"x": origin.x, "y": origin.y, "w": size.x, "h": size.y, "radius": app.rect_radius}));
         }
         Tool::Oval => {
-            app.draw("draw.ellipse", json!({"x": start.x, "y": start.y, "w": d.x, "h": d.y}));
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            app.draw("draw.ellipse", json!({"x": origin.x, "y": origin.y, "w": size.x, "h": size.y}));
         }
         Tool::Star => {
             let mut p = app.polystar.params();
@@ -5000,25 +5018,29 @@ fn create_shape(app: &mut App, start: Pos2, cur: Pos2) {
             app.draw("draw.star", p);
         }
         Tool::Line => {
-            app.draw("draw.line", json!({"x0": start.x, "y0": start.y, "x1": cur.x, "y1": cur.y}));
+            app.draw("draw.line", json!({"x0": start.x, "y0": start.y, "x1": end.x, "y1": end.y}));
         }
         _ => {}
     }
 }
 
-fn draw_preview(app: &App, painter: &egui::Painter, a: Pos2, b: Pos2, zoom: f32) {
+fn draw_preview(app: &App, painter: &egui::Painter, start: Pos2, cur: Pos2, shift: bool, alt: bool, xf: crate::pathtools::Xf) {
     let st = &app.s.style;
+    let zoom = xf.zoom;
     let fill = if st.use_fill { crate::theme::to_color32(st.fill).gamma_multiply(0.6) } else { Color32::TRANSPARENT };
     let stroke = Stroke::new((st.stroke_width * zoom).max(1.0), if st.use_stroke { crate::theme::to_color32(st.stroke) } else { T.selection });
+    let screen = |p: Pos2| pos2(xf.origin.x + p.x * zoom, xf.origin.y + p.y * zoom);
     match app.tool {
         Tool::Rect => {
-            let r = Rect::from_two_pos(a, b);
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            let r = Rect::from_two_pos(screen(origin), screen(origin + size));
             let rad = (app.rect_radius * zoom).min(r.width() / 2.0).min(r.height() / 2.0).clamp(0.0, 255.0) as u8;
             painter.rect_filled(r, rad, fill);
             painter.rect_stroke(r, rad, stroke, StrokeKind::Middle);
         }
         Tool::Oval => {
-            let r = Rect::from_two_pos(a, b);
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            let r = Rect::from_two_pos(screen(origin), screen(origin + size));
             let pts: Vec<Pos2> = (0..64)
                 .map(|i| {
                     let t = i as f32 / 64.0 * std::f32::consts::TAU;
@@ -5029,11 +5051,13 @@ fn draw_preview(app: &App, painter: &egui::Painter, a: Pos2, b: Pos2, zoom: f32)
         }
         Tool::Star => {
             // The same corners the command draws (ADR 0080).
+            let (a, b) = (screen(start), screen(constrain(app.tool, start, cur, shift)));
             let o = app.polystar;
             let pts: Vec<Pos2> = anicraft_engine::geom::polystar_corners(a.x, a.y, (b - a).length(), o.sides.clamp(3, 32), o.star, o.point_size).into_iter().map(|v| Pos2::new(v.x, v.y)).collect();
             painter.add(egui::Shape::closed_line(pts, stroke));
         }
         Tool::Line => {
+            let (a, b) = (screen(start), screen(constrain(app.tool, start, cur, shift)));
             painter.line_segment([a, b], stroke);
         }
         _ => {}
@@ -5049,6 +5073,37 @@ mod draw_tests {
         App::with_context(&ctx, anicraft_engine::Session::new(anicraft_engine::doc::Document::default()), Some(std::path::PathBuf::from("unused.png")))
     }
 
+    /// #637: Alt draws a rectangle or oval symmetrically about the press point, doubling its
+    /// size relative to a corner drag, and combines with Shift for a centred square or circle.
+    #[test]
+    fn alt_draws_rect_and_oval_from_centre() {
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        let start = pos2(100.0, 100.0);
+        for tool in [Tool::Rect, Tool::Oval] {
+            for cur in [pos2(160.0, 130.0), pos2(40.0, 70.0), pos2(150.0, 60.0)] {
+                let (plain_o, plain_s) = shape_box(tool, start, cur, false, false);
+                let plain_r = Rect::from_min_size(plain_o, plain_s);
+                assert!(plain_r.min == start || plain_r.max == start || pos2(plain_r.min.x, plain_r.max.y) == start || pos2(plain_r.max.x, plain_r.min.y) == start, "{tool:?} without Alt has a corner at start");
+                assert!(near(plain_s.x, (cur.x - start.x).abs()) && near(plain_s.y, (cur.y - start.y).abs()), "{tool:?} without Alt matches drag extent");
+
+                let (alt_o, alt_s) = shape_box(tool, start, cur, false, true);
+                let alt_c = alt_o + alt_s * 0.5;
+                assert!(near(alt_c.x, start.x) && near(alt_c.y, start.y), "{tool:?} with Alt is centred on start: {alt_c:?}");
+                assert!(near(alt_s.x, plain_s.x * 2.0) && near(alt_s.y, plain_s.y * 2.0), "{tool:?} with Alt is twice as wide and high: {alt_s:?} vs {plain_s:?}");
+
+                let (sq_o, sq_s) = shape_box(tool, start, cur, true, true);
+                let sq_c = sq_o + sq_s * 0.5;
+                assert!(near(sq_c.x, start.x) && near(sq_c.y, start.y), "{tool:?} with Shift+Alt is centred on start: {sq_c:?}");
+                assert!(near(sq_s.x, sq_s.y), "{tool:?} with Shift+Alt has equal width and height: {sq_s:?}");
+            }
+        }
+        // Star and Line keep their behaviour when Alt is held.
+        let cur = pos2(160.0, 130.0);
+        for tool in [Tool::Star, Tool::Line] {
+            assert_eq!(shape_box(tool, start, cur, false, true), shape_box(tool, start, cur, false, false), "{tool:?} is unchanged by Alt");
+        }
+    }
+
     /// #205, #243: a shape or a line drawn with a tool leaves nothing selected (no box around
     /// the last stroke), in merge drawing and in Object Drawing, and the previous selection
     /// goes too, as in Animate. Undo still takes the shape away in one step.
@@ -5060,7 +5115,7 @@ mod draw_tests {
             for tool in [Tool::Line, Tool::Rect, Tool::Oval, Tool::Star] {
                 app.tool = tool;
                 let before = app.s.history_len();
-                create_shape(&mut app, pos2(10.0, 10.0), pos2(80.0, 60.0));
+                create_shape(&mut app, pos2(10.0, 10.0), pos2(80.0, 60.0), false, false);
                 assert_eq!(app.s.history_len(), before + 1, "{tool:?} drew");
                 assert!(app.s.selection.is_empty(), "{tool:?}, object {object}: nothing selected");
             }
@@ -5574,6 +5629,56 @@ mod pointer_tests {
         }
         // Two separate clicks stay two clicks: the fill alone.
         assert_eq!(double_click(0.7).s.selection.len(), 1);
+    }
+
+    /// #637: dragging on the stage with Rectangle or Oval while holding Alt centres the drawn
+    /// shape on the press point (twice as wide and high as a plain drag), and Shift+Alt draws a
+    /// centred square or circle.
+    #[test]
+    fn alt_drag_draws_rect_and_oval_centred_on_press_point() {
+        let drag_bounds = |tool: Tool, modifiers: Modifiers| {
+            let (mut app, ctx, at) = scene();
+            app.run("edit.select_all", json!({}));
+            app.run("edit.delete", json!({}));
+            app.s.style.object_drawing = true;
+            app.s.style.snap_objects = false;
+            app.s.style.use_stroke = false;
+            app.tool = tool;
+            let mut t = 1.0;
+            let mut step = |app: &mut App, events: Vec<Event>| {
+                t += 0.05;
+                let mut all = vec![Event::ModifiersChanged(modifiers)];
+                all.extend(events);
+                run_frame(&ctx, app, t, all);
+            };
+            let (a, b) = (at(200.0, 180.0), at(260.0, 210.0));
+            step(&mut app, vec![Event::PointerMoved(a)]);
+            step(&mut app, vec![Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers }]);
+            for i in 1..=4 {
+                step(&mut app, vec![Event::PointerMoved(a + (b - a) * (i as f32 / 4.0))]);
+            }
+            step(&mut app, vec![Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers }]);
+            step(&mut app, Vec::new());
+            app.run("edit.select_all", json!({}));
+            assert_eq!(app.s.selection.len(), 1, "{tool:?} drew one shape");
+            app.s.selection_bounds()
+        };
+        let press = Vec2::new(200.0, 180.0);
+        for tool in [Tool::Rect, Tool::Oval] {
+            let plain = drag_bounds(tool, Modifiers::NONE);
+            let alt = drag_bounds(tool, Modifiers::ALT);
+            let sq = drag_bounds(tool, Modifiers::ALT | Modifiers::SHIFT);
+
+            let plain_c = (plain.min + plain.max) * 0.5;
+            let alt_c = (alt.min + alt.max) * 0.5;
+            let sq_c = (sq.min + sq.max) * 0.5;
+            assert!(plain_c.distance(press) > 10.0, "{tool:?} without Alt is not centred on press: {plain:?}");
+            assert!(alt_c.distance(press) < 1.0, "{tool:?} with Alt is centred on press: {alt_c:?} vs {press:?}");
+            assert!(((alt.max.x - alt.min.x) - 2.0 * (plain.max.x - plain.min.x)).abs() < 1.0, "{tool:?} with Alt is twice as wide: {alt:?} vs {plain:?}");
+            assert!(((alt.max.y - alt.min.y) - 2.0 * (plain.max.y - plain.min.y)).abs() < 1.0, "{tool:?} with Alt is twice as high: {alt:?} vs {plain:?}");
+            assert!(sq_c.distance(press) < 1.0, "{tool:?} with Shift+Alt is centred on press: {sq_c:?} vs {press:?}");
+            assert!(((sq.max.x - sq.min.x) - (sq.max.y - sq.min.y)).abs() < 1.0, "{tool:?} with Shift+Alt has equal width and height: {sq:?}");
+        }
     }
 }
 
