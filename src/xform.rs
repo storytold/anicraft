@@ -3,8 +3,8 @@
 //! One selected element shows its own box, turned, scaled and skewed as it is, and its handles
 //! act along the box's own axes (#175); several elements, or raw pieces, show the upright box
 //! of the selection. The transformation point (the white circle) is what a rotation turns
-//! about, and what Alt scales and skews about. Drag it to move it; double-click it to put it
-//! back at the centre. A symbol instance keeps its point in the document
+//! about (Alt turns about the opposite corner), and what Alt scales and skews about. Drag it
+//! to move it; double-click it to put it back at the centre. A symbol instance keeps its point in the document
 //! (`modify.transformation_point`); anything else has one for the selection while Free
 //! Transform is held, kept here (#302, #280, #178, #183).
 //!
@@ -174,18 +174,28 @@ impl Frame {
         [tl, tr, br, bl].iter().any(|c| c.distance(p) <= ROTATE_ZONE).then_some(XfKind::Rotate)
     }
 
+    /// What a rotation drag started at stage point `start` turns about: the transformation point,
+    /// or with `alt` the corner of the box opposite the one nearest `start`.
+    pub fn rotate_pivot(&self, start: Pos2, alt: bool) -> Vec2 {
+        if !alt {
+            return self.point;
+        }
+        let [tl, tr, br, bl] = self.corners();
+        let s = Vec2::new(start.x, start.y);
+        [(tl, br), (tr, bl), (br, tl), (bl, tr)].into_iter().min_by(|(a, _), (b, _)| a.distance(s).total_cmp(&b.distance(s))).map_or(self.point, |(_, opp)| opp)
+    }
+
     /// The whole transform (stage space) of a drag of `kind` from stage point `start` to
     /// `cur`. Scaling and skewing act along the box's own axes; a rotation turns about the
-    /// transformation point, and Alt scales and skews about it.
+    /// transformation point (Alt turns about the opposite corner), and Alt scales and skews about it.
     pub fn total(&self, kind: XfKind, start: Pos2, cur: Pos2, shift: bool, alt: bool) -> Affine {
         match kind {
             XfKind::Pivot => Affine::IDENTITY,
             XfKind::Move => crate::stage::xf_total(kind, self.b, start, cur, shift, alt),
             // A turn is a turn on the stage, however the box is scaled or skewed.
             XfKind::Rotate => {
-                let c = self.point;
-                let span = [c.x - 1.0, c.y - 1.0, c.x + 1.0, c.y + 1.0];
-                crate::stage::xf_total(kind, span, start, cur, shift, alt)
+                let p = self.rotate_pivot(start, alt);
+                crate::stage::xf_total_about(kind, self.b, Some(pos2(p.x, p.y)), start, cur, shift, false)
             }
             XfKind::Scale { .. } | XfKind::Skew { .. } => {
                 let Some(inv) = self.m.inverse() else { return Affine::IDENTITY };
@@ -348,6 +358,30 @@ mod tests {
         assert_eq!(u.point, Vec2::new(50.0, 25.0));
         assert_eq!(u.total(XfKind::Rotate, pos2(110.0, 25.0), pos2(50.0, 100.0), true, false), crate::stage::xf_total(XfKind::Rotate, u.b, pos2(110.0, 25.0), pos2(50.0, 100.0), true, false));
         assert_eq!(u.total(XfKind::Scale { hx: 1, hy: 1 }, pos2(100.0, 50.0), pos2(200.0, 100.0), false, false), crate::stage::xf_total(XfKind::Scale { hx: 1, hy: 1 }, u.b, pos2(100.0, 50.0), pos2(200.0, 100.0), false, false));
+    }
+
+    #[test]
+    fn alt_rotation_turns_about_the_opposite_corner_even_on_a_turned_box() {
+        let f = Frame { point: Vec2::new(150.0, 60.0), ..turned() };
+        let centre = f.handle(0, 0);
+        let [tl, tr, br, bl] = f.corners();
+        for (grabbed, opposite) in [(tl, br), (tr, bl), (br, tl), (bl, tr)] {
+            let out = grabbed + (grabbed - centre).normalized() * 14.0;
+            let start = pos2(out.x, out.y);
+            let cur = pos2(out.x + 25.0, out.y + 40.0);
+            let m = f.total(XfKind::Rotate, start, cur, false, true);
+            assert!(near(m.apply(opposite), opposite), "opposite corner {opposite:?} stayed fixed");
+            assert!(m.apply(grabbed).distance(grabbed) > 1.0, "grabbed corner {grabbed:?} moved");
+        }
+        // Shift + Alt still snaps to 15° about the opposite corner.
+        let out = tr + (tr - centre).normalized() * 14.0;
+        let m = f.total(XfKind::Rotate, pos2(out.x, out.y), pos2(out.x + 60.0, out.y - 10.0), true, true);
+        assert!(near(m.apply(bl), bl), "opposite corner stayed fixed with Shift+Alt");
+        let turn = m.decompose().rotation.to_degrees();
+        assert!((turn / 15.0 - (turn / 15.0).round()).abs() < 1e-3 && turn.abs() > 1.0, "{turn}");
+        // An upright frame matches `xf_total` with Alt too.
+        let u = Frame::upright([0.0, 0.0, 100.0, 50.0]);
+        assert_eq!(u.total(XfKind::Rotate, pos2(112.0, 62.0), pos2(80.0, 95.0), false, true), crate::stage::xf_total(XfKind::Rotate, u.b, pos2(112.0, 62.0), pos2(80.0, 95.0), false, true));
     }
 
     #[test]

@@ -430,7 +430,8 @@ With the **Free Transform** tool (**Q**), drag a handle (a corner or the middle 
 scales about the transformation point instead),
 the line between two handles to **skew** (the opposite edge stays where it is; **Alt** skews
 about the transformation point), just outside a corner to **rotate** (the pointer turns
-into a curved arrow there; **Shift** snaps to 15°), or inside the box to **move**.
+into a curved arrow there; **Shift** snaps to 15°, **Alt** rotates about the opposite corner),
+or inside the box to **move**.
 
 One selected object shows **its own box**: turn a symbol, a group, text or a drawing object
 and its box turns with it, so you can see how it stands, and its handles stretch it along its
