@@ -487,7 +487,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     None => CursorIcon::Default,
                 }
             }
-            Tool::Rect | Tool::Oval | Tool::Star | Tool::Line | Tool::Pen | Tool::Pencil | Tool::Brush | Tool::PaintBrush | Tool::Eraser | Tool::PaintBucket | Tool::InkBottle | Tool::Eyedropper | Tool::Bone | Tool::Bind | Tool::Warp => CursorIcon::Crosshair,
+            Tool::Lasso | Tool::Rect | Tool::Oval | Tool::Star | Tool::Line | Tool::Pen | Tool::Pencil | Tool::Brush | Tool::PaintBrush | Tool::Eraser | Tool::PaintBucket | Tool::InkBottle | Tool::Eyedropper | Tool::Bone | Tool::Bind | Tool::Warp => CursorIcon::Crosshair,
             Tool::Text => CursorIcon::Text,
             Tool::Zoom => {
                 if alt {
@@ -564,7 +564,9 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         (Some(kind), Some(frame)) => {
                             // Moving an instance's transformation point changes the document;
                             // a point held for the selection doesn't.
-                            if kind != XfKind::Pivot {
+                            if kind == XfKind::Move && alt {
+                                begin_transform_move(app, true);
+                            } else if kind != XfKind::Pivot {
                                 app.s.begin_gesture(tr_noop!("Free Transform"));
                             } else if frame.keeps {
                                 app.s.begin_gesture(tr_noop!("Move Transformation Point"));
@@ -578,7 +580,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                                 app.run("element.pick", json!({"x": sp.x, "y": sp.y, "add": shift}));
                                 match bounds_arr(app.s.selection_bounds()) {
                                     Some(bounds) => {
-                                        app.s.begin_gesture(tr_noop!("Free Transform"));
+                                        begin_transform_move(app, alt);
                                         app.xf.drag = Some(crate::xform::Frame::upright(bounds));
                                         Drag::Transform { kind: XfKind::Move, start: sp, bounds, applied: Affine::IDENTITY }
                                     }
@@ -589,7 +591,11 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                         },
                     }
                 }
-                Tool::Subselect => crate::pathtools::subselect_drag_start(app, press, shift, xf),
+                Tool::Subselect => crate::pathtools::subselect_drag_start(app, press, shift, alt, xf),
+                Tool::Lasso => {
+                    app.lasso = vec![to_v(sp)];
+                    Drag::Lasso
+                }
                 Tool::Bone => crate::bone_tool::drag_start(app, xf, press),
                 Tool::Bind => crate::bind_tool::drag_start(app, xf, press),
                 Tool::Warp => crate::warp_tool::drag_start(app, xf, press),
@@ -763,6 +769,17 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     crate::pathtools::move_points(app, Vec2::new(d.x, d.y), !alt);
                 }
             }
+            (Drag::PullHandle { target, anchor, moved }, Some(c)) => {
+                let (target, anchor) = (*target, *anchor);
+                let mut m = *moved;
+                let ids = crate::pathtools::pull_handle(app, target, anchor, &mut m, to_v(c), shift, xf);
+                if let Drag::PullHandle { moved, .. } = &mut app.drag {
+                    *moved = m;
+                }
+                if let Some(ids) = ids {
+                    touched(app, &ids);
+                }
+            }
             (Drag::PointMarquee { cur: m, .. } | Drag::BindMarquee { cur: m, .. }, Some(c)) => *m = c,
             (Drag::BindPaint { last }, Some(c)) => {
                 let from = *last;
@@ -791,9 +808,20 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             (Drag::Brush, Some(c)) => crate::brushtool::sample(app, to_v(c), pressure, xf, now),
             (Drag::Eraser, Some(c)) => crate::brushtool::sample(app, to_v(c), None, xf, now),
             (Drag::Marquee { cur: m, .. }, Some(c)) => *m = c,
+            (Drag::Lasso, Some(c)) => {
+                let p = to_v(c);
+                if app.lasso.last().is_none_or(|l| l.distance(p) * zoom >= 1.0) && app.lasso.len() < 10_000 {
+                    app.lasso.push(p);
+                }
+            }
             (Drag::Shape { start, cur: m }, Some(c)) => *m = constrain(app.tool, *start, c, shift),
             _ => {}
         }
+    }
+
+    if app.drag == Drag::Lasso && ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape)) {
+        app.lasso.clear();
+        app.drag = Drag::None;
     }
 
     if resp.drag_stopped() {
@@ -802,8 +830,8 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 app.drop_raw();
                 app.s.end_gesture();
             }
-            Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. } => end_raw_drag(app),
-            Drag::Transform { .. } | Drag::SliceGuide { .. } | Drag::Points { .. } | Drag::Hint { .. } | Drag::MotionMove { .. } | Drag::CameraPan { .. } | Drag::CameraRotate { .. } | Drag::BonePose { .. } | Drag::ArmatureMove { .. } | Drag::WarpPin { .. } => app.s.end_gesture(),
+            Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. } | Drag::PullHandle { target: crate::pathtools::PullTarget::Raw, .. } => end_raw_drag(app),
+            Drag::Transform { .. } | Drag::SliceGuide { .. } | Drag::Points { .. } | Drag::PullHandle { target: crate::pathtools::PullTarget::Object { .. }, .. } | Drag::Hint { .. } | Drag::MotionMove { .. } | Drag::CameraPan { .. } | Drag::CameraRotate { .. } | Drag::BonePose { .. } | Drag::ArmatureMove { .. } | Drag::WarpPin { .. } => app.s.end_gesture(),
             Drag::Bone { from, parent, head, cur } => crate::bone_tool::drag_end(app, xf, from, parent, head, cur),
             Drag::Guide { index, .. } => crate::rulers::drag_end(app, index, geo, ui.input(|i| i.pointer.latest_pos())),
             Drag::Width { .. } => crate::widthtool::drag_end(app),
@@ -824,7 +852,24 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 // it touches (ADR 0041, #522).
                 app.run("raw.select_rect", json!({"x0": start.x, "y0": start.y, "x1": cur.x, "y1": cur.y, "add": shift}));
             }
-            Drag::Shape { start, cur } => create_shape(app, start, cur),
+            Drag::Lasso => {
+                if let Some(c) = resp.interact_pointer_pos().map(to_stage) {
+                    let p = to_v(c);
+                    if app.lasso.last().is_none_or(|l| l.distance(p) * zoom >= 1.0) && app.lasso.len() < 10_000 {
+                        app.lasso.push(p);
+                    }
+                }
+                // A point a screen pixel is far more than the cut needs: the loop is thinned to
+                // what the Pencil keeps, within half a screen pixel of what was drawn.
+                let pts = std::mem::take(&mut app.lasso);
+                let pts = anicraft_engine::geom::edit::simplify(&pts, (0.5 / zoom.max(1e-3)).max(anicraft_engine::geom::planar::SNAP));
+                let points: Vec<[f32; 2]> = pts.iter().map(|p| [p.x, p.y]).collect();
+                if multi {
+                    app.onion_ui.sel.clear();
+                }
+                app.run("raw.select_area", json!({"points": points, "add": shift}));
+            }
+            Drag::Shape { start, cur } => create_shape(app, start, cur, shift, alt),
             Drag::Pan | Drag::None | Drag::CameraWheel { .. } => {}
         }
         app.drag = Drag::None;
@@ -900,6 +945,12 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                 Tool::Select | Tool::Transform if !panning && hint_at(p).is_none() => {
                     app.bone_sel = None;
                     app.run("element.pick", json!({"x": sp.x, "y": sp.y, "add": shift}));
+                }
+                Tool::Lasso if !panning => {
+                    if multi && !shift {
+                        app.onion_ui.sel.clear();
+                    }
+                    app.run("raw.select_area", json!({"points": [], "add": shift}));
                 }
                 Tool::Zoom => {
                     app.zoom_by(canvas, p, if alt { 0.5 } else { 2.0 }, ppp);
@@ -979,7 +1030,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         if crate::shape_hints::menu(app, ui) || crate::motion_path::menu(app, ui) || crate::pathtools::point_menu(app, ui) {
             return;
         }
-        if multi {
+        if multi && (!app.onion_ui.sel.is_empty() || app.s.selection.is_empty()) {
             crate::onion::context_menu(app, ui);
             return;
         }
@@ -1012,7 +1063,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             }
             // Modify › Combine Objects (ADR 0073), as in Animate's menu.
             ui.menu_button(tr!("Combine Objects"), |ui| {
-                for id in ["modify.union", "modify.intersect", "modify.punch", "modify.crop"] {
+                for id in ["modify.union", "modify.intersect", "modify.punch", "modify.crop", "modify.create_object"] {
                     crate::menus::cmd_item(app, ui, id);
                 }
             });
@@ -1241,7 +1292,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
 
         // While a background render catches up with a drag, outline where the selection is now,
         // so the artwork never seems to lag the pointer.
-        if show_edges && ready < keys.len() && !preview && matches!(app.drag, Drag::Move { .. } | Drag::SnapMove { .. } | Drag::Transform { .. } | Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. }) {
+        if show_edges && ready < keys.len() && !preview && matches!(app.drag, Drag::Move { .. } | Drag::SnapMove { .. } | Drag::Transform { .. } | Drag::Bend { .. } | Drag::RawPoint { .. } | Drag::RawHandle { .. } | Drag::PullHandle { .. }) {
             let to_px = Affine::translate(origin.x, origin.y).mul(&Affine::scale(zoom, zoom));
             let dl = app.s.display_list();
             let stroke = Stroke::new(1.5, T.selection);
@@ -1315,7 +1366,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
     let enveloped = crate::shape_envelope::shown(app).is_some();
     // Selected raw fills and strokes (ADRs 0031, 0041) show an
     // Animate-style stipple overlay instead of a bounding box.
-    if show_edges && app.tool == Tool::Select && !preview {
+    if show_edges && matches!(app.tool, Tool::Select | Tool::Lasso) && !preview {
         let gap = dot_gap_points(ppp);
         let to_px = Affine::translate(origin.x, origin.y)
             .mul(&Affine::scale(zoom, zoom));
@@ -1437,7 +1488,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             // Transform shows the fill's handles (ADR 0074).
             continue;
         }
-        if app.tool == Tool::Select && raw.contains(&(layer, id)) {
+        if matches!(app.tool, Tool::Select | Tool::Lasso) && raw.contains(&(layer, id)) {
             continue; // dots above
         }
         if transforming && enveloped {
@@ -1484,10 +1535,22 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
         // The transformation point (ADR 0111): the instance's own, the one held for the
         // selection, or the box's centre; or, when each object is transformed about its own
         // point (ADR 0109), every object's (past a few hundred objects the box alone shows,
-        // so a huge selection stays quick).
+        // so a huge selection stays quick). While Alt is held during a rotate drag, show the
+        // opposite-corner pivot actually in use.
         let mode = app.s.style.transform_origin;
         let own = !multi && mode != anicraft_engine::TransformOrigin::Selection && app.s.selection.len() <= MAX_ORIGIN_MARKS;
-        let points: Vec<Pos2> = if own { anicraft_engine::transform_origins(&app.s, mode).into_iter().map(|(_, at)| to_screen(at)).collect() } else { vec![to_screen(frame.point)] };
+        let alt_pivot = match app.drag {
+            Drag::Transform { kind: XfKind::Rotate, start, bounds, .. } if alt && mode == anicraft_engine::TransformOrigin::Selection => Some(app.xf.drag.unwrap_or_else(|| crate::xform::Frame::upright(bounds)).rotate_pivot(start, true)),
+            Drag::MultiTransform { kind: XfKind::Rotate, start, bounds, .. } if alt => Some(crate::xform::Frame::upright(bounds).rotate_pivot(start, true)),
+            _ => None,
+        };
+        let points: Vec<Pos2> = if let Some(p) = alt_pivot {
+            vec![to_screen(p)]
+        } else if own {
+            anicraft_engine::transform_origins(&app.s, mode).into_iter().map(|(_, at)| to_screen(at)).collect()
+        } else {
+            vec![to_screen(frame.point)]
+        };
         for c in points {
             painter.circle(c, 4.0, Color32::WHITE, Stroke::new(1.0, T.selection));
             painter.line_segment([c - vec2(6.0, 0.0), c + vec2(6.0, 0.0)], Stroke::new(1.0, T.selection));
@@ -1518,12 +1581,21 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             painter.rect_filled(r, 0.0, T.selection.gamma_multiply(0.12));
             painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
         }
+        Drag::Lasso if app.lasso.len() >= 2 => {
+            let pts: Vec<Pos2> = app.lasso.iter().map(|p| to_screen(*p)).collect();
+            if let (Some(&first), Some(&last)) = (pts.first(), pts.last())
+                && pts.len() >= 3
+            {
+                painter.add(egui::Shape::dashed_line(&[last, first], Stroke::new(1.0, T.selection.gamma_multiply(0.65)), 4.0, 3.0));
+            }
+            painter.add(egui::Shape::line(pts, sel_stroke));
+        }
         Drag::PointMarquee { start, cur } => {
             let r = Rect::from_two_pos(to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)));
             painter.rect_filled(r, 0.0, T.selection.gamma_multiply(0.12));
             painter.rect_stroke(r, 0.0, sel_stroke, StrokeKind::Middle);
         }
-        Drag::Shape { start, cur } => draw_preview(app, &painter, to_screen(Vec2::new(start.x, start.y)), to_screen(Vec2::new(cur.x, cur.y)), zoom),
+        Drag::Shape { start, cur } => draw_preview(app, &painter, start, cur, shift, alt, xf),
         _ => {}
     }
     // The drawing tools show where a press would start, snapped (ADR 0045).
@@ -1712,6 +1784,22 @@ fn move_raw_point(app: &mut App, c: Pos2, zoom: f32) {
         let ids: Vec<serde_json::Value> = points.as_array().into_iter().flatten().filter_map(|pt| pt.get(0).cloned()).collect();
         app.raw_points = points.clone();
         touched(app, &serde_json::Value::Array(ids));
+    }
+}
+
+/// Starts a Free Transform move. With `copy`, Alt-drag duplicates the selection into the same
+/// gesture, so the following transform moves the copy and one undo removes it again (#643).
+fn begin_transform_move(app: &mut App, copy: bool) {
+    if copy {
+        app.s.begin_gesture(tr_noop!("Copy"));
+        // A copy that could not be made (the status bar says why) leaves a plain move: the
+        // step is then named for what it does.
+        if app.run("edit.duplicate", json!({"dx": 0, "dy": 0})).is_none() {
+            app.s.end_gesture();
+            app.s.begin_gesture(tr_noop!("Free Transform"));
+        }
+    } else {
+        app.s.begin_gesture(tr_noop!("Free Transform"));
     }
 }
 
@@ -4932,7 +5020,8 @@ pub(crate) fn xf_total(kind: XfKind, b: [f32; 4], start: Pos2, cur: Pos2, shift:
 }
 
 /// [`xf_total`] with the transformation point `about` (default: the box's centre): what a
-/// rotation turns about, and what Alt scales and skews about (ADR 0111).
+/// rotation turns about (Alt turns about the corner opposite `start`), and what Alt scales and
+/// skews about (ADR 0111).
 pub(crate) fn xf_total_about(kind: XfKind, b: [f32; 4], about: Option<Pos2>, start: Pos2, cur: Pos2, shift: bool, alt: bool) -> Affine {
     let [x0, y0, x1, y1] = b;
     let (cx, cy) = about.map_or(((x0 + x1) / 2.0, (y0 + y1) / 2.0), |p| (p.x, p.y));
@@ -4990,14 +5079,20 @@ pub(crate) fn xf_total_about(kind: XfKind, b: [f32; 4], about: Option<Pos2>, sta
             }
         }
         XfKind::Rotate => {
-            let a0 = (start.y - cy).atan2(start.x - cx);
-            let a1 = (cur.y - cy).atan2(cur.x - cx);
+            let (px, py) = if alt {
+                let corners = [(pos2(x0, y0), (x1, y1)), (pos2(x1, y0), (x0, y1)), (pos2(x1, y1), (x0, y0)), (pos2(x0, y1), (x1, y0))];
+                corners.into_iter().min_by(|(a, _), (b, _)| a.distance_sq(start).total_cmp(&b.distance_sq(start))).map_or((cx, cy), |(_, opp)| opp)
+            } else {
+                (cx, cy)
+            };
+            let a0 = (start.y - py).atan2(start.x - px);
+            let a1 = (cur.y - py).atan2(cur.x - px);
             let mut a = a1 - a0;
             if shift {
                 let step = 15f32.to_radians();
                 a = (a / step).round() * step;
             }
-            about(cx, cy, Affine::rotate(a))
+            about(px, py, Affine::rotate(a))
         }
     }
 }
@@ -5021,17 +5116,35 @@ fn constrain(tool: Tool, start: Pos2, cur: Pos2, shift: bool) -> Pos2 {
     }
 }
 
-fn create_shape(app: &mut App, start: Pos2, cur: Pos2) {
-    let d = cur - start;
+/// Bounding box `(origin, size)` for a Rectangle or Oval drag from `start` to `cur`:
+/// Shift makes width and height equal, and Alt centres the box on `start` with half-extent
+/// `cur - start` (doubling its size).
+fn shape_box(tool: Tool, start: Pos2, cur: Pos2, shift: bool, alt: bool) -> (Pos2, egui::Vec2) {
+    let end = constrain(tool, start, cur, shift);
+    let d = end - start;
+    let (a, b) = if alt && matches!(tool, Tool::Rect | Tool::Oval) {
+        (start - d, start + d)
+    } else {
+        (start, end)
+    };
+    let r = Rect::from_two_pos(a, b);
+    (r.min, r.max - r.min)
+}
+
+fn create_shape(app: &mut App, start: Pos2, cur: Pos2, shift: bool, alt: bool) {
+    let end = constrain(app.tool, start, cur, shift);
+    let d = end - start;
     if d.length() < 1.0 {
         return;
     }
     match app.tool {
         Tool::Rect => {
-            app.draw("draw.rect", json!({"x": start.x, "y": start.y, "w": d.x, "h": d.y, "radius": app.rect_radius}));
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            app.draw("draw.rect", json!({"x": origin.x, "y": origin.y, "w": size.x, "h": size.y, "radius": app.rect_radius}));
         }
         Tool::Oval => {
-            app.draw("draw.ellipse", json!({"x": start.x, "y": start.y, "w": d.x, "h": d.y}));
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            app.draw("draw.ellipse", json!({"x": origin.x, "y": origin.y, "w": size.x, "h": size.y}));
         }
         Tool::Star => {
             let mut p = app.polystar.params();
@@ -5041,25 +5154,29 @@ fn create_shape(app: &mut App, start: Pos2, cur: Pos2) {
             app.draw("draw.star", p);
         }
         Tool::Line => {
-            app.draw("draw.line", json!({"x0": start.x, "y0": start.y, "x1": cur.x, "y1": cur.y}));
+            app.draw("draw.line", json!({"x0": start.x, "y0": start.y, "x1": end.x, "y1": end.y}));
         }
         _ => {}
     }
 }
 
-fn draw_preview(app: &App, painter: &egui::Painter, a: Pos2, b: Pos2, zoom: f32) {
+fn draw_preview(app: &App, painter: &egui::Painter, start: Pos2, cur: Pos2, shift: bool, alt: bool, xf: crate::pathtools::Xf) {
     let st = &app.s.style;
+    let zoom = xf.zoom;
     let fill = if st.use_fill { crate::theme::to_color32(st.fill).gamma_multiply(0.6) } else { Color32::TRANSPARENT };
     let stroke = Stroke::new((st.stroke_width * zoom).max(1.0), if st.use_stroke { crate::theme::to_color32(st.stroke) } else { T.selection });
+    let screen = |p: Pos2| pos2(xf.origin.x + p.x * zoom, xf.origin.y + p.y * zoom);
     match app.tool {
         Tool::Rect => {
-            let r = Rect::from_two_pos(a, b);
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            let r = Rect::from_two_pos(screen(origin), screen(origin + size));
             let rad = (app.rect_radius * zoom).min(r.width() / 2.0).min(r.height() / 2.0).clamp(0.0, 255.0) as u8;
             painter.rect_filled(r, rad, fill);
             painter.rect_stroke(r, rad, stroke, StrokeKind::Middle);
         }
         Tool::Oval => {
-            let r = Rect::from_two_pos(a, b);
+            let (origin, size) = shape_box(app.tool, start, cur, shift, alt);
+            let r = Rect::from_two_pos(screen(origin), screen(origin + size));
             let pts: Vec<Pos2> = (0..64)
                 .map(|i| {
                     let t = i as f32 / 64.0 * std::f32::consts::TAU;
@@ -5070,11 +5187,13 @@ fn draw_preview(app: &App, painter: &egui::Painter, a: Pos2, b: Pos2, zoom: f32)
         }
         Tool::Star => {
             // The same corners the command draws (ADR 0080).
+            let (a, b) = (screen(start), screen(constrain(app.tool, start, cur, shift)));
             let o = app.polystar;
             let pts: Vec<Pos2> = anicraft_engine::geom::polystar_corners(a.x, a.y, (b - a).length(), o.sides.clamp(3, 32), o.star, o.point_size).into_iter().map(|v| Pos2::new(v.x, v.y)).collect();
             painter.add(egui::Shape::closed_line(pts, stroke));
         }
         Tool::Line => {
+            let (a, b) = (screen(start), screen(constrain(app.tool, start, cur, shift)));
             painter.line_segment([a, b], stroke);
         }
         _ => {}
@@ -5090,6 +5209,37 @@ mod draw_tests {
         App::with_context(&ctx, anicraft_engine::Session::new(anicraft_engine::doc::Document::default()), Some(std::path::PathBuf::from("unused.png")))
     }
 
+    /// #637: Alt draws a rectangle or oval symmetrically about the press point, doubling its
+    /// size relative to a corner drag, and combines with Shift for a centred square or circle.
+    #[test]
+    fn alt_draws_rect_and_oval_from_centre() {
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        let start = pos2(100.0, 100.0);
+        for tool in [Tool::Rect, Tool::Oval] {
+            for cur in [pos2(160.0, 130.0), pos2(40.0, 70.0), pos2(150.0, 60.0)] {
+                let (plain_o, plain_s) = shape_box(tool, start, cur, false, false);
+                let plain_r = Rect::from_min_size(plain_o, plain_s);
+                assert!(plain_r.min == start || plain_r.max == start || pos2(plain_r.min.x, plain_r.max.y) == start || pos2(plain_r.max.x, plain_r.min.y) == start, "{tool:?} without Alt has a corner at start");
+                assert!(near(plain_s.x, (cur.x - start.x).abs()) && near(plain_s.y, (cur.y - start.y).abs()), "{tool:?} without Alt matches drag extent");
+
+                let (alt_o, alt_s) = shape_box(tool, start, cur, false, true);
+                let alt_c = alt_o + alt_s * 0.5;
+                assert!(near(alt_c.x, start.x) && near(alt_c.y, start.y), "{tool:?} with Alt is centred on start: {alt_c:?}");
+                assert!(near(alt_s.x, plain_s.x * 2.0) && near(alt_s.y, plain_s.y * 2.0), "{tool:?} with Alt is twice as wide and high: {alt_s:?} vs {plain_s:?}");
+
+                let (sq_o, sq_s) = shape_box(tool, start, cur, true, true);
+                let sq_c = sq_o + sq_s * 0.5;
+                assert!(near(sq_c.x, start.x) && near(sq_c.y, start.y), "{tool:?} with Shift+Alt is centred on start: {sq_c:?}");
+                assert!(near(sq_s.x, sq_s.y), "{tool:?} with Shift+Alt has equal width and height: {sq_s:?}");
+            }
+        }
+        // Star and Line keep their behaviour when Alt is held.
+        let cur = pos2(160.0, 130.0);
+        for tool in [Tool::Star, Tool::Line] {
+            assert_eq!(shape_box(tool, start, cur, false, true), shape_box(tool, start, cur, false, false), "{tool:?} is unchanged by Alt");
+        }
+    }
+
     /// #205, #243: a shape or a line drawn with a tool leaves nothing selected (no box around
     /// the last stroke), in merge drawing and in Object Drawing, and the previous selection
     /// goes too, as in Animate. Undo still takes the shape away in one step.
@@ -5101,7 +5251,7 @@ mod draw_tests {
             for tool in [Tool::Line, Tool::Rect, Tool::Oval, Tool::Star] {
                 app.tool = tool;
                 let before = app.s.history_len();
-                create_shape(&mut app, pos2(10.0, 10.0), pos2(80.0, 60.0));
+                create_shape(&mut app, pos2(10.0, 10.0), pos2(80.0, 60.0), false, false);
                 assert_eq!(app.s.history_len(), before + 1, "{tool:?} drew");
                 assert!(app.s.selection.is_empty(), "{tool:?}, object {object}: nothing selected");
             }
@@ -5111,6 +5261,37 @@ mod draw_tests {
             let n = app.s.visible_elements().len();
             app.s.undo().expect("undo");
             assert!(app.s.visible_elements().len() < n, "one undo takes the stroke away");
+        }
+    }
+
+    #[test]
+    fn free_transform_alt_drag_moves_a_copy_in_one_undo_step() {
+        for object in [true, false] {
+            let mut app = app();
+            app.s.style.object_drawing = object;
+            app.run("draw.rect", json!({"x": 10, "y": 20, "w": 100, "h": 80, "fill": "#3366ff", "stroke": "#000000", "object": object}));
+            let before_doc = app.s.doc.clone();
+            let before: Vec<(u64, Affine)> = app.s.visible_elements().into_iter().map(|e| (e.id.0, e.transform)).collect();
+            let original_ids: Vec<u64> = before.iter().map(|(id, _)| *id).collect();
+            begin_transform_move(&mut app, true);
+            let copies = app.s.selection.id_list();
+            assert_eq!(app.s.visible_elements().len(), before.len() * 2, "object {object}: every original piece has a copy");
+            assert!(copies.iter().all(|id| !original_ids.contains(id)), "object {object}: the copies are selected");
+            let [a, b, c, d, e, f] = Affine::translate(75.0, 25.0).m;
+            app.s.execute("modify.transform", &json!({"a": a, "b": b, "c": c, "d": d, "e": e, "f": f})).expect("the stage's move command");
+            app.s.end_gesture();
+            let now = app.s.visible_elements();
+            for (id, transform) in before {
+                let original = now.iter().find(|el| el.id.0 == id).expect("the original stays");
+                assert_eq!(original.transform, transform, "object {object}: original {id} did not move");
+            }
+            for id in copies {
+                let copy = now.iter().find(|el| el.id.0 == id).expect("the copy stays");
+                let at = copy.transform.translation();
+                assert!(at.x >= 75.0 && at.y >= 25.0, "object {object}: copy {id} moved with the drag: {at:?}");
+            }
+            app.s.undo().expect("one undo for the duplicate and its move");
+            assert_eq!(app.s.doc, before_doc, "object {object}: one undo restores the whole drawing");
         }
     }
 
@@ -5222,6 +5403,48 @@ mod xf_tests {
         assert!(c.distance(Vec2::new(50.0, 25.0)) < 1e-3);
         let angle = m.decompose().rotation.to_degrees();
         assert!((angle / 15.0 - (angle / 15.0).round()).abs() < 1e-3, "{angle}");
+    }
+
+    #[test]
+    fn alt_rotate_pivots_on_the_opposite_corner_for_each_corner() {
+        // B is [0, 0, 100, 50]: each corner grabbed just outside, with its opposite corner fixed.
+        let cases = [
+            ((0.0, 0.0), (100.0, 50.0), pos2(-12.0, -12.0), pos2(20.0, -40.0)),
+            ((100.0, 0.0), (0.0, 50.0), pos2(112.0, -12.0), pos2(120.0, 35.0)),
+            ((100.0, 50.0), (0.0, 0.0), pos2(112.0, 62.0), pos2(80.0, 95.0)),
+            ((0.0, 50.0), (100.0, 0.0), pos2(-12.0, 62.0), pos2(-20.0, 15.0)),
+        ];
+        for ((gx, gy), (ox, oy), start, cur) in cases {
+            let m = xf_total(XfKind::Rotate, B, start, cur, false, true);
+            assert!(apply(&m, ox, oy).distance(Vec2::new(ox, oy)) < 1e-3, "opposite corner ({ox}, {oy}) stayed fixed");
+            assert!(apply(&m, gx, gy).distance(Vec2::new(gx, gy)) > 1.0, "grabbed corner ({gx}, {gy}) moved");
+            let expected = (cur.y - oy).atan2(cur.x - ox) - (start.y - oy).atan2(start.x - ox);
+            let diff = (m.decompose().rotation - expected + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI;
+            assert!(diff.abs() < 1e-3, "angle matched sweep about ({ox}, {oy}): got {}, expected {expected}", m.decompose().rotation);
+        }
+        // Without Alt, a given transformation point stays fixed; with Alt, the opposite corner wins.
+        let custom = pos2(20.0, 10.0);
+        let plain = xf_total_about(XfKind::Rotate, B, Some(custom), pos2(112.0, 62.0), pos2(80.0, 95.0), false, false);
+        assert!(apply(&plain, custom.x, custom.y).distance(Vec2::new(custom.x, custom.y)) < 1e-3, "custom pivot stays fixed without Alt");
+        assert!(apply(&plain, 0.0, 0.0).distance(Vec2::new(0.0, 0.0)) > 1.0, "corner moves without Alt");
+        let with_alt = xf_total_about(XfKind::Rotate, B, Some(custom), pos2(112.0, 62.0), pos2(80.0, 95.0), false, true);
+        assert!(apply(&with_alt, 0.0, 0.0).distance(Vec2::new(0.0, 0.0)) < 1e-3, "opposite corner stays fixed with Alt");
+        assert!(apply(&with_alt, custom.x, custom.y).distance(Vec2::new(custom.x, custom.y)) > 1.0, "custom pivot moves with Alt");
+    }
+
+    #[test]
+    fn alt_shift_rotate_snaps_about_the_opposite_corner() {
+        let start = pos2(112.0, 62.0);
+        let cur = pos2(80.0, 105.0);
+        let m = xf_total(XfKind::Rotate, B, start, cur, true, true);
+        assert!(apply(&m, 0.0, 0.0).distance(Vec2::new(0.0, 0.0)) < 1e-3, "opposite corner stays fixed");
+        assert!(apply(&m, 100.0, 50.0).distance(Vec2::new(100.0, 50.0)) > 1.0, "grabbed corner moves");
+        let angle = m.decompose().rotation.to_degrees();
+        assert!(angle.abs() > 1.0, "snapped to a non-zero step: {angle}");
+        assert!((angle / 15.0 - (angle / 15.0).round()).abs() < 1e-3, "snapped to 15°: {angle}");
+        let raw = ((cur.y.atan2(cur.x) - start.y.atan2(start.x)).to_degrees() / 15.0).round() * 15.0;
+        let diff = (angle - raw + 180.0).rem_euclid(360.0) - 180.0;
+        assert!(diff.abs() < 1e-3, "snapped angle {angle} matched {raw}");
     }
 
     #[test]
@@ -5918,6 +6141,111 @@ mod pointer_tests {
         assert_eq!(steps(&app), undo + 1);
     }
 
+    /// #629: holding Alt while rotating with Free Transform turns the selection about the corner
+    /// opposite the one grabbed, and commits that same pivot through `modify.transform`.
+    #[test]
+    fn alt_rotate_drag_on_stage_pivots_on_the_opposite_corner() {
+        let (mut app, ctx, at) = scene();
+        app.run("edit.select_all", json!({}));
+        app.run("edit.delete", json!({}));
+        app.run("draw.rect", json!({"x": 300, "y": 200, "w": 200, "h": 100, "fill": "#3366ff", "stroke": null, "object": true}));
+        app.run("modify.convert_to_symbol", json!({"name": "Card"}));
+        app.tool = Tool::Transform;
+        let mut t = 2.0;
+        let mut frame = |app: &mut App, modifiers: Modifiers, events: Vec<Event>| {
+            t += 0.05;
+            let mut all = vec![Event::ModifiersChanged(modifiers)];
+            all.extend(events);
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), time: Some(t), events: all, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+        };
+        frame(&mut app, Modifiers::NONE, Vec::new());
+        let instance = |app: &App| app.s.selected_elements().first().map(|(_, e)| e.transform).expect("the instance is selected");
+        let box_of = |app: &App| crate::xform::frame(app).expect("a selection has a box");
+        let before_box = box_of(&app);
+        let [_, tr, _, bl] = before_box.corners();
+        let outside = tr + (tr - before_box.handle(0, 0)).normalized() * (14.0 / app.view.zoom);
+        let (a, b) = (at(outside.x, outside.y), at(outside.x + 40.0, outside.y + 120.0));
+        let (before, undo) = (instance(&app).decompose(), app.s.history().undo_len());
+        frame(&mut app, Modifiers::ALT, vec![Event::PointerMoved(a)]);
+        frame(&mut app, Modifiers::ALT, vec![Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT }]);
+        for i in 1..=5 {
+            frame(&mut app, Modifiers::ALT, vec![Event::PointerMoved(a + (b - a) * (i as f32 / 5.0))]);
+        }
+        frame(&mut app, Modifiers::ALT, vec![Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT }]);
+        frame(&mut app, Modifiers::NONE, Vec::new());
+        let after = instance(&app).decompose();
+        let after_box = box_of(&app);
+        assert!((after.rotation - before.rotation).abs().to_degrees() > 5.0, "rotated with Alt: {before:?} to {after:?}");
+        assert!(after_box.corners()[3].distance(bl) < 1.0, "opposite corner stayed fixed: {:?} vs {bl:?}", after_box.corners()[3]);
+        assert!(after_box.corners()[1].distance(tr) > 5.0, "grabbed corner moved: {:?} vs {tr:?}", after_box.corners()[1]);
+        assert_eq!(app.s.history().undo_len(), undo + 1, "one undo step");
+    }
+
+    /// #629: in Center or Registration mode, Alt while rotating still turns each object about its
+    /// own point even past `MAX_ORIGIN_MARKS`, so the overlay must not jump to the opposite corner.
+    #[test]
+    fn alt_rotate_pivot_overlay_respects_origin_mode_past_marker_limit() {
+        let (mut app, ctx, at) = scene();
+        app.run("edit.select_all", json!({}));
+        app.run("edit.delete", json!({}));
+        app.s.begin_gesture("setup");
+        for i in 0..=MAX_ORIGIN_MARKS {
+            let (x, y) = (100 + (i % 25) * 12, 100 + (i / 25) * 10);
+            let _ = app.s.execute("draw.rect", &json!({"x": x, "y": y, "w": 8, "h": 6, "fill": "#3366ff", "stroke": null, "object": true}));
+        }
+        app.s.end_gesture();
+        app.run("edit.select_all", json!({}));
+        assert!(app.s.selection.len() > MAX_ORIGIN_MARKS);
+        app.tool = Tool::Transform;
+        let mut t = 2.0;
+        let mut frame = |app: &mut App, modifiers: Modifiers, events: Vec<Event>| {
+            t += 0.05;
+            let mut all = vec![Event::ModifiersChanged(modifiers)];
+            all.extend(events);
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), time: Some(t), events: all, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out.shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Circle(c) if (c.radius - 4.0).abs() < 1e-3 && c.fill == Color32::WHITE && c.stroke == Stroke::new(1.0, T.selection) => Some(c.center),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        frame(&mut app, Modifiers::NONE, Vec::new());
+
+        let mut alt_drag_marks = |app: &mut App, mode: anicraft_engine::TransformOrigin| {
+            app.run("modify.transform_origin", json!({"mode": mode.key()}));
+            frame(app, Modifiers::NONE, Vec::new());
+            let before_box = crate::xform::frame(app).expect("a selection has a box");
+            let [_, tr, _, bl] = before_box.corners();
+            let outside = tr + (tr - before_box.handle(0, 0)).normalized() * (14.0 / app.view.zoom);
+            let (a, b) = (at(outside.x, outside.y), at(outside.x + 20.0, outside.y + 40.0));
+            frame(app, Modifiers::ALT, vec![Event::PointerMoved(a)]);
+            frame(app, Modifiers::ALT, vec![Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT }]);
+            let marks = frame(app, Modifiers::ALT, vec![Event::PointerMoved(b)]);
+            assert!(matches!(app.drag, Drag::Transform { kind: XfKind::Rotate, .. }), "in rotate drag for {mode:?}");
+            let cur_box = crate::xform::frame(app).expect("a selection has a box");
+            frame(app, Modifiers::ALT, vec![Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT }]);
+            frame(app, Modifiers::NONE, Vec::new());
+            app.run("edit.undo", json!({}));
+            (marks, at(cur_box.point.x, cur_box.point.y), at(bl.x, bl.y))
+        };
+
+        for mode in [anicraft_engine::TransformOrigin::Center, anicraft_engine::TransformOrigin::Registration] {
+            let (marks, box_pt, opp) = alt_drag_marks(&mut app, mode);
+            assert_eq!(marks.len(), 1, "past MAX_ORIGIN_MARKS one fallback mark shows for {mode:?}");
+            assert!(marks[0].distance(box_pt) < marks[0].distance(opp), "{mode:?} must keep the box point, not jump to the opposite corner: mark={:?}, box_pt={box_pt:?}, opp={opp:?}", marks[0]);
+        }
+
+        let (marks, box_pt, opp) = alt_drag_marks(&mut app, anicraft_engine::TransformOrigin::Selection);
+        assert_eq!(marks.len(), 1, "Selection mode shows the opposite-corner pivot");
+        assert!(marks[0].distance(opp) < marks[0].distance(box_pt), "Selection mode shows the opposite corner even past MAX_ORIGIN_MARKS: mark={:?}, box_pt={box_pt:?}, opp={opp:?}", marks[0]);
+    }
+
     /// A double-click: press, release, `gap` seconds, press, release (each its own frame).
     fn double_click(gap: f64) -> App {
         let (mut app, ctx, at) = scene();
@@ -5954,6 +6282,196 @@ mod pointer_tests {
         }
         // Two separate clicks stay two clicks: the fill alone.
         assert_eq!(double_click(0.7).s.selection.len(), 1);
+    }
+
+    /// #637: dragging on the stage with Rectangle or Oval while holding Alt centres the drawn
+    /// shape on the press point (twice as wide and high as a plain drag), and Shift+Alt draws a
+    /// centred square or circle.
+    #[test]
+    fn alt_drag_draws_rect_and_oval_centred_on_press_point() {
+        let drag_bounds = |tool: Tool, modifiers: Modifiers| {
+            let (mut app, ctx, at) = scene();
+            app.run("edit.select_all", json!({}));
+            app.run("edit.delete", json!({}));
+            app.s.style.object_drawing = true;
+            app.s.style.snap_objects = false;
+            app.s.style.use_stroke = false;
+            app.tool = tool;
+            let mut t = 1.0;
+            let mut step = |app: &mut App, events: Vec<Event>| {
+                t += 0.05;
+                let mut all = vec![Event::ModifiersChanged(modifiers)];
+                all.extend(events);
+                run_frame(&ctx, app, t, all);
+            };
+            let (a, b) = (at(200.0, 180.0), at(260.0, 210.0));
+            step(&mut app, vec![Event::PointerMoved(a)]);
+            step(&mut app, vec![Event::PointerButton { pos: a, button: PointerButton::Primary, pressed: true, modifiers }]);
+            for i in 1..=4 {
+                step(&mut app, vec![Event::PointerMoved(a + (b - a) * (i as f32 / 4.0))]);
+            }
+            step(&mut app, vec![Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers }]);
+            step(&mut app, Vec::new());
+            app.run("edit.select_all", json!({}));
+            assert_eq!(app.s.selection.len(), 1, "{tool:?} drew one shape");
+            app.s.selection_bounds()
+        };
+        let press = Vec2::new(200.0, 180.0);
+        for tool in [Tool::Rect, Tool::Oval] {
+            let plain = drag_bounds(tool, Modifiers::NONE);
+            let alt = drag_bounds(tool, Modifiers::ALT);
+            let sq = drag_bounds(tool, Modifiers::ALT | Modifiers::SHIFT);
+
+            let plain_c = (plain.min + plain.max) * 0.5;
+            let alt_c = (alt.min + alt.max) * 0.5;
+            let sq_c = (sq.min + sq.max) * 0.5;
+            assert!(plain_c.distance(press) > 10.0, "{tool:?} without Alt is not centred on press: {plain:?}");
+            assert!(alt_c.distance(press) < 1.0, "{tool:?} with Alt is centred on press: {alt_c:?} vs {press:?}");
+            assert!(((alt.max.x - alt.min.x) - 2.0 * (plain.max.x - plain.min.x)).abs() < 1.0, "{tool:?} with Alt is twice as wide: {alt:?} vs {plain:?}");
+            assert!(((alt.max.y - alt.min.y) - 2.0 * (plain.max.y - plain.min.y)).abs() < 1.0, "{tool:?} with Alt is twice as high: {alt:?} vs {plain:?}");
+            assert!(sq_c.distance(press) < 1.0, "{tool:?} with Shift+Alt is centred on press: {sq_c:?} vs {press:?}");
+            assert!(((sq.max.x - sq.min.x) - (sq.max.y - sq.min.y)).abs() < 1.0, "{tool:?} with Shift+Alt has equal width and height: {sq:?}");
+        }
+    }
+    #[test]
+    fn lasso_drag_selects_and_esc_cancels() {
+        let (mut app, ctx, at) = scene();
+        // scene() has a raw rectangle at (100..300, 100..220). Add two drawing objects: one
+        // wholly inside the loop, one outside/crossing.
+        app.run("draw.rect", json!({"x": 400, "y": 120, "w": 30, "h": 30, "fill": "#22aa44", "stroke": null, "object": true}));
+        let inner_obj = app.s.selection.ids().next().expect("inner object");
+        app.run("draw.rect", json!({"x": 460, "y": 120, "w": 80, "h": 80, "fill": "#aa2244", "stroke": null, "object": true}));
+        let outer_obj = app.s.selection.ids().next().expect("outer object");
+        app.run("edit.deselect", json!({}));
+
+        let mut t = 2.0;
+        let mut frame = |app: &mut App, mods: Modifiers, events: Vec<Event>| {
+            t += 0.05;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), time: Some(t), events: std::iter::once(Event::ModifiersChanged(mods)).chain(events).collect(), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+        };
+        // L shortcut picks the Lasso tool.
+        frame(&mut app, Modifiers::NONE, vec![Event::Key { key: Key::L, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        assert_eq!(app.tool, Tool::Lasso);
+
+        // Drag a loop over the right half of the raw rect.
+        let drag_poly = |frame: &mut dyn FnMut(&mut App, Modifiers, Vec<Event>), app: &mut App, pts: &[(f32, f32)], shift: bool| {
+            let mods = if shift { Modifiers::SHIFT } else { Modifiers::NONE };
+            let btn = |pos: Pos2, pressed: bool| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: mods };
+            let first = at(pts[0].0, pts[0].1);
+            frame(app, mods, vec![Event::PointerMoved(first)]);
+            frame(app, mods, vec![btn(first, true)]);
+            for &(x, y) in &pts[1..] {
+                frame(app, mods, vec![Event::PointerMoved(at(x, y))]);
+            }
+            let last = at(pts[pts.len() - 1].0, pts[pts.len() - 1].1);
+            frame(app, mods, vec![btn(last, false)]);
+            frame(app, Modifiers::NONE, Vec::new());
+        };
+
+        drag_poly(&mut frame, &mut app, &[(200.0, 80.0), (320.0, 80.0), (320.0, 240.0), (200.0, 240.0)], false);
+        assert!(!app.s.selection.is_empty(), "lasso selected cut raw parts");
+        assert!(app.s.visible_elements().len() > 7, "raw rectangle was cut by the lasso");
+        let after_first = app.s.selection.len();
+
+        // Shift-lasso around the inner object adds it without picking the outer one.
+        drag_poly(&mut frame, &mut app, &[(385.0, 105.0), (445.0, 105.0), (445.0, 165.0), (385.0, 165.0)], true);
+        assert!(app.s.selection.len() > after_first);
+        assert!(app.s.selection.has_id(inner_obj), "inner object added");
+        assert!(!app.s.selection.has_id(outer_obj), "outer object not picked");
+        let before_esc = app.s.selection.clone();
+
+        // Esc during a drag cancels it without changing the selection.
+        let p0 = at(10.0, 10.0);
+        frame(&mut app, Modifiers::NONE, vec![Event::PointerMoved(p0)]);
+        frame(&mut app, Modifiers::NONE, vec![button(p0, true)]);
+        frame(&mut app, Modifiers::NONE, vec![Event::PointerMoved(at(60.0, 10.0))]);
+        frame(&mut app, Modifiers::NONE, vec![Event::PointerMoved(at(60.0, 60.0))]);
+        assert_eq!(app.drag, Drag::Lasso);
+        frame(&mut app, Modifiers::NONE, vec![Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        assert_eq!(app.drag, Drag::None);
+        assert!(app.lasso.is_empty());
+        frame(&mut app, Modifiers::NONE, vec![button(at(60.0, 60.0), false)]);
+        frame(&mut app, Modifiers::NONE, Vec::new());
+        assert_eq!(app.s.selection, before_esc, "cancelled lasso leaves selection untouched");
+
+        // A click without dragging on empty stage clears the selection.
+        let empty = at(20.0, 20.0);
+        frame(&mut app, Modifiers::NONE, vec![Event::PointerMoved(empty)]);
+        frame(&mut app, Modifiers::NONE, vec![button(empty, true)]);
+        frame(&mut app, Modifiers::NONE, vec![button(empty, false)]);
+        frame(&mut app, Modifiers::NONE, Vec::new());
+        assert!(app.s.selection.is_empty(), "click on empty stage clears selection");
+    }
+
+    #[test]
+    fn lasso_reconciles_with_edit_multiple_frames_selection() {
+        let (mut app, ctx, at) = scene();
+        // Two keyframes with the raw rectangle at (100..300, 100..220), then Edit Multiple Frames on.
+        app.run("timeline.goto", json!({"frame": 2}));
+        app.run("timeline.insert_keyframe", json!({}));
+        app.run("timeline.goto", json!({"frame": 0}));
+        crate::onion::toggle_edit_multiple(&mut app);
+        crate::onion::select_all(&mut app);
+        assert!(crate::onion::editing(&app));
+        assert!(!app.onion_ui.sel.is_empty() && app.s.selection.is_empty());
+
+        let mut t = 2.0;
+        let mut frame = |app: &mut App, mods: Modifiers, events: Vec<Event>| {
+            t += 0.05;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), time: Some(t), events: std::iter::once(Event::ModifiersChanged(mods)).chain(events).collect(), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+        };
+        let drag_poly = |frame: &mut dyn FnMut(&mut App, Modifiers, Vec<Event>), app: &mut App, pts: &[(f32, f32)]| {
+            let btn = |pos: Pos2, pressed: bool| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            let first = at(pts[0].0, pts[0].1);
+            frame(app, Modifiers::NONE, vec![Event::PointerMoved(first)]);
+            frame(app, Modifiers::NONE, vec![btn(first, true)]);
+            for &(x, y) in &pts[1..] {
+                frame(app, Modifiers::NONE, vec![Event::PointerMoved(at(x, y))]);
+            }
+            let last = at(pts[pts.len() - 1].0, pts[pts.len() - 1].1);
+            frame(app, Modifiers::NONE, vec![btn(last, false)]);
+            frame(app, Modifiers::NONE, Vec::new());
+        };
+
+        // Pick Lasso and drag over the right half of the raw rectangle.
+        frame(&mut app, Modifiers::NONE, vec![Event::Key { key: Key::L, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        assert_eq!(app.tool, Tool::Lasso);
+        drag_poly(&mut frame, &mut app, &[(200.0, 80.0), (320.0, 80.0), (320.0, 240.0), (200.0, 240.0)]);
+        assert!(app.onion_ui.sel.is_empty(), "lasso clears multi-frame selection");
+        assert!(!app.s.selection.is_empty(), "lasso selection is active");
+        for id in ["edit.delete", "edit.cut", "edit.copy"] {
+            assert_ne!(crate::onion::enabled(&app, id), Some(false), "{id} stays enabled for the lasso selection");
+        }
+
+        // Arrow keys nudge the lasso selection while Edit Multiple Frames is on.
+        let before = app.s.selection_bounds();
+        frame(&mut app, Modifiers::NONE, vec![Event::Key { key: Key::ArrowRight, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }]);
+        let after = app.s.selection_bounds();
+        assert!(after.min.x > before.min.x, "arrow key moved lasso selection: {before:?} -> {after:?}");
+
+        // Copy and Delete act on the lasso selection on the playhead.
+        app.invoke("edit.copy");
+        assert!(!app.s.clipboard.is_empty(), "copy took the lasso selection");
+        let count_before_delete = app.s.visible_elements().len();
+        app.invoke("edit.delete");
+        assert!(app.s.visible_elements().len() < count_before_delete, "delete removed the lasso selection");
+        assert!(app.s.selection.is_empty() && app.onion_ui.sel.is_empty());
+
+        // Restore, Lasso again, then run a multi-frame marquee: only the marquee selection stays.
+        app.invoke("edit.undo");
+        app.invoke("edit.undo");
+        drag_poly(&mut frame, &mut app, &[(200.0, 80.0), (320.0, 80.0), (320.0, 240.0), (200.0, 240.0)]);
+        assert!(!app.s.selection.is_empty());
+        crate::onion::marquee(&mut app, pos2(50.0, 50.0), pos2(350.0, 260.0), false);
+        assert!(app.s.selection.is_empty(), "multi-frame marquee clears earlier lasso selection");
+        assert!(!app.onion_ui.sel.is_empty(), "multi-frame marquee populated onion_ui.sel");
+        app.invoke("edit.delete");
+        assert!(app.s.visible_elements().is_empty(), "delete removed marqueed artwork across frames");
+        assert!(app.s.selection.is_empty() && app.onion_ui.sel.is_empty());
     }
 }
 

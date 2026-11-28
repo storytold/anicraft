@@ -320,6 +320,17 @@ pub fn smooth_pair(a: &Seg, b: &Seg) -> Option<(Seg, Seg)> {
     (na.c.iter().chain(&nb.c).all(|p| p.is_finite())).then_some((na, nb))
 }
 
+/// `e` (leaving an anchor) with its handle at the anchor set to `handle` (stage-space position).
+/// Straight lines keep their far end as a corner. `None` when non-finite.
+pub fn with_handle(e: &Seg, handle: Vec2) -> Option<Seg> {
+    if !handle.is_finite() {
+        return None;
+    }
+    let far_h = if e.line { e.c[3] } else { e.c[2] };
+    let out = Seg { c: [e.c[0], handle, far_h, e.c[3]], line: false };
+    out.c.iter().all(|p| p.is_finite()).then_some(out)
+}
+
 /// `e` (leaving an anchor) with its handle at the anchor drawn in onto it: a corner there. `None`
 /// when it has none to draw in (a line, or a handle already on the anchor).
 pub fn corner(e: &Seg) -> Option<Seg> {

@@ -990,7 +990,7 @@ fn empty_state(app: &mut App, ui: &mut egui::Ui, body: Rect) {
     child.label(text(Type::Caption, msg));
     child.add_space(6.0);
     if k.is_some_and(|(has, _)| has) && child.button(tr!("Create Motion Tween")).clicked() {
-        app.run("timeline.create_motion_tween", json!({}));
+        app.invoke("timeline.create_motion_tween");
     }
 }
 

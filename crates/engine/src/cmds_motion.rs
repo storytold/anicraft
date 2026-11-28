@@ -22,7 +22,7 @@
 use crate::cmds_timeline::target;
 use crate::params::*;
 use crate::{CommandSpec, EngineError, Result, Session};
-use anicraft_doc::{Channel, Element, ElementId, FilterColor, FilterEntry, FilterParam, FilterProp, Keyframe, Layer, LayerId, LayerKind, MAX_FILTER_SLOTS, MotionTween, Pin, PinError, Property, Props, Rgba, filter_properties, own_value};
+use anicraft_doc::{Channel, Element, ElementId, ElementKind, FilterColor, FilterEntry, FilterParam, FilterProp, Keyframe, Layer, LayerId, LayerKind, MAX_FILTER_SLOTS, MotionTween, Paint, Pin, PinError, Property, Props, Rgba, SymbolKind, filter_properties, own_value};
 use anicraft_geom::{Affine, Vec2};
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -627,13 +627,46 @@ pub(crate) fn bake_first_frame(kf: &mut Keyframe) {
     }
 }
 
-/// Create Motion Tween: the span at the frame tweens its object property by property. Several
-/// objects become one graphic symbol first (as Animate offers), a one-frame span grows to a
-/// second, and a classic or shape tween on the span is replaced.
+/// Whether `k`'s artwork needs to become a symbol before a motion tween is created on it:
+/// multiple elements, a raw (mergeable) shape, a bitmap, or a group. A single symbol instance,
+/// drawing object, text block or camera tweens as it is.
+fn keyframe_needs_symbol(k: &Keyframe) -> bool {
+    if k.elements.len() > 1 {
+        return true;
+    }
+    match k.elements.first().map(|e| &e.kind) {
+        Some(ElementKind::Shape(sh)) => sh.merge || matches!(sh.fill, Some(Paint::Bitmap { .. })),
+        Some(ElementKind::Group { .. }) => true,
+        _ => false,
+    }
+}
+
+/// Whether Create Motion Tween on `layer` at `frame` will convert the keyframe's artwork into a
+/// symbol before creating the tween (so interactive front ends can ask first and offer a symbol
+/// type, #604).
+pub fn needs_symbol_conversion(s: &Session, layer: Option<LayerId>, frame: Option<u32>) -> bool {
+    let lid = layer.unwrap_or(s.layer);
+    let frame = frame.unwrap_or(s.frame);
+    let Some(layer) = s.timeline().layer(lid) else { return false };
+    if layer.locked || matches!(layer.kind, LayerKind::Folder | LayerKind::Armature | LayerKind::Camera) {
+        return false;
+    }
+    let Some(k) = layer.keyframe_at(frame) else { return false };
+    if k.motion.is_some() || k.elements.is_empty() {
+        return false;
+    }
+    keyframe_needs_symbol(k)
+}
+
+/// Create Motion Tween: the span at the frame tweens its object property by property. Raw
+/// artwork (ungrouped shapes, bitmaps, groups) and keyframes with several objects become one
+/// symbol first (graphic by default, or `kind`), a one-frame span grows to a second, and a
+/// classic or shape tween on the span is replaced.
 pub(crate) fn create(s: &mut Session, p: &Value) -> Result<Value> {
+    let kind = opt_str(p, "kind")?.map(crate::cmds_library::kind_of).transpose()?.unwrap_or(SymbolKind::Graphic);
     let (lid, frame) = target(s, p)?;
     let lid = lid.unwrap_or(s.layer);
-    let (start, ids) = {
+    let (start, ids, needs_conv) = {
         let tl = s.timeline();
         let layer = tl.layer(lid).ok_or_else(|| EngineError::State(format!("no layer with id {}", lid.0)))?;
         if layer.kind == LayerKind::Folder {
@@ -649,7 +682,8 @@ pub(crate) fn create(s: &mut Session, p: &Value) -> Result<Value> {
         if k.elements.is_empty() && layer.kind != LayerKind::Camera {
             return Err(EngineError::State("there is nothing on this keyframe to tween: draw or place something first".into()));
         }
-        (k.start, k.elements.iter().map(|e| e.id).collect::<Vec<_>>())
+        let needs_conv = layer.kind != LayerKind::Camera && keyframe_needs_symbol(k);
+        (k.start, k.elements.iter().map(|e| e.id).collect::<Vec<_>>(), needs_conv)
     };
     // A camera keyframe without a camera holds the camera at rest: that is what moves.
     if ids.is_empty() {
@@ -659,21 +693,25 @@ pub(crate) fn create(s: &mut Session, p: &Value) -> Result<Value> {
             k.elements.push(Arc::new(el));
         }
     }
-    let converted = ids.len() > 1;
+    let converted = !ids.is_empty() && needs_conv;
+    let mut converted_symbol: Option<(u64, String, SymbolKind)> = None;
     if converted {
-        // A motion tween moves one object: the key's artwork becomes one instance.
+        // A motion tween moves one symbol instance: the key's artwork becomes one symbol.
         let (layer, frame, sel) = (s.layer, s.frame, s.selection.clone());
         let name = format!("Tween {}", s.doc.library.len() + 1);
         s.layer = lid;
         s.frame = start;
         s.selection = crate::Selection::only(lid, ids);
-        let r = crate::cmds_draw::convert_to_symbol(s, &json!({"name": name}));
+        let r = crate::cmds_draw::convert_to_symbol(s, &json!({"name": name, "kind": crate::cmds_library::kind_key(kind)}));
         s.frame = frame;
-        if layer != lid {
+        if layer != lid || r.is_err() {
             s.layer = layer;
             s.selection = sel;
         }
-        r?;
+        let conv = r?;
+        if let (Some(sym_id), Some(sym_name)) = (conv["symbol"].as_u64(), conv["name"].as_str()) {
+            converted_symbol = Some((sym_id, sym_name.to_string(), kind));
+        }
     }
     let seconds = (s.doc.stage.fps.round() as u32).clamp(2, 240);
     let layer = s.layer_mut(Some(lid))?;
@@ -692,7 +730,13 @@ pub(crate) fn create(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let frames = layer.keyframe_starting_at(start).and_then(|i| layer.keyframes.get(i)).map_or(1, |k| k.duration);
-    Ok(json!({"motion": start, "target": target.0, "frames": frames, "converted": converted}))
+    let mut out = json!({"motion": start, "target": target.0, "frames": frames, "converted": converted});
+    if let Some((sym_id, sym_name, sym_kind)) = converted_symbol {
+        out["symbol"] = json!(sym_id);
+        out["symbol_name"] = json!(sym_name);
+        out["symbol_kind"] = json!(crate::cmds_library::kind_key(sym_kind));
+    }
+    Ok(out)
 }
 
 /// The motion tween covering the target frame, its keyframe and the frame's offset into it.

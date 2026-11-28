@@ -352,4 +352,12 @@ fn hostile_input_never_panics() {
     // Handles on their anchors (no direction at the ends).
     let stub = Path::from_svg("M0 0C0 0 50 50 50 50").unwrap();
     assert!(close(area(&stroke_outline(&stub, &shape(1.0, LineCap::Butt, LineJoin::Round)).unwrap()), 2.0 * 50.0 * 2f32.sqrt(), 0.05));
+    // Curve clean-up entry points stay finite and never panic on hostile paths.
+    for p in [&nan, &far, &empty, &dot, &stub] {
+        for v in [-1.0f32, 0.0, 0.5, 5.0, f32::NAN, f32::INFINITY] {
+            let _ = crate::optimize(p, v);
+            let _ = crate::smooth(p, v);
+            let _ = crate::straighten(p, v);
+        }
+    }
 }

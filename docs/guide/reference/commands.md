@@ -1,6 +1,6 @@
 # Command reference
 
-Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 406 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
+Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 412 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
 
 This page is generated from the command registry, so it always matches the version of AniCraft it came with.
 
@@ -136,7 +136,7 @@ This page is generated from the command registry, so it always matches the versi
 - **Clear Keyframe** `timeline.clear_keyframe` · Insert › Timeline · **Shift+F6** (macOS **⇧F6**) · changes the document
   Parameters: `{layer? | layers?: [..] | all_layers?: true (every layer with a keyframe there, as Shift+F6 with no frame selection), frame?, count?}`
 - **Create Motion Tween** `timeline.create_motion_tween` · changes the document
-  Parameters: `{layer?, frame?} (several objects on the key become one graphic symbol; a one-frame span grows to a second)`
+  Parameters: `{layer?, frame?, kind?: graphic|movie_clip|button (default: graphic)} (raw artwork or bitmaps or groups or several objects on the key become one symbol and report it; a one-frame span grows to a second)`
 - **Create Classic Tween** `timeline.create_tween` · changes the document
   Parameters: `{layer?, frame?, easing? (as timeline.set_easing takes it)}`
 - **Create Shape Tween** `timeline.create_shape_tween` · changes the document
@@ -153,6 +153,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{} (a camera layer on top of the scene, at rest: it sees the stage as it is; nothing happens if there is one)`
 - **New Scene** `scene.new` · changes the document
   Parameters: `{name?}`
+- **New Symbol…** `library.new_symbol` · **Ctrl+F8** (macOS **⌘F8**) · changes the document
+  Parameters: `{name? (default: the next free “Symbol n”), kind?: graphic|movie_clip|button (default: graphic), folder?: Library folder id (default: the top level), edit?: bool (default: true: open the new symbol for editing)} → {symbol, name, kind}: creates an empty symbol in the Library without placing it on the stage`
 
 ## Modify
 
@@ -224,6 +226,8 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{} combine with op punch`
 - **Crop** `modify.crop` · Modify › Combine Objects · changes the document
   Parameters: `{} combine with op crop`
+- **Create Object** `modify.create_object` · Modify › Combine Objects · changes the document
+  Parameters: `{} turns the selected raw shapes on the active layer into a drawing object (a group of the merged pieces when they have more than one colour or keep lines) → {created}`
 - **Rotate 90° CW** `modify.rotate_cw` · Modify › Transform · **Ctrl+Shift+9** (macOS **⇧⌘9**) · changes the document
   Parameters: `{origin?: selection|registration|center (default: the mode set with modify.transform_origin; selection unless changed)} about the centre of the whole selection, or each selected object about its own point`
 - **Rotate 90° CCW** `modify.rotate_ccw` · Modify › Transform · **Ctrl+Shift+7** (macOS **⇧⌘7**) · changes the document
@@ -282,6 +286,12 @@ This page is generated from the command registry, so it always matches the versi
   Parameters: `{distance (stage units, above 0 up to 1000), direction?: expand|inset (default expand), id? (default: the selected shapes)} moves each fill's outline out or in by the distance: expanding rounds corners, insetting keeps them; holes shrink as the fill grows; a fill thinner than twice an inset is removed. A drawing object's line follows its new outline → {changed, removed}`
 - **Soften Fill Edges…** `modify.soften_fill_edges` · Modify › Shape · changes the document
   Parameters: `{distance (the soft edge's width in stage units, above 0 up to 1000), steps? (1..=50 bands, default 4), direction?: expand|inset (default expand: the edge is added round the fill; inset: taken from it), id? (default: the selected shapes)} surrounds each fill with bands of its own paint whose alpha steps down outwards: band i of n has (n + 1 - i) / (n + 1) of the fill's alpha. Colour and gradient fills only → {softened, bands}`
+- **Smooth** `modify.smooth` · Modify › Shape · changes the document
+  Parameters: `{strength? (1..=100, default 50), id? (default: the selected shapes)} softens the curves of the selected lines and fill outlines and evens out small bumps; repeatable → {changed}`
+- **Straighten** `modify.straighten` · Modify › Shape · changes the document
+  Parameters: `{strength? (1..=100, default 50), id? (default: the selected shapes)} makes nearly straight segments into lines and flattens gentle curves on the selected lines and fill outlines; repeatable → {changed}`
+- **Optimize Curves…** `modify.optimize` · Modify › Shape · changes the document
+  Parameters: `{strength? (0..=100, default 50; tolerance is 0 at 0, else 0.05 + 8 * (strength / 100)^2 stage units), repeat?: bool (run until the point count stops dropping), id? (default: the selected shapes)} removes points from the selected lines and fill outlines while keeping their shape → {before, after}`
 - **Convert Audio to Keyframes…** `sound.to_keyframes` · Modify › Timeline · changes the document
   Parameters: `{property: scale|scale_x|scale_y|alpha|x|y|rotation|first_frame, min, max (the property's value in silence and at the loudest frame: scale % of the object's size, alpha %, x and y pixels from where it is, rotation degrees from how it is turned, first_frame a 0-based frame of the graphic symbol), layer? (the layer that gets the keys; default the active layer), element? (the object on it; default the selected one, or the only one), sound_layer?, sound_frame? (the sound's keyframe; default the sound at the playhead), threshold? (0–0.99 of the loudest frame: quieter is silence; default 0.05), smoothing? (0–24 frames either side; default 1), channel?: both|left|right, step? (a key every n frames, 1–240; default 1), output?: auto|keyframes|motion (motion writes the property's curve in the motion tween on the span; auto picks it when the span has one), from?, to? (frames; default the frames the sound is heard on)} → {keys, from, to, output, property, layer, element}`
 - **Auto Lip-Sync…** `sound.lip_sync` · Modify › Timeline · changes the document
@@ -402,7 +412,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Get Layer Properties** `layer.properties`
   Parameters: `{layer?} the layer's name, type, mask type (mask layers), colour, outline, height (percent), opacity (percent), visible, locked and onion`
 - **Camera** `camera.set` · changes the document
-  Parameters: `{x?, y? (camera centre, stage px), dx?, dy? (pan by), zoom? (%, 5–2000), zoom_by? (factor), rotation? (°), rotate_by? (°), reset?: bool, frame?, and the colour effect as element.set_color_effect takes it: style?: none|brightness|tint|advanced, brightness? (%), tint? (#rrggbb), tint_amount? (%), red_multiplier? … blue_offset? (the camera has no opacity: no alpha values)}`
+  Parameters: `{x?, y? (camera centre, stage px), dx?, dy? (pan by), zoom? (%, 5–2000), zoom_by? (factor), rotation? (°), rotate_by? (°), reset?: bool, frame?, and the colour effect as element.set_color_effect takes it: style?: none|brightness|tint|advanced, brightness? (%), tint? (#rrggbb), tint_amount? (%), red_multiplier? … blue_offset? (the camera has no opacity: no alpha values)}. On a frame a keyframe holds (no keyframe of its own, no tween) the edit lands on that keyframe, as an edit on the stage does, and the result says so: {keyframe (its frame), note}; insert a keyframe first to key the camera at the frame`
 - **Camera Info** `camera.info`
   Parameters: `{frame?} → the camera at the frame (x, y, zoom %, rotation °, tint) and its frame on the stage`
 - **Layer Depth** `layer.set_depth` · changes the document
@@ -556,7 +566,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Transform** `element.set_transform` · changes the document
   Parameters: `{x?, y?, sx?, sy?, rotation? (degrees)} x and y place the registration point. A new scale or rotation alone is applied about a symbol instance's transformation point when it has one (modify.transformation_point), else about the registration point`
 - **Fill Colour** `element.set_fill` · changes the document
-  Parameters: `{color: "#rrggbb" | "#rrggbbaa" | null, or on: true | false} (the alpha is the fill's own; 00 is a clear fill, not the same as null. on: false turns the fill off like null; on: true puts back the fill each shape had before, else the tool's fill colour. With only raw lines selected the fill goes to what they surround)`
+  Parameters: `{color: "#rrggbb" | "#rrggbbaa" | null, or on: true | false, or alpha: 0..1 (alone: only the opacity of each selected solid fill, which keeps its colour; gradient and bitmap fills are left as they are → {changed})} (the alpha is the fill's own; 00 is a clear fill, not the same as null. on: false turns the fill off like null; on: true puts back the fill each shape had before, else the tool's fill colour. With only raw lines selected the fill goes to what they surround)`
 - **Stroke** `element.set_stroke` · changes the document
   Parameters: `{on?: true | false (false removes the stroke like color: null; true puts back the stroke each shape had before, else the tool's), color?: "#rrggbb" | "#rrggbbaa" | null, width?, profile?: uniform|taper_both|taper_start|taper_end|bulge|pinch | [[t, left, right], ..], cap?, join?, miter?, style?, dash?, dash_offset?, dot_spacing? (as stroke.set_style)}`
 - **Alpha** `element.set_alpha` · changes the document
@@ -628,7 +638,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Delete Anchor Points** `path.delete_points` · changes the document
   Parameters: `{id, cmds: [..]}`
 - **Convert Anchor Point** `path.convert_point` · changes the document
-  Parameters: `{id, cmd, smooth: bool}`
+  Parameters: `{id, cmd, smooth: bool, handle?: [dx, dy]} (with smooth and handle, sets mirrored handles at anchor + (dx, dy) after and anchor - (dx, dy) before; zero handle makes no change)`
 - **Continue Path** `path.extend` · changes the document
   Parameters: `{id, d: SVG path data (stage space) of the new piece, drawn away from the end it continues, end?: "end" | "start" (default end), close?: bool}: continues an open path (one subpath, not closed) from one of its ends, as the Pen does (ADR 0115). The piece joins the path's own end point (its M is where the pen started and isn't kept); with close the path is closed after it`
 - **Bend Segment** `path.bend_segment` · changes the document
@@ -637,6 +647,8 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: ``{x, y, to_x, to_y, with?: [[x, y], ..], points?: [[id, cmd], ..], snap?, slop?, merge?: bool} moves the corner or end at (x, y), with every raw shape that shares it, to (to_x, to_y), snapped within `snap` to points, lines and fill edges (while Snap to Objects is on); the anchors at `with` move by as much; returns the points to pass on while a drag goes on``
 - **Select Parts** `raw.select_rect` · changes the document
   Parameters: `{x0, y0, x1, y1, add?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects it touches`
+- **Lasso Selection** `raw.select_area` · changes the document
+  Parameters: `{points: [[x, y], ..] (a loop in stage coordinates, closed automatically; 3..=10000 points, refuse more; self-intersecting loops use the even-odd rule), add?: bool} the Lasso, on every visible, unlocked layer: the parts of raw fills and strokes inside the loop (cut at its edges, per layer) and the objects whose bounding box (all four corners, with no loop edge crossing its interior) lies wholly inside it; fewer than 3 distinct points or zero area behaves like a zero-size marquee`
 - **Merge Shapes** `raw.merge` · changes the document
   Parameters: `{ids?: [..]} the raw shapes (default: the selection) merge again with the raw shapes they touch, in place`
 - **Selection Tool Target** `raw.hit`
@@ -654,7 +666,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Delete Anchor Points** `raw.delete_points` · changes the document
   Parameters: `{points: [[x, y], ..]} deletes the raw anchors at those positions (as raw.points lists them): every shape that has one is joined across it, so the drawing stays connected; a free end shortens its line; a shape left with nothing is removed; a point where three or more edges meet is kept`
 - **Convert Anchor Points** `raw.convert_points` · changes the document
-  Parameters: `{points: [[x, y], ..], smooth: bool} makes the raw anchors at those positions smooth (their handles in one line) or corners (handles drawn in), in every shape that has them`
+  Parameters: `{points: [[x, y], ..], smooth: bool, handle?: [dx, dy], merge?: bool} makes the raw anchors at those positions smooth (their handles in one line; with handle, mirrored at anchor ± (dx, dy)) or corners (handles drawn in), in every shape that has them, and merges again (unless merge is false); returns {converted, changed, ids (the resulting element ids after any merge), merged}`
 - **Snap Point** `draw.snap`
   Parameters: ``{x, y, snap, moving?: bool} where a point drawn at (x, y) snaps within `snap` stage units, by the snap engine's priority (ADR 0076): an anchor (Snap to Objects), a guide (Snap to Guides), a line or fill edge, the grid (Snap to Grid), a whole pixel (Snap to Pixels); `moving`: the selection is what moves (a Free Transform handle), so it isn't a target; returns {x, y, snapped: {x, y, to: point|guide|line|grid|pixel} | null}``
 - **Replace** `find.replace` · changes the document
@@ -718,7 +730,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Apply Style** `paint.apply_style` · changes the document
   Parameters: `{fill?: bool, stroke?: bool} (default both) gives the selected shapes the fill swatch's paint (shapes with a fill) and the stroke settings (shapes with a line, and drawing objects without one)`
 - **Fill** `paint.set_fill` · changes the document
-  Parameters: ``{type?: solid|linear|radial|bitmap (default: the swatch's), color? (solid, "#rrggbb" or "#rrggbbaa"), stops?: [{offset: 0..1, color: "#rrggbb" | "#rrggbbaa"}, ..] (2 to 15; each stop has its own alpha), spread?: extend|reflect|repeat, linear_rgb?: bool, focal?: -0.98..0.98 (radial), bitmap?: id, selection?: bool (default true)} sets the fill swatch (what new shapes, the Paint Bucket and the Brush pour) and, unless `selection` is false, the fills of the selected shapes. A shape keeping its kind of fill keeps where its gradient or bitmap lies; one changing kind gets it fitted to its bounds. A new gradient starts white to black → {fill: {type, ..}, changed}``
+  Parameters: ``{type?: solid|linear|radial|bitmap (default: solid when `color` is given, else every fill keeps its own kind: the swatch its, each selected shape its, so `stops` alone changes gradients and leaves solid fills as they are), color? (solid, "#rrggbb" or "#rrggbbaa"), stops?: [{offset: 0..1, color: "#rrggbb" | "#rrggbbaa"}, ..] (2 to 15; each stop has its own alpha), spread?: extend|reflect|repeat, linear_rgb?: bool, focal?: -0.98..0.98 (radial), bitmap?: id, selection?: bool (default true)} sets the fill swatch (what new shapes, the Paint Bucket and the Brush pour) and, unless `selection` is false, the fills of the selected shapes. A shape keeping its kind of fill keeps where its gradient or bitmap lies; one changing kind gets it fitted to its bounds. A new gradient starts white to black → {fill: {type, ..}, changed}``
 - **Gradient Transform** `paint.transform_fill` · changes the document
   Parameters: `{element?: id (default: the selected shapes with a gradient or bitmap fill), frame?: [a, b, c, d, e, f] (the fill's frame in the space being edited: the box -1..1 onto a linear gradient's span, a radial gradient's ring or one copy of a bitmap), or changes made in this order: scale_x?, scale_y?, scale? (along the frame's own axes), skew_x?, skew_y? (degrees, along its axes), rotate? (degrees, about its centre), move?: [dx, dy], center?: [x, y]; focal?: -0.98..0.98 (radial)} moves, turns, scales or skews where a gradient or bitmap fill lies, as the Gradient Transform tool (F) does → {changed, frames: [[a, b, c, d, e, f], ..]}`
 - **Lock Fill** `paint.lock_fill`

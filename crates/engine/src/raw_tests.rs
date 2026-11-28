@@ -440,6 +440,180 @@ fn a_marquee_over_a_whole_raw_shape_selects_it_without_cutting() {
     assert_eq!(count(&s), (1, 4));
 }
 
+// ----- the lasso (`raw.select_area`, issue #515) -------------------------------------------------
+
+#[test]
+fn lasso_cuts_raw_fill_with_triangle_and_rest_stays_unselected() {
+    let mut s = rect_session();
+    let history = s.history_len();
+    let whole_area = fill_area(&s);
+    // Triangle over the upper-right diagonal half of the 100 × 80 raw rectangle.
+    let tri = json!([[0, -10], [110, -10], [110, 90]]);
+    let loop_bounds = anicraft_geom::Rect::new(0.0, -10.0, 110.0, 90.0);
+    let r = run(&mut s, "raw.select_area", json!({"points": tri}));
+    assert!(r["cut"].as_u64().unwrap_or(0) > 0, "triangle cut the raw shape: {r}");
+    let els = s.visible_elements();
+    let sel_fills: Vec<&Arc<Element>> = els.iter().filter(|e| s.selection.has_id(e.id) && is_fill(e)).collect();
+    let unsel_fills: Vec<&Arc<Element>> = els.iter().filter(|e| !s.selection.has_id(e.id) && is_fill(e)).collect();
+    assert!(!sel_fills.is_empty(), "a cut fill piece is selected");
+    assert!(!unsel_fills.is_empty(), "the rest of the fill stays unselected");
+    let sel_area: f32 = sel_fills.iter().map(|e| area(e)).sum();
+    let unsel_area: f32 = unsel_fills.iter().map(|e| area(e)).sum();
+    assert!(sel_area > 0.0 && sel_area < whole_area, "selected part is smaller than the whole: {sel_area} vs {whole_area}");
+    assert!((sel_area + unsel_area - whole_area).abs() < 1.0, "parts add up: {sel_area} + {unsel_area} vs {whole_area}");
+    for e in &sel_fills {
+        let b = s.element_bounds(e.id);
+        assert!(b.min.x >= loop_bounds.min.x - 1.0 && b.min.y >= loop_bounds.min.y - 1.0 && b.max.x <= loop_bounds.max.x + 1.0 && b.max.y <= loop_bounds.max.y + 1.0, "part bounds inside loop bounds: {b:?}");
+    }
+    // Selecting alone adds no undo step; deselecting heals the cut back whole.
+    assert_eq!(s.history_len(), history);
+    run(&mut s, "edit.deselect", json!({}));
+    assert_eq!(count(&s), (1, 4), "deselect heals the lasso cut");
+    // Cutting and deleting the lassoed half is one undo step back to the whole rectangle.
+    run(&mut s, "raw.select_area", json!({"points": tri}));
+    run(&mut s, "edit.delete", json!({}));
+    assert_eq!(s.history_len(), history + 1);
+    assert!(fill_area(&s) < whole_area * 0.9);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(count(&s), (1, 4));
+    assert!((fill_area(&s) - whole_area).abs() < 1.0);
+}
+
+#[test]
+fn lasso_picks_only_objects_wholly_inside_including_concave_loops() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 10, "y": 10, "w": 20, "h": 20, "object": true}));
+    let inside_id = s.selection.ids().next().unwrap();
+    run(&mut s, "draw.rect", json!({"x": 45, "y": 45, "w": 40, "h": 40, "object": true}));
+    let crossing_id = s.selection.ids().next().unwrap();
+    // Triangle (0,0)-(100,0)-(0,100) wholly holds [10..30, 10..30], crosses [45..85, 45..85].
+    run(&mut s, "raw.select_area", json!({"points": [[0, 0], [100, 0], [0, 100]]}));
+    assert!(s.selection.has_id(inside_id), "object wholly inside is picked");
+    assert!(!s.selection.has_id(crossing_id), "object crossing the edge is not picked");
+    // A concave C-loop whose arms contain all four corners of a tall box [15..25, 10..90]
+    // while its notch cuts across the middle [15..25, 40..60] must not pick that box.
+    run(&mut s, "draw.rect", json!({"x": 15, "y": 10, "w": 10, "h": 80, "object": true}));
+    let tall_id = s.selection.ids().next().unwrap();
+    let c_loop = json!([[0, 0], [40, 0], [40, 30], [10, 30], [10, 70], [40, 70], [40, 100], [0, 100]]);
+    run(&mut s, "raw.select_area", json!({"points": c_loop}));
+    assert!(!s.selection.has_id(tall_id), "object spanning a concave notch is not wholly inside");
+}
+
+#[test]
+fn lasso_add_keeps_earlier_selection() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 10, "y": 10, "w": 20, "h": 20, "object": true}));
+    let a = s.selection.ids().next().unwrap();
+    run(&mut s, "draw.rect", json!({"x": 200, "y": 10, "w": 20, "h": 20, "object": true}));
+    let b = s.selection.ids().next().unwrap();
+    run(&mut s, "raw.select_area", json!({"points": [[0, 0], [50, 0], [50, 50], [0, 50]]}));
+    assert!(s.selection.has_id(a) && !s.selection.has_id(b));
+    run(&mut s, "raw.select_area", json!({"points": [[190, 0], [240, 0], [240, 50], [190, 50]], "add": true}));
+    assert!(s.selection.has_id(a) && s.selection.has_id(b), "add keeps the earlier selection");
+}
+
+#[test]
+fn lasso_handles_self_intersecting_degenerate_and_over_limit_loops() {
+    let mut s = rect_session();
+    let whole_area = fill_area(&s);
+    // Self-intersecting bowtie across the raw rectangle: selects both lobes (even-odd).
+    let bowtie = run(&mut s, "raw.select_area", json!({"points": [[-10, -10], [110, 90], [110, -10], [-10, 90]]}));
+    assert!(bowtie["cut"].as_u64().unwrap_or(0) > 0, "self-intersecting loop cuts under even-odd");
+    assert!((fill_area(&s) - whole_area).abs() < 1.0);
+    // Degenerate loops (empty, 2 points, collinear) cut nothing and behave like a zero-size marquee.
+    for pts in [json!([]), json!([[0, 0], [50, 50]]), json!([[0, 0], [20, 20], [50, 50], [100, 100]])] {
+        let r = run(&mut s, "raw.select_area", json!({"points": pts}));
+        assert_eq!(r["cut"], 0);
+        assert!(s.selection.is_empty(), "clears selection when add is false");
+        assert_eq!(count(&s), (1, 4), "earlier provisional cut healed");
+    }
+    // With add: true, a degenerate loop keeps the existing selection.
+    run(&mut s, "element.pick", json!({"x": 50, "y": 40}));
+    let kept = s.selection.len();
+    assert!(kept > 0);
+    let r = run(&mut s, "raw.select_area", json!({"points": [[0, 0], [10, 10]], "add": true}));
+    assert_eq!(r["cut"], 0);
+    assert_eq!(s.selection.len(), kept);
+    // Over-limit point count and bad points are refused cleanly.
+    let too_many: Vec<Value> = (0..10_001).map(|i| json!([i % 100, i / 100])).collect();
+    assert!(s.execute("raw.select_area", &json!({"points": too_many})).is_err());
+    assert!(s.execute("raw.select_area", &json!({"points": [[0, 0], [1e30, 0], [0, 10]]})).is_err());
+    assert!(s.execute("raw.select_area", &json!({"points": [[0, 0], [null, 10], [10, 10]]})).is_err());
+    assert!(s.execute("raw.select_area", &json!({})).is_err());
+}
+
+#[test]
+fn lasso_on_tween_interior_excludes_outside_raw_shapes_and_keeps_overlapping_ones() {
+    let mut s = Session::new(anicraft_doc::Document::default());
+    run(&mut s, "draw.object_drawing", json!({"on": false}));
+    // Outside the triangle (0,0)-(100,0)-(0,100) yet inside its bounding box [0..100, 0..100].
+    run(&mut s, "draw.rect", json!({"x": 70, "y": 70, "w": 10, "h": 10, "fill": "#ff0000", "stroke": null}));
+    // Partly inside and partly outside the triangle (neither wholly inside nor disjoint).
+    run(&mut s, "draw.rect", json!({"x": 30, "y": 30, "w": 30, "h": 30, "fill": "#00aa00", "stroke": null}));
+    // Larger fill that completely encloses a small lasso polygon tested below.
+    run(&mut s, "draw.rect", json!({"x": 200, "y": 200, "w": 100, "h": 100, "fill": "#0000ff", "stroke": null}));
+    run(&mut s, "timeline.goto", json!({"frame": 10}));
+    run(&mut s, "timeline.insert_keyframe", json!({}));
+    run(&mut s, "timeline.goto", json!({"frame": 0}));
+    run(&mut s, "timeline.create_shape_tween", json!({}));
+    run(&mut s, "timeline.goto", json!({"frame": 5}));
+
+    let els = s.visible_elements();
+    let find_near = |cx: f32, cy: f32| {
+        els.iter()
+            .find(|e| {
+                let c = s.element_bounds(e.id).center();
+                (c.x - cx).abs() < 5.0 && (c.y - cy).abs() < 5.0
+            })
+            .expect("tweened raw shape")
+            .id
+    };
+    let outside_id = find_near(75.0, 75.0);
+    let crossing_id = find_near(45.0, 45.0);
+    let enclosing_id = find_near(250.0, 250.0);
+
+    let r = run(&mut s, "raw.select_area", json!({"points": [[0, 0], [100, 0], [0, 100]]}));
+    assert_eq!(r["cut"], 0, "tween interior selects whole without cutting");
+    assert!(!s.selection.has_id(outside_id), "shape outside triangle must not be selected");
+    assert!(s.selection.has_id(crossing_id), "overlapping raw shape on tween interior stays selected whole");
+
+    let r = run(&mut s, "raw.select_area", json!({"points": [[220, 220], [240, 220], [220, 240]]}));
+    assert_eq!(r["cut"], 0);
+    assert!(s.selection.has_id(enclosing_id), "filled shape enclosing the lasso polygon is selected whole");
+}
+
+#[test]
+fn invalid_lasso_request_preserves_live_provisional_cut() {
+    let mut s = rect_session();
+    let whole_area = fill_area(&s);
+    let tri = json!([[0, -10], [110, -10], [110, 90]]);
+    let r = run(&mut s, "raw.select_area", json!({"points": tri}));
+    assert!(r["cut"].as_u64().unwrap_or(0) > 0);
+    let sel_before = s.selection.clone();
+    let counts_before = count(&s);
+    assert_ne!(counts_before, (1, 4), "cut split the raw rectangle");
+
+    // Rejected requests must not heal the live cut or fall back to selecting the whole source shape.
+    assert!(s.execute("raw.select_area", &json!({})).is_err());
+    assert_eq!(s.selection, sel_before, "selected cut piece stays selected after invalid request");
+    assert_eq!(count(&s), counts_before, "provisional cut stays live after invalid request");
+    assert!(s.execute("raw.select_area", &json!({"points": [[0, 0], [1e30, 0], [0, 10]]})).is_err());
+    assert_eq!(s.selection, sel_before);
+    assert_eq!(count(&s), counts_before);
+
+    // The preserved provisional cut still deletes only the selected piece and undoes back whole.
+    run(&mut s, "edit.delete", json!({}));
+    assert!(fill_area(&s) > 0.0 && fill_area(&s) < whole_area * 0.9, "only the cut piece was deleted");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(count(&s), (1, 4));
+
+    // A valid replacement lasso still heals the previous cut first.
+    run(&mut s, "raw.select_area", json!({"points": tri}));
+    run(&mut s, "raw.select_area", json!({"points": [[-10, -10], [50, -10], [-10, 50]]}));
+    run(&mut s, "edit.deselect", json!({}));
+    assert_eq!(count(&s), (1, 4), "valid replacement healed the previous cut");
+}
+
 // ----- what a drag takes ------------------------------------------------------------------------------
 
 #[test]

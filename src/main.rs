@@ -65,6 +65,7 @@ mod keymap;
 mod launch_profile;
 mod library;
 mod menus;
+mod new_symbol;
 #[cfg(not(target_arch = "wasm32"))]
 mod updates;
 mod mixed;

@@ -403,6 +403,7 @@ pub const NOT_FILES: &[&str] = &[
     "text.path",
     "text.release_path",
     "library.items",
+    "library.new_symbol",
     "library.new_folder",
     "library.rename",
     "library.move",

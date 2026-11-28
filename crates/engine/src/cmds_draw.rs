@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
         c("element.pick", "Select at Point", "", None, "{x, y, add?: bool, view?: stage|camera} the topmost element there on a visible, unlocked layer; `add` (Shift) adds it to the selection, or lets go of it, on any layer; with `view: camera` the point is on the movie's picture as the camera shows it (each layer through its depth)", false, pick),
         c("element.translate", "Move", "", None, "{dx, dy, snap?, from?: [x, y]} moves the selection, on every layer; with `snap` (a distance) one of its corners or ends, or its box's corners or centre (the nearest to `from`), then snaps within that distance by the snap engine's priority (ADR 0076): a point, guide, line or fill edge of the rest, the grid, a whole pixel", true, translate),
         c("element.set_transform", "Transform", "", None, "{x?, y?, sx?, sy?, rotation? (degrees)} x and y place the registration point. A new scale or rotation alone is applied about a symbol instance's transformation point when it has one (modify.transformation_point), else about the registration point", true, |s, p| s.each_layer(true, |s| set_transform(s, p))),
-        c("element.set_fill", "Fill Colour", "", None, "{color: \"#rrggbb\" | \"#rrggbbaa\" | null, or on: true | false} (the alpha is the fill's own; 00 is a clear fill, not the same as null. on: false turns the fill off like null; on: true puts back the fill each shape had before, else the tool's fill colour. With only raw lines selected the fill goes to what they surround)", true, |s, p| s.each_layer(false, |s| set_fill(s, p))),
+        c("element.set_fill", "Fill Colour", "", None, "{color: \"#rrggbb\" | \"#rrggbbaa\" | null, or on: true | false, or alpha: 0..1 (alone: only the opacity of each selected solid fill, which keeps its colour; gradient and bitmap fills are left as they are → {changed})} (the alpha is the fill's own; 00 is a clear fill, not the same as null. on: false turns the fill off like null; on: true puts back the fill each shape had before, else the tool's fill colour. With only raw lines selected the fill goes to what they surround)", true, |s, p| s.each_layer(false, |s| set_fill(s, p))),
         c("element.set_stroke", "Stroke", "", None, "{on?: true | false (false removes the stroke like color: null; true puts back the stroke each shape had before, else the tool's), color?: \"#rrggbb\" | \"#rrggbbaa\" | null, width?, profile?: uniform|taper_both|taper_start|taper_end|bulge|pinch | [[t, left, right], ..], cap?, join?, miter?, style?, dash?, dash_offset?, dot_spacing? (as stroke.set_style)}", true, |s, p| s.each_layer(false, |s| set_stroke(s, p))),
         c("element.set_alpha", "Alpha", "", None, "{alpha: 0..1} sets the alpha multiplier and keeps the rest of the colour effect (None becomes Alpha; Brightness and Tint become Advanced below 1)", true, |s, p| s.each_layer(true, |s| set_alpha(s, p))),
         c("element.set_color_effect", "Colour Effect", "", None, "{style?: none|brightness|tint|advanced|alpha (default: the style the values belong to, else each element's own), alpha? (%, 0..100), brightness? (%, -100..100), tint? (#rrggbb), tint_amount? (%, 0..100), red_multiplier?, green_multiplier?, blue_multiplier?, alpha_multiplier? (%, -100..100), red_offset?, green_offset?, blue_offset?, alpha_offset? (-255..255)} on every selected element (ADR 0056); values not given keep each element's own. A new style starts from the look it can keep: Advanced is exactly the effect before, Alpha keeps the opacity, Brightness and Tint start at 0 %. The camera has no opacity (no Alpha style, alpha multiplier or offset)", true, |s, p| s.each_layer(true, |s| set_color_effect(s, p))),
@@ -466,6 +466,9 @@ enum Switch {
 }
 
 fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("color").is_none() && p.get("on").is_none() && let Some(alpha) = opt_f32(p, "alpha")? {
+        return set_fill_alpha(s, alpha);
+    }
     let null = p.get("color").is_some_and(Value::is_null);
     let fill = match (opt_bool(p, "on")?, if null { None } else { opt_color(p, "color")? }) {
         (Some(false), _) => Switch::Off,
@@ -479,6 +482,29 @@ fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
     s.paint_memory = memory;
     result?;
     Ok(json!({"ok": true}))
+}
+
+/// `element.set_fill {alpha}`: each selected solid fill keeps its colour and takes this opacity
+/// (#645). A gradient's stops have their own alphas, and a bitmap has none: those stay.
+fn set_fill_alpha(s: &mut Session, alpha: f32) -> Result<Value> {
+    if !(0.0..=1.0).contains(&alpha) {
+        return Err(EngineError::Param("param 'alpha' must be between 0 and 1".into()));
+    }
+    let (mut shapes, mut changed) = (0usize, 0u64);
+    for e in s.selected_elements_mut()? {
+        let ElementKind::Shape(sh) = &mut e.kind else { continue };
+        shapes += 1;
+        if let Some(Paint::Solid(c)) = &mut sh.fill
+            && c.a != alpha
+        {
+            c.a = alpha;
+            changed += 1;
+        }
+    }
+    if shapes == 0 {
+        return Err(EngineError::State("the selection has no shapes (symbol instances use alpha/tint; text has its own colour)".into()));
+    }
+    Ok(json!({"ok": true, "changed": changed}))
 }
 
 fn set_fill_with(s: &mut Session, fill: &Switch, memory: &mut crate::PaintMemory) -> Result<()> {

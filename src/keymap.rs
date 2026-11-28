@@ -48,6 +48,7 @@ pub fn tool_id(t: Tool) -> &'static str {
     match t {
         Tool::Select => "tool.selection",
         Tool::Subselect => "tool.subselection",
+        Tool::Lasso => "tool.lasso",
         Tool::Transform => "tool.free_transform",
         Tool::GradientTransform => "tool.gradient_transform",
         Tool::Width => "tool.width",

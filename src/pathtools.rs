@@ -42,6 +42,8 @@ impl Xf {
 
 /// Pick radius for points and knots, in screen points.
 const PICK: f32 = 6.0;
+/// Drag threshold in screen points: a press that moved less than this is a click.
+const DRAG_MIN: f32 = 2.0;
 
 // ----- Pen ---------------------------------------------------------------------------------
 
@@ -144,6 +146,22 @@ pub fn constrain_45(from: Vec2, p: Vec2) -> Vec2 {
     let a = (d.y.atan2(d.x) / step).round() * step;
     let dir = Vec2::new(a.cos(), a.sin());
     from + dir * (d.x * dir.x + d.y * dir.y)
+}
+
+/// Handle vector pulled from anchor `a` to stage point `p` (Shift keeps 45° steps). `None`
+/// while the pointer is within [`DRAG_MIN`] screen points of `a` (so a click stays a click).
+fn drag_handle(a: Vec2, p: Vec2, zoom: f32, shift: bool) -> Option<Vec2> {
+    if a.distance(p) * zoom < DRAG_MIN {
+        return None;
+    }
+    let q = if shift { constrain_45(a, p) } else { p };
+    let d = q - a;
+    (d.is_finite() && d != Vec2::ZERO).then_some(d)
+}
+
+/// A knot `[anchor, in, out]` with mirrored handles at `anchor ∓ handle`.
+fn mirrored_knot(a: Vec2, handle: Vec2) -> [Vec2; 3] {
+    [a, a - handle, a + handle]
 }
 
 /// A point of a path that shows its points, under the Pen.
@@ -366,33 +384,27 @@ pub fn pen_drag(app: &mut App, at: Pos2, xf: Xf, mods: PenMods) {
     let Some(k) = pen.knots.last_mut() else { return };
     let a = k[0];
     let p = xf.to_stage(at);
-    // A press that barely moved is a click.
-    let moved = a.distance(p) * xf.zoom >= 2.0;
-    let p = if mods.shift { constrain_45(a, p) } else { p };
+    let handle = drag_handle(a, p, xf.zoom, mods.shift);
+    let constrained = if mods.shift { constrain_45(a, p) } else { p };
     match grip {
-        PenGrip::New => {
-            if !moved {
-                *k = [a; 3];
-            } else {
-                k[2] = p;
-                if !mods.alt {
-                    k[1] = a * 2.0 - p;
-                }
-            }
-        }
+        PenGrip::New => match handle {
+            None => *k = [a; 3],
+            Some(d) if mods.alt => k[2] = a + d,
+            Some(d) => *k = mirrored_knot(a, d),
+        },
         PenGrip::Last { moved: was_moved } => {
-            if moved || was_moved {
-                k[2] = p;
+            if handle.is_some() || was_moved {
+                k[2] = constrained;
                 pen.grip = PenGrip::Last { moved: true };
             }
         }
         PenGrip::Out => {
-            if moved {
-                k[2] = p;
+            if let Some(d) = handle {
+                k[2] = a + d;
             }
         }
         PenGrip::Adjust { was } => {
-            *k = if moved { [a, a * 2.0 - p, p] } else { was };
+            *k = handle.map_or(was, |d| mirrored_knot(a, d));
         }
     }
 }
@@ -535,15 +547,26 @@ fn selected_shapes(app: &App) -> Vec<(ElementId, Arc<Path>, Affine)> {
         .collect()
 }
 
-/// Handles shown for the selected anchors: `(cmd, slot, anchor cmd)`.
+/// What a Subselection Alt-drag is pulling curve handles out of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PullTarget {
+    /// Anchor `cmd` of drawing object (or text on a path) `id`.
+    Object { id: ElementId, cmd: usize },
+    /// Shared anchor of raw shapes on the active layer.
+    Raw,
+}
+
+/// Handles shown for the selected anchors: `(cmd, slot, anchor cmd)`. Zero-length handles
+/// sitting on their anchor are omitted so they don't shadow the anchor itself.
 fn shown_handles(path: &Path, anchors: impl Iterator<Item = usize>) -> Vec<(usize, u8, usize)> {
     let mut v = Vec::new();
     for a in anchors {
+        let Some(ap) = path.point(a, ANCHOR) else { continue };
         let (i, o) = path.anchor_segments(a);
-        if let Some(i) = i.filter(|&i| matches!(path.cmds.get(i), Some(PathCmd::CubicTo(..)))) {
+        if let Some(i) = i.filter(|&i| matches!(path.cmds.get(i), Some(PathCmd::CubicTo(..))) && path.point(i, C2).is_some_and(|h| h.distance(ap) > 1e-4)) {
             v.push((i, C2, a));
         }
-        if let Some(o) = o.filter(|&o| matches!(path.cmds.get(o), Some(PathCmd::CubicTo(..)) | Some(PathCmd::QuadTo(..)))) {
+        if let Some(o) = o.filter(|&o| matches!(path.cmds.get(o), Some(PathCmd::CubicTo(..)) | Some(PathCmd::QuadTo(..))) && path.point(o, C1).is_some_and(|h| h.distance(ap) > 1e-4)) {
             v.push((o, C1, a));
         }
     }
@@ -577,14 +600,42 @@ fn point_at(app: &App, at: Pos2, xf: Xf) -> Option<PointRef> {
     None
 }
 
-/// Press with the Subselection tool: grab a point, else a shape (moves it whole, as Animate
-/// does when you drag an outline), else start a marquee over points.
-pub fn subselect_drag_start(app: &mut App, press: Pos2, shift: bool, xf: Xf) -> Drag {
+fn anchor_stage_pos(app: &App, id: ElementId, cmd: usize) -> Option<Vec2> {
+    selected_shapes(app).into_iter().find(|(e, _, _)| *e == id).and_then(|(_, path, m)| path.point(cmd, ANCHOR).map(|q| m.apply(q)))
+}
+
+/// Whether screen point `at` is over an anchor (not a handle) that Subselection + Alt can
+/// pull curve handles out of.
+pub fn subselect_alt_anchor(app: &App, at: Pos2, xf: Xf) -> bool {
+    let pts = raw_shown(app);
+    match raw_point_at(app, &pts, at, xf) {
+        Some(RawHit::Handle(_)) => return false,
+        Some(RawHit::Anchor(_)) => return true,
+        None => {}
+    }
+    if let Some(pt) = point_at(app, at, xf) {
+        return pt.2 == ANCHOR;
+    }
+    let sp = xf.to_stage(at);
+    matches!(app.s.raw_grab(sp, 3.0 * xf.unit(), GRAB_POINT * xf.unit()), Some((_, anicraft_engine::cmds_raw::Grab::Point { .. })))
+}
+
+/// Press with the Subselection tool: grab a point (Alt on an anchor pulls out curve handles),
+/// else a shape (moves it whole, as Animate does when you drag an outline), else start a
+/// marquee over points.
+pub fn subselect_drag_start(app: &mut App, press: Pos2, shift: bool, alt: bool, xf: Xf) -> Drag {
     let sp = xf.to_stage(press);
-    if let Some(d) = raw_drag_start(app, press, shift, xf) {
+    if let Some(d) = raw_drag_start(app, press, shift, alt, xf) {
         return d;
     }
     if let Some(pt) = point_at(app, press, xf) {
+        if alt && pt.2 == ANCHOR
+            && let Some(anchor) = anchor_stage_pos(app, pt.0, pt.1)
+        {
+            app.points = vec![pt];
+            app.s.begin_gesture(tr_noop!("Convert Anchor Point"));
+            return Drag::PullHandle { target: PullTarget::Object { id: pt.0, cmd: pt.1 }, anchor, moved: false };
+        }
         if !app.points.contains(&pt) {
             if !shift {
                 app.points.clear();
@@ -611,6 +662,33 @@ pub fn subselect_drag_start(app: &mut App, press: Pos2, shift: bool, xf: Xf) -> 
     // A marquee shows the points of the shapes it touches on the active layer and selects the
     // points inside it; it never cuts (that is the Selection tool's).
     Drag::PointMarquee { start: pos2(sp.x, sp.y), cur: pos2(sp.x, sp.y) }
+}
+
+/// Updates an anchor's curve handles while Alt-dragging from it with Subselection. Returns the
+/// raw element ids changed (for merging on release), if any.
+pub fn pull_handle(app: &mut App, target: PullTarget, anchor: Vec2, moved: &mut bool, cur: Vec2, shift: bool, xf: Xf) -> Option<serde_json::Value> {
+    let h = if *moved {
+        let q = if shift { constrain_45(anchor, cur) } else { cur };
+        let d = q - anchor;
+        (d.is_finite() && d != Vec2::ZERO).then_some(d)?
+    } else {
+        drag_handle(anchor, cur, xf.zoom, shift)?
+    };
+    *moved = true;
+    match target {
+        PullTarget::Object { id, cmd } => {
+            app.run("path.convert_point", json!({"id": id.0, "cmd": cmd, "smooth": true, "handle": [h.x, h.y]}));
+            None
+        }
+        PullTarget::Raw => {
+            let v = app.run("raw.convert_points", json!({"points": [[anchor.x, anchor.y]], "smooth": true, "handle": [h.x, h.y], "merge": false}))?;
+            // A point where three or more lines meet has no one curve to pull handles from.
+            if v["converted"].as_u64() == Some(0) {
+                app.status_ok(tr!("Handles can't be pulled out of a point where more than two lines meet."));
+            }
+            Some(v["ids"].clone())
+        }
+    }
 }
 
 /// Moves the selected points by a stage-space delta (inside the open gesture). A handle moved
@@ -841,7 +919,7 @@ fn raw_upkeep(app: &mut App) {
         return;
     }
     // A drag moves them itself.
-    if matches!(app.drag, Drag::RawPoint { .. } | Drag::RawHandle { .. } | Drag::SnapMove { .. }) {
+    if matches!(app.drag, Drag::RawPoint { .. } | Drag::RawHandle { .. } | Drag::PullHandle { .. } | Drag::SnapMove { .. }) {
         return;
     }
     let pts = raw_shown(app);
@@ -883,10 +961,10 @@ fn raw_show_at(app: &mut App, sp: Vec2, shift: bool, xf: Xf) -> bool {
 }
 
 /// A press with Subselection on raw shapes: a shown handle bends its curve, a shown anchor moves
-/// (with the other selected anchors), an anchor of a raw shape not shown yet shows its shapes and
-/// moves, and a raw line or fill shows its connected shapes and moves all of them. `None` when
-/// the press is not on raw artwork.
-fn raw_drag_start(app: &mut App, press: Pos2, shift: bool, xf: Xf) -> Option<Drag> {
+/// (with the other selected anchors; Alt pulls out curve handles instead), an anchor of a raw
+/// shape not shown yet shows its shapes and takes the point, and a raw line or fill shows its
+/// connected shapes and moves all of them. `None` when the press is not on raw artwork.
+fn raw_drag_start(app: &mut App, press: Pos2, shift: bool, alt: bool, xf: Xf) -> Option<Drag> {
     let sp = xf.to_stage(press);
     let pts = raw_shown(app);
     let anchor = match raw_point_at(app, &pts, press, xf) {
@@ -903,6 +981,14 @@ fn raw_drag_start(app: &mut App, press: Pos2, shift: bool, xf: Xf) -> Option<Dra
         },
     };
     if let Some(q) = anchor {
+        if alt {
+            app.raw_anchors = vec![q];
+            app.raw_with.clear();
+            app.raw_points = serde_json::Value::Null;
+            app.raw_touched.clear();
+            app.s.begin_gesture(tr_noop!("Convert Anchor Point"));
+            return Some(Drag::PullHandle { target: PullTarget::Raw, anchor: q, moved: false });
+        }
         if !app.raw_anchors.iter().any(|p| p.distance(q) <= SNAP) {
             if !shift {
                 app.raw_anchors.clear();
@@ -1202,6 +1288,15 @@ pub fn draw_overlay(app: &App, painter: &egui::Painter, xf: Xf, hover: Option<Po
         let m = painter.ctx().input(|i| i.modifiers);
         let what = pen_hover(app, h, xf, PenMods { alt: m.alt, shift: m.shift, command: m.command });
         pen_mark(painter, h + vec2(13.0, 13.0), what);
+    }
+    // Alt over an anchor in Subselection shows the convert caret (Alt-drag pulls out handles).
+    if app.tool == Tool::Subselect
+        && app.drag == Drag::None
+        && let Some(h) = hover
+        && painter.ctx().input(|i| i.modifiers.alt)
+        && subselect_alt_anchor(app, h, xf)
+    {
+        pen_mark(painter, h + vec2(13.0, 13.0), PenHover::Corner);
     }
     if app.drag == Drag::Pencil && app.pencil.len() > 1 {
         let w = (app.s.style.stroke_width * xf.zoom).max(1.0);
@@ -1603,23 +1698,160 @@ mod tests {
         fn a_press_takes_an_anchor_or_moves_everything_connected() {
             let (mut app, _) = app_and_ctx();
             // An anchor of a drawing not shown yet: it shows, and the point is taken.
-            assert!(matches!(subselect_drag_start(&mut app, pos2(100.0, 80.0), false, XF), Drag::RawPoint { .. }));
+            assert!(matches!(subselect_drag_start(&mut app, pos2(100.0, 80.0), false, false, XF), Drag::RawPoint { .. }));
             assert_eq!(app.s.selection.len(), 5);
             assert!(has(&app.raw_anchors, 100.0, 80.0));
             app.s.end_gesture();
             // With another anchor selected, Shift: both move.
-            assert!(matches!(subselect_drag_start(&mut app, pos2(0.0, 80.0), true, XF), Drag::RawPoint { .. }));
+            assert!(matches!(subselect_drag_start(&mut app, pos2(0.0, 80.0), true, false, XF), Drag::RawPoint { .. }));
             assert_eq!(app.raw_with.len(), 1);
             app.s.end_gesture();
             // Inside the fill: the whole connected drawing moves.
-            assert!(matches!(subselect_drag_start(&mut app, pos2(50.0, 40.0), false, XF), Drag::SnapMove { .. }));
+            assert!(matches!(subselect_drag_start(&mut app, pos2(50.0, 40.0), false, false, XF), Drag::SnapMove { .. }));
             app.s.end_gesture();
             // Empty space: a marquee, which selects the anchors inside it.
-            assert!(matches!(subselect_drag_start(&mut app, pos2(300.0, 300.0), false, XF), Drag::PointMarquee { .. }));
+            assert!(matches!(subselect_drag_start(&mut app, pos2(300.0, 300.0), false, false, XF), Drag::PointMarquee { .. }));
             marquee_points(&mut app, pos2(90.0, -10.0), pos2(120.0, 10.0), false);
             assert_eq!(app.s.selection.len(), 5);
             assert_eq!(app.raw_anchors.len(), 1);
             assert!(has(&app.raw_anchors, 100.0, 0.0));
+        }
+
+        #[test]
+        fn alt_drag_from_an_anchor_pulls_out_curve_handles_and_alt_click_changes_nothing() {
+            // Raw rectangle: Alt-click selects without curving; Alt-drag pulls mirrored handles.
+            let (mut app, _) = app_and_ctx();
+            subselect_click(&mut app, pos2(50.0, 0.0), false, XF);
+            assert!(subselect_alt_anchor(&app, pos2(100.0, 0.0), XF));
+            // Alt-click without movement (or a tiny press-release) leaves the shape straight.
+            let Drag::PullHandle { target, anchor, mut moved } = subselect_drag_start(&mut app, pos2(100.0, 0.0), false, true, XF) else {
+                panic!("expected PullHandle on raw anchor");
+            };
+            assert!(pull_handle(&mut app, target, anchor, &mut moved, Vec2::new(100.5, 0.5), false, XF).is_none());
+            assert!(!moved);
+            app.s.end_gesture();
+            assert!(raw_shown(&app).handles.is_empty(), "Alt-click without drag must not curve");
+            // Alt-drag pulls out mirrored handles live, then merges on release in one undo step.
+            let Drag::PullHandle { target, anchor, mut moved } = subselect_drag_start(&mut app, pos2(100.0, 0.0), false, true, XF) else {
+                panic!("expected PullHandle");
+            };
+            let ids = pull_handle(&mut app, target, anchor, &mut moved, Vec2::new(125.0, 15.0), false, XF);
+            assert!(moved && ids.is_some());
+            let ids = pull_handle(&mut app, target, anchor, &mut moved, Vec2::new(130.0, 20.0), false, XF);
+            assert!(ids.is_some());
+            if let Some(ids) = ids {
+                app.run("raw.merge", json!({"ids": ids}));
+            }
+            app.s.end_gesture();
+            let hs: Vec<_> = raw_shown(&app).handles.into_iter().filter(|h| h.anchor.distance(Vec2::new(100.0, 0.0)) < 0.3).collect();
+            assert_eq!(hs.len(), 2, "two handles pulled at corner: {hs:?}");
+            assert!(hs.iter().any(|h| h.at.distance(Vec2::new(130.0, 20.0)) < 0.5));
+            assert!(hs.iter().any(|h| h.at.distance(Vec2::new(70.0, -20.0)) < 0.5));
+            // Hovering a handle with Alt is NOT an anchor pull; dragging it keeps RawHandle (one alone).
+            let hpos = pos2(hs[0].at.x, hs[0].at.y);
+            assert!(!subselect_alt_anchor(&app, hpos, XF));
+            assert!(matches!(subselect_drag_start(&mut app, hpos, false, true, XF), Drag::RawHandle { .. }));
+            app.s.end_gesture();
+            // One undo takes the whole raw handle pull back.
+            app.run("edit.undo", json!({}));
+            assert!(raw_shown(&app).handles.is_empty(), "one undo restores the raw rectangle");
+
+            // Drawing object rectangle: Alt-drag pulls mirrored handles; Alt-click changes nothing.
+            let ctx = egui::Context::default();
+            let session = anicraft_engine::Session::new(anicraft_engine::doc::Document::default());
+            let mut obj_app = App::with_context(&ctx, session, Some(std::path::PathBuf::from("unused.png")));
+            obj_app.tool = Tool::Subselect;
+            obj_app.view.zoom = 1.0;
+            obj_app.run("draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 80, "object": true}));
+            let id = obj_app.s.selection.ids().next().unwrap();
+            let path_of = |a: &App| -> Path {
+                let el = a.s.visible_elements().into_iter().find(|e| e.id == id).unwrap();
+                let ElementKind::Shape(sh) = &el.kind else { panic!() };
+                sh.path.transformed(&el.transform)
+            };
+            let before = path_of(&obj_app);
+            assert!(subselect_alt_anchor(&obj_app, pos2(100.0, 0.0), XF));
+            // Alt-click without movement leaves the object unchanged.
+            subselect_click(&mut obj_app, pos2(100.0, 0.0), false, XF);
+            let Drag::PullHandle { target, anchor, mut moved } = subselect_drag_start(&mut obj_app, pos2(100.0, 0.0), false, true, XF) else {
+                panic!("expected PullHandle on object anchor");
+            };
+            assert!(pull_handle(&mut obj_app, target, anchor, &mut moved, Vec2::new(100.5, 0.0), false, XF).is_none());
+            obj_app.s.end_gesture();
+            assert_eq!(path_of(&obj_app), before, "Alt-click without drag changes nothing");
+            // Alt-drag pulls mirrored handles live in one undo step.
+            let Drag::PullHandle { target, anchor, mut moved } = subselect_drag_start(&mut obj_app, pos2(100.0, 0.0), false, true, XF) else {
+                panic!("expected PullHandle");
+            };
+            pull_handle(&mut obj_app, target, anchor, &mut moved, Vec2::new(115.0, 10.0), false, XF);
+            pull_handle(&mut obj_app, target, anchor, &mut moved, Vec2::new(120.0, 30.0), false, XF);
+            obj_app.s.end_gesture();
+            let after = path_of(&obj_app);
+            assert!(after.cmds.iter().filter(|c| matches!(c, PathCmd::CubicTo(..))).count() == 2, "two curved segments: {:?}", after.cmds);
+            // Alt on one of those handles moves it alone (Drag::Points, not PullHandle).
+            let handle_pos = pos2(120.0, 30.0);
+            assert!(!subselect_alt_anchor(&obj_app, handle_pos, XF));
+            assert!(matches!(subselect_drag_start(&mut obj_app, handle_pos, false, true, XF), Drag::Points { .. }));
+            obj_app.s.end_gesture();
+            // One undo restores the whole drag.
+            obj_app.run("edit.undo", json!({}));
+            assert_eq!(path_of(&obj_app), before, "one undo restores the drawing object");
+        }
+
+        #[test]
+        fn pull_handle_updates_below_drag_threshold_after_pull_starts() {
+            // Drawing object: sub-threshold press stays unchanged, then once pulled past DRAG_MIN,
+            // moving back within DRAG_MIN still updates the handle instead of keeping the old one.
+            let ctx = egui::Context::default();
+            let session = anicraft_engine::Session::new(anicraft_engine::doc::Document::default());
+            let mut obj_app = App::with_context(&ctx, session, Some(std::path::PathBuf::from("unused.png")));
+            obj_app.tool = Tool::Subselect;
+            obj_app.view.zoom = 1.0;
+            obj_app.run("draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 80, "object": true}));
+            let id = obj_app.s.selection.ids().next().unwrap();
+            let path_of = |a: &App| -> Path {
+                let el = a.s.visible_elements().into_iter().find(|e| e.id == id).unwrap();
+                let ElementKind::Shape(sh) = &el.kind else { panic!() };
+                sh.path.transformed(&el.transform)
+            };
+            let before = path_of(&obj_app);
+            let Drag::PullHandle { target, anchor, mut moved } = subselect_drag_start(&mut obj_app, pos2(100.0, 0.0), false, true, XF) else {
+                panic!("expected PullHandle on object anchor");
+            };
+            // Initial sub-threshold movement leaves geometry unchanged.
+            pull_handle(&mut obj_app, target, anchor, &mut moved, anchor + Vec2::new(1.0, 0.0), false, XF);
+            assert!(!moved);
+            assert_eq!(path_of(&obj_app), before);
+            // Pull past threshold creates a long handle.
+            pull_handle(&mut obj_app, target, anchor, &mut moved, anchor + Vec2::new(30.0, 20.0), false, XF);
+            assert!(moved);
+            let long = path_of(&obj_app).point(2, C1).unwrap().distance(anchor);
+            assert!(long > 20.0, "expected long handle, got {long}");
+            // Moving back to a nonzero sub-threshold offset updates the handle instead of leaving it long.
+            pull_handle(&mut obj_app, target, anchor, &mut moved, anchor + Vec2::new(1.0, 0.0), false, XF);
+            obj_app.s.end_gesture();
+            let short = path_of(&obj_app).point(2, C1).unwrap().distance(anchor);
+            assert!(short < DRAG_MIN && short > 0.5, "handle should shrink below threshold: {short} (was {long})");
+
+            // Same for a raw rectangle: moving back within DRAG_MIN updates raw handles too.
+            let (mut raw_app, _) = app_and_ctx();
+            subselect_click(&mut raw_app, pos2(50.0, 0.0), false, XF);
+            let Drag::PullHandle { target, anchor, mut moved } = subselect_drag_start(&mut raw_app, pos2(100.0, 0.0), false, true, XF) else {
+                panic!("expected PullHandle on raw anchor");
+            };
+            assert!(pull_handle(&mut raw_app, target, anchor, &mut moved, anchor + Vec2::new(1.0, 0.0), false, XF).is_none());
+            assert!(!moved);
+            assert!(pull_handle(&mut raw_app, target, anchor, &mut moved, anchor + Vec2::new(30.0, 20.0), false, XF).is_some());
+            assert!(moved);
+            let ids = pull_handle(&mut raw_app, target, anchor, &mut moved, anchor + Vec2::new(1.0, 0.0), false, XF);
+            assert!(ids.is_some(), "established raw pull must still update below DRAG_MIN");
+            if let Some(ids) = ids {
+                raw_app.run("raw.merge", json!({"ids": ids}));
+            }
+            raw_app.s.end_gesture();
+            let hs: Vec<_> = raw_shown(&raw_app).handles.into_iter().filter(|h| h.anchor.distance(anchor) < 0.3).collect();
+            assert_eq!(hs.len(), 2, "{hs:?}");
+            assert!(hs.iter().all(|h| h.at.distance(anchor) < DRAG_MIN && h.at.distance(anchor) > 0.5), "raw handles should reflect sub-threshold update: {hs:?}");
         }
     }
 

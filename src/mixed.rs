@@ -24,6 +24,8 @@ pub struct Mixed {
     pub looping: bool,
     pub first_frame: bool,
     pub fill: bool,
+    /// Solid fill opacity (the Fill alpha row).
+    pub fill_alpha: bool,
     /// The bitmap a bitmap fill shows (Swap Bitmap).
     pub bitmap: bool,
     /// Stroke colour or width.
@@ -137,6 +139,10 @@ pub fn of(doc: &Document, all: &[Arc<Element>]) -> Mixed {
             _ => None,
         })),
         fill: differ(shapes.iter().map(|s| s.fill.as_ref())),
+        fill_alpha: differ_f32(shapes.iter().filter_map(|s| match s.fill {
+            Some(Paint::Solid(c)) => Some(c.sanitized().a),
+            _ => None,
+        })),
         bitmap: differ(shapes.iter().filter_map(|s| match &s.fill {
             Some(Paint::Bitmap { bitmap, .. }) => Some(*bitmap),
             _ => None,
@@ -337,9 +343,13 @@ mod tests {
         select(&mut s, &[r2]);
         run(&mut s, "element.set_fill", json!({"color": "#00ff00"}));
         select(&mut s, &[r1, r2]);
-        assert!(mixed(&s).fill);
+        assert!(mixed(&s).fill && !mixed(&s).fill_alpha);
+        select(&mut s, &[r2]);
+        run(&mut s, "element.set_fill", json!({"color": "#00ff0080"}));
+        select(&mut s, &[r1, r2]);
+        assert!(mixed(&s).fill && mixed(&s).fill_alpha);
         run(&mut s, "element.set_fill", json!({"color": "#0000ff"}));
-        assert!(!mixed(&s).fill);
+        assert!(!mixed(&s).fill && !mixed(&s).fill_alpha);
         // Fill on beside fill off is mixed.
         select(&mut s, &[r1]);
         run(&mut s, "element.set_fill", json!({"color": null}));

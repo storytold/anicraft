@@ -451,6 +451,7 @@ fn enabled(app: &App, id: &str) -> bool {
         "modify.lines_to_fills" => selected_shape(app, |sh| sh.stroke.is_some()),
         "modify.expand_fill" => selected_shape(app, |sh| sh.fill.is_some()),
         "modify.soften_fill_edges" => selected_shape(app, |sh| sh.fill.as_ref().is_some_and(|f| !matches!(f, anicraft_engine::doc::Paint::Bitmap { .. }))),
+        "modify.smooth" | "modify.straighten" | "modify.optimize" => selected_shape(app, |sh| sh.warp.is_none()),
         // Convert Audio to Keyframes and Auto Lip-Sync read a sound on this timeline (ADR 0114).
         "sound.to_keyframes" | "sound.lip_sync" => app.s.timeline().layers.iter().any(|l| l.has_sounds()),
         // Data bindings (ADR 0118): one instance and a table to bind; bindings to remove or bake.
@@ -465,6 +466,7 @@ fn enabled(app: &App, id: &str) -> bool {
         "modify.group" => !app.s.selection.is_empty(),
         "modify.ungroup" => app.s.selected_elements().iter().any(|(_, e)| matches!(e.kind, anicraft_engine::doc::ElementKind::Group { .. })),
         "modify.union" | "modify.intersect" | "modify.punch" | "modify.crop" => app.s.selected_elements().iter().filter(|(_, e)| matches!(e.kind, anicraft_engine::doc::ElementKind::Shape(_))).count() >= 2,
+        "modify.create_object" => selected_shape(app, |sh| sh.merge),
         "scene.prev" | "scene.move_up" => app.s.scene > 0,
         "view.guides_clear" => !app.s.guides().is_empty(),
         "scene.next" | "scene.move_down" => app.s.scene + 1 < app.s.doc.scenes.len(),

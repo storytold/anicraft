@@ -367,14 +367,25 @@ fn drag_ghost(app: &App, ctx: &egui::Context) {
     painter.galley(at, galley, color(Type::Body));
 }
 
-/// A new folder in the selected row's folder (or the selected folder), opened, selected and
-/// ready to be named.
-fn new_folder(app: &mut App) {
-    let parent = match app.library.sel.as_slice() {
+/// The folder a new item or folder goes into: the selected folder, or the selected item's folder.
+fn target_folder(app: &App) -> Option<FolderId> {
+    match app.library.sel.as_slice() {
         [LibraryEntry::Folder(f)] => Some(*f),
         [one] => app.s.doc.parent_of(*one),
         _ => None,
-    };
+    }
+}
+
+/// Opens the Create New Symbol dialog targeting the selected folder (or the top level).
+fn new_symbol(app: &mut App) {
+    let parent = target_folder(app);
+    crate::new_symbol::open_in(app, parent);
+}
+
+/// A new folder in the selected row's folder (or the selected folder), opened, selected and
+/// ready to be named.
+fn new_folder(app: &mut App) {
+    let parent = target_folder(app);
     if let Some(p) = parent {
         app.library.expanded.insert(p);
     }
@@ -410,9 +421,14 @@ pub fn panel(app: &mut App, ui: &mut egui::Ui) {
     if doc.library_items().next().is_none() && doc.library_tree.folders.is_empty() {
         let key = |id: &str| app.keymap.primary(id).map(crate::platform::shortcut_label).unwrap_or_default();
         ui.label(text(Type::Caption, tr!("No symbols, images or sounds yet. Select artwork and press {convert} to make a symbol, or import an image or a sound with {import}.", convert = key("modify.convert_to_symbol"), import = key("file.import"))));
-        if ui.button(tr!("New Folder")).clicked() {
-            new_folder(app);
-        }
+        ui.horizontal(|ui| {
+            if ui.button(tr!("New Symbol…")).clicked() {
+                crate::new_symbol::open(app);
+            }
+            if ui.button(tr!("New Folder")).clicked() {
+                new_folder(app);
+            }
+        });
         return;
     }
     toolbar(app, ui);
@@ -631,6 +647,11 @@ fn list_ui(app: &mut App, ui: &mut egui::Ui, list: &[Row], unused: &HashSet<Libr
             app.library.keys = true;
         }
         resp.context_menu(|ui| {
+            if ui.button(tr!("New Symbol…")).clicked() {
+                ui.close();
+                app.library.sel.clear();
+                crate::new_symbol::open(app);
+            }
             if ui.button(tr!("New Folder")).clicked() {
                 ui.close();
                 app.library.sel.clear();
@@ -739,6 +760,10 @@ fn row_menu(app: &mut App, ui: &mut egui::Ui, e: LibraryEntry) {
         ui.close();
         start_rename(app, e);
     }
+    if ui.button(tr!("New Symbol…")).clicked() {
+        ui.close();
+        new_symbol(app);
+    }
     if ui.button(tr!("New Folder")).clicked() {
         ui.close();
         new_folder(app);
@@ -767,9 +792,13 @@ fn row_menu(app: &mut App, ui: &mut egui::Ui, e: LibraryEntry) {
     }
 }
 
-/// New Folder and Delete, and placing the current item.
+/// New Symbol, New Folder and Delete, and placing the current item.
 fn actions_row(app: &mut App, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
+        let new_tip = a11y::with_key(tr!("New Symbol"), app.keymap.primary("library.new_symbol"));
+        if crate::timeline::icon_button(ui, &new_tip, None, Icon::Plus).clicked() {
+            new_symbol(app);
+        }
         if crate::timeline::icon_button(ui, tr!("New Folder"), None, Icon::FolderPlus).clicked() {
             new_folder(app);
         }

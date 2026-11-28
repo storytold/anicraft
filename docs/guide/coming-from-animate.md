@@ -45,6 +45,7 @@ Each tool has the key you already know.
 |---|---|---|
 | Selection | **V** | Selects raw strokes and fills with the dot pattern; drag an edge to bend it. |
 | Subselection | **A** | Points and handles, on raw drawings and drawing objects. |
+| Lasso | **L** | Freehand loop selection (Polygon mode and Magic Wand aren't there yet). |
 | Free Transform | **Q** | Scale, skew (drag the line between two handles), rotate and move; Shift and Alt as you'd expect. Drag the white circle to move the transformation point, double-click it to centre it; a rotated instance's box turns with it. |
 | Gradient Transform | **F** | Its own button (no flyouts yet). Gradient and bitmap fills, with Lock Fill. |
 | Width | **U** | Variable-width strokes, with profiles in Properties. |
@@ -67,7 +68,7 @@ Each tool has the key you already know.
 | Zoom | **Z** | |
 | Object Drawing | **J** | Toggles between merge drawing and drawing objects. |
 
-Not in AniCraft yet: the Lasso, Polygon and Magic Wand tools, the 3D tools,
+Not in AniCraft yet: the Polygon (lasso) and Magic Wand tools, the 3D tools,
 Asset Warp, the Paint Brush and Fluid Brush, Deco and the Spray Brush. More on the tools in
 [Drawing](drawing.md).
 

@@ -10,7 +10,7 @@
 use crate::merge::{Part, remerge_with};
 use crate::params::*;
 use crate::{CommandSpec, EngineError, Result, Session};
-use anicraft_doc::{ColorEffect, Element, ElementId, ElementKind, LayerId, MAX_GROUP_DEPTH, Shape};
+use anicraft_doc::{ColorEffect, Element, ElementId, ElementKind, LayerId, MAX_GROUP_DEPTH, Paint, Shape};
 use anicraft_geom::planar::{self, Item};
 use anicraft_geom::{Affine, FillRule, Path, Rect, Vec2};
 use serde_json::{Value, json};
@@ -51,6 +51,15 @@ pub fn specs() -> Vec<CommandSpec> {
         c("modify.intersect", "Intersect", "Modify/Combine Objects", None, "{} combine with op intersect", true, |s, _| combine(s, Op::Intersect)),
         c("modify.punch", "Punch", "Modify/Combine Objects", None, "{} combine with op punch", true, |s, _| combine(s, Op::Punch)),
         c("modify.crop", "Crop", "Modify/Combine Objects", None, "{} combine with op crop", true, |s, _| combine(s, Op::Crop)),
+        c(
+            "modify.create_object",
+            "Create Object",
+            "Modify/Combine Objects",
+            None,
+            "{} turns the selected raw shapes on the active layer into a drawing object (a group of the merged pieces when they have more than one colour or keep lines) → {created}",
+            true,
+            create_object,
+        ),
     ]
 }
 
@@ -299,10 +308,14 @@ fn result_of(s: &mut Session, pieces: Vec<Arc<Element>>) -> Option<Element> {
 
 const TOO_LARGE: &str = "the shapes are too complex to combine at once";
 
-fn combine(s: &mut Session, op: Op) -> Result<Value> {
+/// A keyframe's elements and the selected shapes among them, bottom to top, with their index.
+type SelectedShapes = (Vec<Arc<Element>>, Vec<(usize, Arc<Element>)>);
+
+/// The selected shapes on the active layer, bottom to top, with their index in the keyframe.
+fn selected_shapes(s: &mut Session, one_layer_err: &str) -> Result<SelectedShapes> {
     let sel = s.selection.on(s.layer);
     if s.selected_layers().len() > 1 {
-        return Err(EngineError::State("Combine Objects works on one layer: select shapes on one layer".into()));
+        return Err(EngineError::State(one_layer_err.into()));
     }
     let els = s.editable_keyframe()?.elements.clone();
     // The selected shapes, bottom to top, with their index.
@@ -313,9 +326,51 @@ fn combine(s: &mut Session, op: Op) -> Result<Value> {
             _ => return Err(EngineError::State("Combine Objects works on shapes and drawing objects: break symbols, text and groups apart first (Ctrl+B)".into())),
         }
     }
+    Ok((els, shapes))
+}
+
+fn create_object(s: &mut Session, _: &Value) -> Result<Value> {
+    let (els, shapes) = selected_shapes(s, "Create Object works on one layer: select raw shapes on one layer")?;
+    if shapes.is_empty() {
+        return Err(EngineError::State("select raw shapes to turn into a drawing object".into()));
+    }
+    if !shapes.iter().any(|(_, e)| crate::merge::mergeable(e).is_some()) {
+        return Err(EngineError::State("the selection is drawing objects already: select raw shapes to turn into a drawing object".into()));
+    }
+    if shapes.iter().any(|(_, e)| matches!(&e.kind, ElementKind::Shape(sh) if !sh.merge && sh.warp.is_some() && matches!(sh.fill, Some(Paint::Bitmap { .. })))) {
+        return Err(EngineError::State("Create Object can't keep the warp of a warped bitmap fill: remove its warp first (Modify › Asset Warp › Remove Warp)".into()));
+    }
+    if shapes.len() == 1 {
+        let Some((i, e)) = shapes.into_iter().next() else {
+            return Err(EngineError::State("select raw shapes to turn into a drawing object".into()));
+        };
+        let mut obj = Arc::unwrap_or_clone(e);
+        if let ElementKind::Shape(sh) = &mut obj.kind {
+            sh.merge = false;
+        }
+        let id = obj.id;
+        let mut out = els;
+        if let Some(slot) = out.get_mut(i) {
+            *slot = Arc::new(obj);
+        }
+        s.editable_keyframe()?.elements = out;
+        s.select_only([id]);
+        return Ok(json!({"created": [id.0]}));
+    }
+    let created = combine_shapes(s, Op::Union, els, shapes)?;
+    Ok(json!({"created": created.iter().map(|e| e.0).collect::<Vec<_>>()}))
+}
+
+fn combine(s: &mut Session, op: Op) -> Result<Value> {
+    let (els, shapes) = selected_shapes(s, "Combine Objects works on one layer: select shapes on one layer")?;
     if shapes.len() < 2 {
         return Err(EngineError::State("select two or more shapes to combine".into()));
     }
+    let created = combine_shapes(s, op, els, shapes)?;
+    Ok(json!({"op": format!("{op:?}").to_ascii_lowercase(), "created": created.iter().map(|e| e.0).collect::<Vec<_>>()}))
+}
+
+fn combine_shapes(s: &mut Session, op: Op, els: Vec<Arc<Element>>, shapes: Vec<(usize, Arc<Element>)>) -> Result<Vec<ElementId>> {
     let shape = |e: &Element| match &e.kind {
         ElementKind::Shape(sh) => Some(sh.clone()),
         _ => None,
@@ -367,6 +422,9 @@ fn combine(s: &mut Session, op: Op) -> Result<Value> {
             }
         }
     }
+    if open_groups(s) + 1 > MAX_GROUP_DEPTH && results.iter().any(|(_, r)| r.as_ref().is_some_and(|e| matches!(e.kind, ElementKind::Group { .. }))) {
+        return Err(EngineError::State(format!("groups nest at most {MAX_GROUP_DEPTH} deep")));
+    }
     // The sources go; each result takes its source's place.
     let gone: HashSet<usize> = shapes.iter().map(|x| x.0).collect();
     let mut created = Vec::new();
@@ -386,7 +444,7 @@ fn combine(s: &mut Session, op: Op) -> Result<Value> {
     }
     s.editable_keyframe()?.elements = out;
     s.select_only(created.iter().copied());
-    Ok(json!({"op": format!("{op:?}").to_ascii_lowercase(), "created": created.iter().map(|e| e.0).collect::<Vec<_>>()}))
+    Ok(created)
 }
 
 /// The area `path` fills even-odd, from its flattening: each loop's area, added or taken away by

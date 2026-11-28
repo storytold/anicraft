@@ -2,6 +2,99 @@
 
 ## Unreleased
 
+* **Third issue batch** (M8, ADR 0136; backlog P-012, P-018, P-020, P-021). Fifteen pull
+  requests from outside, merged with their commits and listed below, by Yusuf Mantam (YusufMntm),
+  Ap3pp3rs94 and Will Makes (WillMakes), with these fixes on top:
+  * **A gradient edited from a script stays a gradient** (#626). `paint.set_fill` with no
+    `type` gave the fill swatch's kind to every selected shape, so adding a colour stop to a
+    selected radial fill made it a solid colour whenever the swatch was solid. Each fill now
+    keeps its own kind, and the fill swatch becomes the gradient the picker shows.
+  * **Fill alpha changes only the opacity** (#645): with several shapes selected each keeps
+    its own colour, and gradient and bitmap fills are left alone (`element.set_fill {alpha}`).
+  * **Straighten keeps a thin closed fill** instead of flattening it to a line with no area,
+    and **Optimize Curves says how many curves it removed** in the status bar (#510).
+  * **Pulling handles out of a point where more than two lines meet** says why nothing
+    happened (#615).
+  * **Save… in the Brush row** offers a name only for one of your own brushes (#632), and
+    **New Symbol** offers the symbol types in Convert to Symbol's order, starting from the
+    type you last chose (#655).
+  * **Create Motion Tween asks before it makes a symbol** (#604, ADR 0136): raw artwork, a
+    bitmap, a group or several objects become one symbol, of the type you pick; from the
+    command line the command converts and reports the symbol it made.
+  * `camera.set` documents that an edit on a held frame lands on the keyframe that holds it
+    (#673), and `library.new_symbol` answers `{symbol}`.
+  * **A click in History while an edit is still open** (a slider held) no longer fails with
+    "nothing to redo": the open edit becomes its step first.
+  * Not in this batch: stroke joins where separately drawn lines meet (#589, outside PR #620,
+    backlog P-058): the fix is held until its work for each frame is bounded.
+* **Adding a colour stop to a gradient keeps it a gradient** (#626): clicking the colour-stop bar
+  (or changing Overflow, Linear RGB or Focal point) on a selected linear or radial fill when the
+  tool's fill swatch held a different fill type no longer switches the fill to the swatch's type.
+* **Free Transform: Alt-drag moves a copy** (#643). The Selection tool already did this; now a
+  move with Free Transform also leaves the original artwork unchanged and drags its duplicate.
+  The duplicate and the whole move are one undo step, for drawing objects and raw artwork alike.
+* **Fill alpha in Properties** (#645): selecting a shape with a solid fill now shows a **Fill
+  alpha** slider (0–100 %) directly under **Fill** in the Properties panel, keeping the fill's RGB
+  colour as you drag in one undo step and showing **mixed** when selected shapes differ in opacity.
+* **Alt draws a rectangle or oval from its centre** (#637): holding Alt while dragging with the
+  Rectangle or Oval tool grows the shape symmetrically about the press point, and combines with
+  Shift for a centred square or circle.
+
+* **Alt while rotating with Free Transform turns about the opposite corner** (#629): holding Alt
+  while dragging just outside a corner rotates the selection about the corner diagonally opposite
+  the one grabbed instead of the transformation point, and works together with Shift's 15° snap.
+* **Save a brush from Properties** (#632): the **Brush** row in Properties now has a **Save…**
+  button beside **Library…** that opens the Brush Library with the name field focused (and
+  pre-filled with the active preset's name, if any), ready to name and save the current Brush
+  or Paint Brush settings.
+* **Eraser: Match Brush tip** (#636): ticking **Match Brush tip** in the Eraser's options erases
+  with the Brush tool's size, shape, angle and roundness, previews the Brush's tip on the stage,
+  and edits the shared size and shape from either tool (including `[` and `]`).
+* **View Only the Active Layer keeps an active folder's contents and clears the header icons**
+  (#653): with the toggle on and a folder active, the layers inside it (nested folders included,
+  respecting closed folders) stay listed; in a narrow layers column the **Layers** heading steps
+  aside so the toggle never overlaps the all-layers eye.
+
+* **Insert › New Symbol…** (Ctrl+F8, #655): creates a new, empty graphic, movie clip or button
+  symbol in the Library (optionally inside a folder) and opens it for editing without placing an
+  instance on the stage. Also available from the Library panel's New Symbol button and as
+  `library.new_symbol`.
+* **Create Object in Properties** (#614). With raw (merge-drawing) shapes selected, Properties
+  now shows a **Create Object** button (also **Modify › Combine Objects › Create Object**,
+  `modify.create_object`) that turns one or more selected raw shapes on the active layer—including
+  a partial marquee selection—into a drawing object in one undo step (or a group of the merged
+  pieces when they have several colours or keep lines, as Union does).
+* **Subselection: Alt-drag an anchor to pull out curve handles** (#615). Holding **Alt** and
+  dragging from an anchor point pulls out mirrored Bézier handles live on both drawing objects
+  and merged drawings (**Shift** constrains to 45° steps; one undo step). An **Alt**-click
+  without dragging leaves the shape unchanged, and **Alt** on a handle still moves that handle
+  alone. Headless: optional `handle: [dx, dy]` on `path.convert_point` and `raw.convert_points`
+  (plus `merge?: bool` on `raw.convert_points`).
+* **Modify › Shape: Smooth, Straighten and Optimize Curves** (#510).
+  * **Smooth** (`modify.smooth`) softens curves and evens out small bumps on selected lines and
+    fill outlines, repeatable and keeping open endpoints fixed.
+  * **Straighten** (`modify.straighten`) turns nearly straight segments into lines, flattens
+    gentle curves toward their chord and collapses nearly collinear line runs.
+  * **Optimize Curves…** (`modify.optimize`) removes extra points while keeping sharp corners and
+    the shape's look, with a strength slider (0–100 %) and optional multiple passes, returning the
+    before and after point counts.
+* **Lasso tool (L)** (#515, backlog P-018). Draw a freehand loop on the stage to cut out and
+  select the parts of merged fills and lines inside it and pick objects wholly inside it, across
+  every visible, unlocked layer (**Shift** adds, **Esc** cancels, a click on empty stage clears).
+  Headless: `raw.select_area {points, add?}` (even-odd rule for self-intersecting loops; ready
+  for a straight-edged Polygon mode to call the same command).
+
+
+* **Create Motion Tween asks before converting raw artwork to a symbol** (#604).
+  * Running **Insert › Create Motion Tween** (or the timeline, Properties or Motion Editor buttons)
+    on raw shapes, a bitmap, a group or several objects now asks before converting the artwork to
+    a symbol, lets you choose the symbol type (reusing Convert to Symbol's choices and default),
+    and leaves the document unchanged on Cancel. A keyframe that already holds a single symbol
+    instance creates the tween directly with no dialog.
+  * Headless `timeline.create_motion_tween` now accepts an optional `kind` (`graphic`,
+    `movie_clip` or `button`, default `graphic`) and reports the created `symbol`, `symbol_name`
+    and `symbol_kind` whenever it converts artwork, still in one undo step.
+
 ## 0.3.0 (2026-11-28)
 
 The first release since 0.2.1 (2026-11-12). It carries everything listed below, from the Flash 8 to

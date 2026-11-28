@@ -116,10 +116,9 @@ pub struct SliderLook {
     pub logarithmic: bool,
 }
 
-/// A slider and its number field, both named. (egui's own number field beside a slider is
-/// anonymous unless the slider shows a text label, which our form rows already have on the
-/// left.) Returns both as one response: `changed`, `drag_stopped` and the rest cover either.
-pub fn slider<N: egui::emath::Numeric>(ui: &mut egui::Ui, value: &mut N, range: std::ops::RangeInclusive<N>, name: &str, look: SliderLook) -> Response {
+/// A slider and its number field, both named, returned separately so a dialog can check focus on
+/// the numeric field itself (since `Response::union` keeps only the bar's id).
+pub fn slider_parts<N: egui::emath::Numeric>(ui: &mut egui::Ui, value: &mut N, range: std::ops::RangeInclusive<N>, name: &str, look: SliderLook) -> (Response, Response) {
     let mut s = egui::Slider::new(&mut *value, range.clone()).show_value(false).logarithmic(look.logarithmic);
     if let Some(step) = look.step {
         s = s.step_by(step);
@@ -132,6 +131,14 @@ pub fn slider<N: egui::emath::Numeric>(ui: &mut egui::Ui, value: &mut N, range: 
         field = field.max_decimals(d);
     }
     let num = ui.add(field).named(name);
+    (bar, num)
+}
+
+/// A slider and its number field, both named. (egui's own number field beside a slider is
+/// anonymous unless the slider shows a text label, which our form rows already have on the
+/// left.) Returns both as one response: `changed`, `drag_stopped` and the rest cover either.
+pub fn slider<N: egui::emath::Numeric>(ui: &mut egui::Ui, value: &mut N, range: std::ops::RangeInclusive<N>, name: &str, look: SliderLook) -> Response {
+    let (bar, num) = slider_parts(ui, value, range, name, look);
     bar.union(num)
 }
 

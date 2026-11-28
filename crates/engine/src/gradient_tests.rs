@@ -242,3 +242,58 @@ fn a_raw_fill_keeps_its_id_through_a_drag_of_its_gradient() {
     }
     assert!(near(&stage_frame(&s, id), &Affine { m: [80.0, 0.0, 0.0, 50.0, 150.0, 150.0] }));
 }
+
+/// #626: with no `type`, each fill keeps the kind it has. The swatch's kind used to be forced
+/// on the selection, so a stop added to a selected radial fill under a solid swatch made the
+/// shape solid.
+#[test]
+fn set_fill_without_a_type_keeps_each_fills_own_kind() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 10, "y": 10, "w": 100, "h": 60, "fill": "#336699", "object": true}));
+    run(&mut s, "paint.set_fill", json!({"type": "radial"}));
+    // The tool's swatch goes back to a solid colour; the shape stays selected and radial.
+    run(&mut s, "paint.set_fill", json!({"type": "solid", "color": "#ffffff", "selection": false}));
+    let fill = |s: &Session| match &s.visible_elements().first().expect("the rectangle").kind {
+        ElementKind::Shape(sh) => sh.fill.clone().expect("a fill"),
+        other => panic!("not a shape: {other:?}"),
+    };
+    let before = fill(&s);
+    let stops = json!([{"offset": 0, "color": "#ff0000"}, {"offset": 0.5, "color": "#00ff00"}, {"offset": 1, "color": "#0000ff"}]);
+    let r = run(&mut s, "paint.set_fill", json!({"stops": stops, "spread": "reflect"}));
+    let after = fill(&s);
+    assert!(matches!(after, Paint::Radial { spread: Spread::Reflect, .. }), "still radial, with the new overflow: {after:?}");
+    assert_eq!(after.stops().map(<[_]>::len), Some(3), "it took the stops");
+    assert_eq!(after.frame(None), before.frame(None), "and lies where it lay");
+    assert_eq!(r["changed"], 1);
+    assert_eq!(r["fill"]["type"], "solid", "the swatch keeps its own kind too");
+    // A colour alone still asks for a solid fill.
+    run(&mut s, "paint.set_fill", json!({"color": "#102030"}));
+    assert!(matches!(fill(&s), Paint::Solid(_)));
+}
+
+/// #645: `element.set_fill {alpha}` changes only the opacity of solid fills. Sending a whole
+/// colour, as the Fill alpha row first did, gave every selected shape the first one's colour
+/// and replaced gradients.
+#[test]
+fn fill_alpha_alone_keeps_each_colour_and_leaves_gradients() {
+    let mut s = Session::default();
+    let a = run(&mut s, "draw.rect", json!({"x": 10, "y": 10, "w": 50, "h": 50, "fill": "#ff0000", "stroke": null, "object": true}))["element"].as_u64().unwrap();
+    let b = run(&mut s, "draw.rect", json!({"x": 100, "y": 10, "w": 50, "h": 50, "fill": "#0000ff", "stroke": null, "object": true}))["element"].as_u64().unwrap();
+    let g = run(&mut s, "draw.rect", json!({"x": 200, "y": 10, "w": 50, "h": 50, "fill": "#00ff00", "stroke": null, "object": true}))["element"].as_u64().unwrap();
+    run(&mut s, "paint.set_fill", json!({"type": "linear"}));
+    let gradient = shape(&s, g).0.fill;
+    run(&mut s, "element.select", json!({"ids": [a, b, g]}));
+    let r = run(&mut s, "element.set_fill", json!({"alpha": 0.25}));
+    assert_eq!(r["changed"], 2);
+    let solid = |s: &Session, id: u64| match shape(s, id).0.fill {
+        Some(Paint::Solid(c)) => c,
+        other => panic!("not solid: {other:?}"),
+    };
+    let (ca, cb) = (solid(&s, a), solid(&s, b));
+    assert!(ca.a < 1.0 && ca.a == cb.a, "both took the opacity: {ca:?} {cb:?}");
+    assert!(ca.r > ca.b && cb.b > cb.r, "and each kept its colour: {ca:?} {cb:?}");
+    assert_eq!(shape(&s, g).0.fill, gradient, "the gradient is as it was");
+    for bad in [json!({"alpha": 1.5}), json!({"alpha": -0.1}), json!({"alpha": "half"})] {
+        assert!(s.execute("element.set_fill", &bad).is_err(), "{bad}");
+    }
+}

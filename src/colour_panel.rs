@@ -273,7 +273,21 @@ fn gradient_swatches(ui: &mut egui::Ui, paint: Option<&Paint>) -> Option<FillEdi
 /// A gradient: overflow, Linear RGB and the focal point, the stop bar, the picked stop's
 /// position, and the colour picker for its colour.
 fn gradient(ui: &mut egui::Ui, popup: Id, stops: &[GradientStop], spread: Spread, linear_rgb: bool, focal: Option<f32>) -> Option<FillEdit> {
-    let set = |label: &'static str, live: bool, params: Value| Some(FillEdit::Set { label, live, params });
+    // Every edit names the whole gradient shown, not only the part that changed: the fill
+    // swatch then becomes this gradient too (as the reference app's Color panel sets the tool's
+    // fill), instead of a white-to-black one of the same kind when the swatch held a solid
+    // colour while a gradient was selected (#626).
+    let kind = if focal.is_some() { "radial" } else { "linear" };
+    let set = |label: &'static str, live: bool, params: Value| {
+        let mut all = json!({"type": kind, "stops": stops_json(stops), "spread": spread.key(), "linear_rgb": linear_rgb});
+        if let (Some(f), Some(o)) = (focal, all.as_object_mut()) {
+            o.insert("focal".into(), json!(f));
+        }
+        if let (Some(o), Some(changed)) = (all.as_object_mut(), params.as_object()) {
+            o.extend(changed.clone());
+        }
+        Some(FillEdit::Set { label, live, params: all })
+    };
     let mut out = None;
     let mut sp = spread;
     ui.horizontal(|ui| {
@@ -287,12 +301,12 @@ fn gradient(ui: &mut egui::Ui, popup: Id, stops: &[GradientStop], spread: Spread
         }
     });
     if sp != spread {
-        out = set(tr_noop!("Overflow"), false, json!({"spread": sp.key()}));
+        out = set(tr_noop!("Overflow"), false, json!({"type": kind, "spread": sp.key()}));
     }
     ui.horizontal(|ui| {
         let mut lin = linear_rgb;
         if crate::theme::checkbox(ui, &mut lin, tr!("Linear RGB")).on_hover_text(tr!("Mix the colours in linear light: brighter, more even blends")).changed() {
-            out = set(tr_noop!("Linear RGB"), false, json!({"linear_rgb": lin}));
+            out = set(tr_noop!("Linear RGB"), false, json!({"type": kind, "linear_rgb": lin}));
         }
         if let Some(f) = focal {
             ui.add_space(8.0);
@@ -301,14 +315,14 @@ fn gradient(ui: &mut egui::Ui, popup: Id, stops: &[GradientStop], spread: Spread
             let lim = MAX_FOCAL * 100.0;
             let r = with_type(ui, Type::Data, |ui| ui.add(egui::DragValue::new(&mut pct).suffix(" %").speed(0.5).range(-lim..=lim).max_decimals(0)));
             if r.named(tr!("Focal point")).on_hover_text(tr!("Where the ramp starts, from the centre along the gradient's axis (drag the triangle with the Gradient Transform tool)")).changed() {
-                out = set(tr_noop!("Focal point"), true, json!({"focal": (pct / 100.0).clamp(-MAX_FOCAL, MAX_FOCAL)}));
+                out = set(tr_noop!("Focal point"), true, json!({"type": kind, "focal": (pct / 100.0).clamp(-MAX_FOCAL, MAX_FOCAL)}));
             }
         }
     });
     ui.add_space(4.0);
     let mut edited = stops.to_vec();
     if let Some((label, live)) = stop_bar(ui, popup, &mut edited) {
-        out = set(label, live, json!({"stops": stops_json(&edited)}));
+        out = set(label, live, json!({"type": kind, "stops": stops_json(&edited)}));
     }
     out
 }
@@ -640,5 +654,93 @@ mod tests {
             labels = out.platform_output.accesskit_update.map(|u| u.nodes.into_iter().filter_map(|(_, n)| n.label().map(str::to_string)).collect::<Vec<_>>().join("\n")).unwrap_or_default();
         }
         assert!(labels.contains("Alpha"), "the fill picker has no Alpha control:\n{labels}");
+    }
+
+    /// Adding a stop (or changing an option) on a selected radial fill keeps it radial even when
+    /// the tool's fill swatch holds a solid colour (#626).
+    #[test]
+    fn adding_a_stop_to_a_selected_radial_fill_keeps_it_radial() {
+        use anicraft_engine::doc::{ColorEffect, Element, ElementId, Shape};
+        use anicraft_engine::geom::{Affine, Path};
+        use egui::accesskit::{Node, TreeUpdate};
+        use egui::{Event, PointerButton, Pos2};
+        use std::sync::Arc;
+
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        crate::theme::apply(&ctx);
+        let mut s = anicraft_engine::Session::default();
+        let original = vec![stop(0.0, 0xfffbe0), stop(0.6, 0xffd36b), stop(1.0, 0xffa94d)];
+        let sun_shape = Shape::filled(Path::ellipse(0.0, 0.0, 90.0, 90.0), Paint::radial(Vec2::ZERO, 90.0, original.clone()));
+        let sun_id = ElementId(s.doc.alloc_id());
+        let sun = Arc::new(Element { id: sun_id, name: "sun".into(), transform: Affine::translate(1040.0, 150.0), color: ColorEffect::default(), kind: ElementKind::Shape(sun_shape) });
+        Arc::make_mut(&mut Arc::make_mut(&mut s.doc.timeline_mut(0).layers[0]).keyframes[0]).elements.push(sun);
+        let mut app = App::with_context(&ctx, s, Some(PathBuf::from("unused.png")));
+        app.tool = Tool::Select;
+        app.run("edit.select_all", json!({}));
+        // The tool swatch is still its default solid colour while the selection is radial.
+        assert!(app.s.style.fill_paint.is_none());
+        assert!(matches!(current(&app), (Paint::Radial { .. }, true)));
+
+        let id = Id::unique("sun_fill_popup");
+        let run_picker = |ctx: &egui::Context, paint: &Paint, events: Vec<Event>| -> (Option<FillEdit>, TreeUpdate) {
+            let mut edit = None;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 600.0))), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| edit = fill_picker(ui, id, Some(paint), &[]));
+            out.textures_delta.clear();
+            (edit, out.platform_output.accesskit_update.expect("the accessibility tree"))
+        };
+        let find = |t: &TreeUpdate, label: &str| -> Rect {
+            t.nodes
+                .iter()
+                .map(|(_, n)| n)
+                .find(|n| n.label() == Some(label))
+                .and_then(Node::bounds)
+                .map(|b| Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32)))
+                .unwrap_or_else(|| panic!("no control labelled {label:?}"))
+        };
+        let click = |ctx: &egui::Context, paint: &Paint, at: Pos2| -> Option<FillEdit> {
+            let button = |pressed| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            run_picker(ctx, paint, vec![Event::PointerMoved(at)]);
+            run_picker(ctx, paint, vec![button(true)]);
+            run_picker(ctx, paint, vec![button(false)]).0
+        };
+
+        let paint = current(&app).0;
+        let _ = run_picker(&ctx, &paint, Vec::new());
+        let (_, tree) = run_picker(&ctx, &paint, Vec::new());
+        let bar = find(&tree, "Gradient: add a colour stop");
+        let at = pos2(bar.left() + bar.width() * 0.3, bar.center().y);
+        let edit = click(&ctx, &paint, at).expect("clicking the stop bar asks for an edit");
+        apply_set(&mut app, &edit, true);
+
+        match current(&app).0 {
+            Paint::Radial { center, radius, stops, .. } => {
+                assert_eq!(stops.len(), original.len() + 1, "a 4th stop was added: {stops:?}");
+                for orig in &original {
+                    assert!(stops.iter().any(|s| (s.offset - orig.offset).abs() < 1e-4 && bytes(s.color) == bytes(orig.color)), "missing original stop {orig:?} in {stops:?}");
+                }
+                assert_eq!((center, radius), (Vec2::ZERO, 90.0), "the radial geometry stayed put");
+            }
+            other => panic!("expected radial fill after adding a stop, got {other:?}"),
+        }
+
+        // The swatch is the gradient that was edited, stops and all, not a new white-to-black one.
+        assert_eq!(app.s.style.fill_paint().stops().map(<[_]>::len), Some(original.len() + 1), "the fill swatch follows the picker");
+        // Changing a gradient option (Overflow) with a solid swatch also keeps it radial and keeps its stops.
+        app.s.style.fill_paint = None;
+        let paint = current(&app).0;
+        let (_, tree) = run_picker(&ctx, &paint, Vec::new());
+        let reflect = find(&tree, "Reflect").center();
+        let edit = click(&ctx, &paint, reflect).expect("clicking Reflect asks for an edit");
+        apply_set(&mut app, &edit, true);
+        match current(&app).0 {
+            Paint::Radial { stops, spread, .. } => {
+                assert_eq!(spread, Spread::Reflect);
+                assert_eq!(stops.len(), original.len() + 1);
+            }
+            other => panic!("expected radial fill after changing overflow, got {other:?}"),
+        }
+        assert_eq!(app.s.style.fill_paint().stops().map(<[_]>::len), Some(original.len() + 1), "an option alone carries the stops to the swatch");
     }
 }

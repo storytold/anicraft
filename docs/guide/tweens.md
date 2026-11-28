@@ -155,8 +155,10 @@ and the colour effects) has **property keyframes** wherever you need them.
 1. Place an object on a keyframe.
 2. With the playhead on that span, choose **Insert › Create Motion Tween**.
 
-If the keyframe holds several objects, they become one graphic symbol first. If the span is only
-one frame long, it grows to a second's worth of frames. Both work as they do in Animate.
+If the keyframe holds raw artwork (ungrouped shapes, a bitmap, a group) or several objects, AniCraft
+asks before converting it into one symbol and lets you choose the symbol type (Movie clip, Graphic
+or Button); cancelling leaves the document unchanged. If the span is only one frame long, it grows
+to a second's worth of frames.
 
 ### Adding property keyframes
 

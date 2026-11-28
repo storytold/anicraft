@@ -18,6 +18,7 @@ your hand.
 |---|---|---|
 | Selection | **V** | Select, move and bend artwork |
 | Subselection | **A** | Edit points and curve handles |
+| Lasso | **L** | Select an irregular area with a freehand loop |
 | Free Transform | **Q** | Scale, skew, rotate and move |
 | Gradient Transform | **F** | Move, turn and stretch a gradient or bitmap fill |
 | Width | **U** | Vary a line's thickness along it |
@@ -70,8 +71,10 @@ Properties. The setting applies to the Rectangle, Oval, PolyStar, Line, Pen, Pen
 tools.
 
 The Eraser only erases merged drawing. Drawing objects, symbols and text are left alone by
-it. To turn a drawing object back into merged drawing, select it and choose **Modify › Break
-Apart** (**Ctrl+B**): it merges with the merged shapes it touches.
+it. To turn merged shapes into a drawing object, select them and click **Create Object** in
+Properties (or choose **Modify › Combine Objects › Create Object**). To turn a drawing object
+back into merged drawing, select it and choose **Modify › Break Apart** (**Ctrl+B**): it
+merges with the merged shapes it touches.
 
 To change a drawing object's shape, **double-click** it (or select it and press **Ctrl+E**).
 It opens in place, as a group does (see [Grouping](#grouping)): the rest of the stage dims, and
@@ -113,11 +116,23 @@ whatever you moved merges with what it lands on.
 The marquee, **Shift**-click and **Edit › Select All** (**Ctrl+A**) work across every visible,
 unlocked layer at once. **Edit › Deselect All** is **Ctrl+Shift+A**.
 
+### The Lasso tool
+
+The **Lasso** (**L**) selects an irregular area. Drag a freehand loop on the stage and let go:
+the loop closes automatically back to where you started. On every visible, unlocked layer, the
+parts of merged fills and lines inside the loop are cut at its edges and selected, and objects
+(drawing objects, groups, symbols, text and bitmaps) wholly inside the loop are selected.
+
+Hold **Shift** to add to the selection, press **Esc** while dragging to cancel, or click on empty
+stage to clear the selection. As with the marquee, clicking away without editing heals cut raw
+shapes back whole. To move or transform what you selected, switch to the **Selection** (**V**) or
+**Free Transform** (**Q**) tool.
+
 ## Drawing shapes and lines
 
-* **Rectangle** (**R**): drag to draw. **Shift** draws a square. Set **Corners** in the
-  options for rounded corners.
-* **Oval** (**O**): drag to draw. **Shift** draws a circle.
+* **Rectangle** (**R**): drag to draw. **Shift** draws a square, **Alt** draws from the
+  centre. Set **Corners** in the options for rounded corners.
+* **Oval** (**O**): drag to draw. **Shift** draws a circle, **Alt** draws from the centre.
 * **PolyStar**: drag from the centre to draw a polygon or a star. Its options (Animate's Tool
   Settings) are the **Shape**, **Polygon** or **Star**; **Sides** (or **Points**), 3 to 32;
   and for a star, the **Point size**, 0 to 1: near 0 the points are thin spikes, and at 1 the
@@ -184,7 +199,9 @@ other paint, and the same stroke always comes out the same. The **Charcoal** and
 brushes in the Brush menu use them.
 
 The Brush and the Paint Brush keep their settings (size, tip, smoothing, pressure and the rest)
-when you close AniCraft, each tool its own.
+when you close AniCraft, each tool its own. Click **Save…** on the **Brush** row in Properties
+to open the **Brush Library** ready to name and save the current settings as one of your own
+brushes.
 
 **Tilt.** Brushes can follow a pen's tilt: the tip turns with the way the pen leans (so a flat
 nib follows your hand), and paints wider as it leans, up to twice as wide lying flat. A mouse
@@ -208,6 +225,9 @@ The **Subselection** tool (**A**) shows and edits the points of a shape:
 * **Drag** a point to move it with the other selected points, and every shape sharing it.
 * **Drag a handle** to change the curve. A smooth point keeps its two handles in line, and
   **Alt** moves one alone.
+* **Alt-drag a point** to pull out mirrored curve handles, turning a corner into a smooth
+  curve (**Shift** snaps to 45° steps). An **Alt**-click without moving leaves the point as it
+  is.
 * **Double-click** an edge to add a point. The curve keeps its shape.
 * **Delete** removes the selected points, joining the shape across them. A point where three
   or more lines meet stays, and the status bar says why.
@@ -300,7 +320,8 @@ the drawing. To fade a whole symbol instance, or to tween a fade, use the colour
 ### Line styles
 
 With shapes selected, **Properties** has a **Fill** and a **Stroke** row, each with a swatch and
-an on/off checkbox. Turning a fill or a stroke off and on again brings back the colour,
+an on/off checkbox. When the fill is a solid colour, a **Fill alpha** slider right below **Fill**
+sets its opacity directly (0–100 %). Turning a fill or a stroke off and on again brings back the colour,
 gradient or line it had. With only an outline selected (double-click it), turning **Fill** on
 fills what the outline surrounds. The stroke **width** stops at a hairline (0.1) when you drag
 it all the way down; the checkbox is what removes a stroke.
@@ -375,9 +396,11 @@ swatch only.
 ### Eraser
 
 The **Eraser** (**E**) rubs out merged lines and fills on the active layer. It uses the same
-tip as the Brush (**[** and **]** change its size). Choose a **Mode** in the options: **Erase
-Normal**, **Erase Fills**, **Erase Lines**, **Erase Selected Fills** or **Erase Inside**,
-which erases only the fill where your stroke starts.
+kind of tip as the Brush (**[** and **]** change its size). Tick **Match Brush tip** in the
+options to erase with the Brush tool's size, shape, angle and roundness; changing the size or
+shape with either tool then updates both. Choose a **Mode** in the options: **Erase Normal**,
+**Erase Fills**, **Erase Lines**, **Erase Selected Fills** or **Erase Inside**, which erases
+only the fill where your stroke starts.
 
 Tick **Faucet** to delete a whole fill or line with a single click. **Erase Everything…**, or
 a double-click on the Eraser tool, clears every visible, unlocked layer at the current frame.
@@ -393,7 +416,7 @@ changes everywhere it's used.
 
 ### Lines to fills, expanding and softening fills
 
-**Modify › Shape** has three commands for the selected shapes.
+**Modify › Shape** has commands for changing the geometry of selected shapes.
 
 **Convert Lines to Fills** turns each selected line into a fill of the line's exact outline,
 in the line's colour: its caps, joins, dashes, dots and width profile included. Use it to
@@ -423,6 +446,26 @@ fill and its bands are selected afterwards, so you can group them (**Ctrl+G**) o
 
 Both dialogs remember what you entered. Each command is one undo step.
 
+### Smoothing, straightening and optimizing curves
+
+**Modify › Shape** also has three curve clean-up commands for selected lines and fill outlines.
+
+**Smooth** softens bends and evens out small bumps, softening sharp corners a little each time
+while keeping open endpoints in place. Run it again to smooth further; nearby segments that fit
+together merge as the curve relaxes.
+
+**Straighten** turns nearly straight segments into straight lines and pulls deeper curves closer
+to their chord, collapsing nearly collinear line runs. Run it again to flatten curves further.
+
+**Optimize Curves…** removes unnecessary points while keeping the shape's look and sharp corners.
+**Strength** (0–100 %) controls how far a refitted curve may move from the original; turn on
+**Multiple passes** to keep simplifying until the point count stops dropping. The dialog remembers
+its last settings.
+
+Lines keep their stroke width, caps, joins, dashes and width profile; fills keep their paint.
+Raw shapes merge back into the drawing and drawing objects stay objects. Each command is one
+undo step.
+
 ## Transforming artwork
 
 With the **Free Transform** tool (**Q**), drag a handle (a corner or the middle of an edge) to
@@ -430,7 +473,8 @@ With the **Free Transform** tool (**Q**), drag a handle (a corner or the middle 
 scales about the transformation point instead),
 the line between two handles to **skew** (the opposite edge stays where it is; **Alt** skews
 about the transformation point), just outside a corner to **rotate** (the pointer turns
-into a curved arrow there; **Shift** snaps to 15°), or inside the box to **move**.
+into a curved arrow there; **Shift** snaps to 15°, **Alt** rotates about the opposite corner),
+or inside the box to **move**.
 
 One selected object shows **its own box**: turn a symbol, a group, text or a drawing object
 and its box turns with it, so you can see how it stands, and its handles stretch it along its
@@ -586,6 +630,9 @@ topmost shape is the one on top in the stacking order.
 * **Punch** cuts the top shape's area out of the shapes under it, and removes the top shape.
 * **Crop** keeps only the parts of the shapes under it that are inside the top shape, and
   removes the top shape.
+* **Create Object** turns one or more selected merged shapes on the active layer into a drawing
+  object (or a group of the merged pieces when they have several colours or keep lines). With
+  raw shapes selected, **Create Object** also appears in **Properties**.
 
 The top shape cuts with its fill, so it needs one. Break symbols, text and groups apart first
 (**Ctrl+B**).

@@ -32,11 +32,11 @@ AniCraft is an independent, open-source project, and is not affiliated with or e
 | Area | Done (ours included) | Partial | Missing | Won't do |
 |---|---|---|---|---|
 | Workspace and panels | 23 | 5 | 4 | 2 |
-| Tools | 19 | 7 | 7 | 1 |
-| Drawing model | 16 | 3 | 4 | 0 |
+| Tools | 20 | 7 | 6 | 1 |
+| Drawing model | 16 | 4 | 3 | 0 |
 | Colour | 8 | 1 | 2 | 2 |
 | Text | 8 | 5 | 5 | 2 |
-| Symbols and Library | 13 | 3 | 4 | 0 |
+| Symbols and Library | 14 | 3 | 3 | 0 |
 | Timeline | 16 | 2 | 9 | 0 |
 | Tweens and the Motion Editor | 12 | 2 | 4 | 0 |
 | Bones and rigging | 8 | 2 | 3 | 0 |
@@ -52,7 +52,7 @@ AniCraft is an independent, open-source project, and is not affiliated with or e
 | Accessibility | 4 | 2 | 1 | 0 |
 | Preferences and shortcuts | 6 | 2 | 0 | 1 |
 | Automation | 4 | 2 | 1 | 1 |
-| **All** | **198** | **53** | **70** | **27** |
+| **All** | **200** | **54** | **67** | **27** |
 
 The counts are of the rows below, so they weigh a small feature like a large one. The backlog,
 not this table, says what matters most.
@@ -104,10 +104,10 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Feature | Status | Notes | Headless |
 |---|---|---|---|
 | Selection | **partial** | Raw shapes, objects, marquee, bend an edge, move a corner ([ADR 0041](adr/0041-selection-tool-on-raw-drawings.md), [ADR 0044](adr/0044-selection-across-layers.md)). A marquee takes the instances and objects it touches, and View › Hide Edges hides the selection's marks ([ADR 0134](adr/0134-outside-parity-batch-zoom-outlines-and-egui-0-37.md)). Missing: a preference for the marquee to take only what it surrounds; the first-use hint about fills and outlines (P-017). |
-| Subselection | **done** | [ADR 0042](adr/0042-subselection-and-merging-everywhere.md), [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md). |
+| Subselection | **done** | [ADR 0042](adr/0042-subselection-and-merging-everywhere.md), [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md). Alt-drag an anchor pulls out mirrored curve handles ([#615](https://github.com/storytold/anicraft/issues/615)). |
 | Free Transform | **partial** | Scale, skew, rotate, the transformation point, a box that turns with the object ([ADR 0111](adr/0111-the-transformation-point-a-turning-box-and-layer-opacity.md)), Envelope ([ADR 0080](adr/0080-drawing-parity-leftovers.md)). Missing: Distort. Open bug: rotation on Windows and FreeBSD ([#479](https://github.com/storytold/anicraft/issues/479)), not reproduced on Windows 10 (P-005). |
 | Gradient Transform | **done** | Gradient and bitmap fills, Lock Fill. |
-| Lasso | **missing** | P-018 ([#515](https://github.com/storytold/anicraft/issues/515)). |
+| Lasso | **done** | Freehand loop selection ([#515](https://github.com/storytold/anicraft/issues/515)); cuts raw shapes and selects objects wholly inside (`raw.select_area`, [ADR 0136](adr/0136-the-third-issue-batch-what-merged-what-is-held.md)). |
 | Polygon (lasso) | **missing** | P-018. |
 | Magic Wand | **missing** | P-018. |
 | Pen, with Add, Delete and Convert Anchor Point | **done** | [ADR 0115](adr/0115-pen-parity-and-keep-area-tweens.md). Add, delete and convert are gestures of the Pen and Subselection, not tools of their own. |
@@ -121,7 +121,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Paint Brush (strokes with a brush look) | **partial** | [ADR 0068](adr/0068-brush-library-pressure-curves-and-the-paint-brush.md), [ADR 0093](adr/0093-tilt-textured-brushes-and-profiles-in-the-merge.md): width-profiled strokes, a brush library made of parameters. Missing: art and pattern brushes drawn from artwork (P-028). |
 | Fluid Brush | **partial** | Pressure curves, velocity, tapers and smoothing exist as Brush settings ([ADR 0068](adr/0068-brush-library-pressure-curves-and-the-paint-brush.md)); there is no separate tool. Stroke response is the complaint in [#287](https://github.com/storytold/anicraft/issues/287) and outside PR [#336](https://github.com/storytold/anicraft/issues/336) (P-028). |
 | Pressure and tilt from a tablet | **partial** | Pressure on Windows, macOS and X11. Missing: Linux Wayland (outside PR [#320](https://github.com/storytold/anicraft/issues/320)), tilt on desktop systems (the window library doesn't report it) (P-014; [#290](https://github.com/storytold/anicraft/issues/290)). |
-| Eraser, with modes and the Faucet | **done** | [ADR 0034](adr/0034-eraser-and-eyedropper.md). Pressure on the eraser is missing. |
+| Eraser, with modes and the Faucet | **done** | [ADR 0034](adr/0034-eraser-and-eyedropper.md); **Match Brush tip** shares the Brush's tip settings ([#636](https://github.com/storytold/anicraft/issues/636)). Pressure on the eraser is missing. |
 | Paint Bucket, with gap closing | **done** | [#57](https://github.com/storytold/anicraft/issues/57) can close. |
 | Ink Bottle | **done** | |
 | Eyedropper | **done** | [ADR 0034](adr/0034-eraser-and-eyedropper.md), [ADR 0109](adr/0109-shape-commands-picker-eyedropper-and-transformation-origins.md). |
@@ -143,10 +143,10 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Feature | Status | Notes | Headless |
 |---|---|---|---|
 | Merge drawing: raw strokes and fills that cut and join | **done** | [ADR 0031](adr/0031-merge-drawing.md), [ADR 0041](adr/0041-selection-tool-on-raw-drawings.md), [ADR 0042](adr/0042-subselection-and-merging-everywhere.md), [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md); [drawing](guide/drawing.md). Open bug: a hairline between merged curved fills ([#182](https://github.com/storytold/anicraft/issues/182), P-013). |
-| Object drawing | **done** | Edit inside by double-click. Editing without opening is missing ([#181](https://github.com/storytold/anicraft/issues/181)). |
+| Object drawing | **done** | Edit inside by double-click; **Create Object** in Properties or Modify › Combine Objects turns raw shapes into a drawing object ([#614](https://github.com/storytold/anicraft/issues/614)). Editing without opening is missing ([#181](https://github.com/storytold/anicraft/issues/181)). |
 | Groups, nested, edited in place | **done** | [ADR 0073](adr/0073-groups-combine-objects-and-selection-modifiers.md). |
 | Break Apart | **done** | |
-| Combine Objects: Union, Intersect, Punch, Crop | **done** | [ADR 0073](adr/0073-groups-combine-objects-and-selection-modifiers.md). One layer at a time. |
+| Combine Objects: Union, Intersect, Punch, Crop | **done** | [ADR 0073](adr/0073-groups-combine-objects-and-selection-modifiers.md), plus **Create Object** for raw shapes ([#614](https://github.com/storytold/anicraft/issues/614)). One layer at a time. |
 | Arrange (front, back, forward, backward) | **done** | |
 | Align, distribute | **done** | |
 | Match Size, Space evenly | **done** | `align.match_width`, `align.match_height`, `align.match_size`, `align.space_h`, `align.space_v` (#566). |
@@ -154,7 +154,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Envelope | **done** | [ADR 0080](adr/0080-drawing-parity-leftovers.md). Shapes and drawing objects only. |
 | Distort | **missing** | P-020. |
 | Modify › Shape: Convert Lines to Fills, Expand Fill, Soften Fill Edges | **done** | [ADR 0109](adr/0109-shape-commands-picker-eyedropper-and-transformation-origins.md). Properties repeats Convert Lines to Fills at the top of a shape's rows; with only a fill selected the button is unavailable. |
-| Modify › Shape: Smooth, Straighten, Advanced Smooth, Optimize | **missing** | P-020 ([#510](https://github.com/storytold/anicraft/issues/510)). |
+| Modify › Shape: Smooth, Straighten, Advanced Smooth, Optimize | **partial** | Smooth, Straighten and Optimize Curves (`modify.smooth`, `modify.straighten`, `modify.optimize`, [#510](https://github.com/storytold/anicraft/issues/510)); Optimize says in the status bar how many curves it removed. Missing: the Advanced Smooth and Advanced Straighten dialogs (P-020). |
 | Stroke styles: solid, dashed, dotted; caps, joins, miter | **done** | [ADR 0046](adr/0046-stroke-caps-joins-and-dashes.md). |
 | Stroke styles: ragged, stipple, hatched | **missing** in authoring | They import from Animate files as solid lines and the report says so† (P-032). |
 | Stroke scale modes and hairlines | **partial** | Hairlines are drawn in outline view only. Missing: Normal, Horizontal, Vertical, None scaling and the hairline style (P-032). |
@@ -171,7 +171,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Feature | Status | Notes | Headless |
 |---|---|---|---|
 | Stroke and fill colours, swap, black and white, none | **done** | |
-| Colour picker: swatches, mixer, hex, alpha | **done** | [#432](https://github.com/storytold/anicraft/issues/432) to [#437](https://github.com/storytold/anicraft/issues/437). |
+| Colour picker: swatches, mixer, hex, alpha | **done** | [#432](https://github.com/storytold/anicraft/issues/432) to [#437](https://github.com/storytold/anicraft/issues/437); a selected solid fill also has a Fill alpha row directly in Properties ([#645](https://github.com/storytold/anicraft/issues/645)). |
 | Live preview on the artwork while pointing at a swatch | **missing** | P-025 ([#436](https://github.com/storytold/anicraft/issues/436)). |
 | Solid, linear and radial fills; overflow modes; linear RGB; focal point | **done** | [ADR 0074](adr/0074-gradient-editor-gradient-transform-and-lock-fill.md). |
 | Bitmap fills | **done** | |
@@ -215,7 +215,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 |---|---|---|---|
 | Graphic, movie clip and button symbols | **done** | [symbols](guide/symbols-and-library.md). |
 | Convert to Symbol, with name, type, folder | **done** | Missing: the registration point grid in the dialog (P-021). |
-| New Symbol (empty, Ctrl+F8) | **missing** | P-021. |
+| New Symbol (empty, Ctrl+F8) | **done** | Insert › New Symbol… (`library.new_symbol`, [#655](https://github.com/storytold/anicraft/issues/655)), and the Library panel's New Symbol button. |
 | Edit in place, edit symbols, the path back | **done** | [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md). A rotated instance opens upright. |
 | Graphic looping: loop, play once, single frame, first frame | **done** | Reverse loop modes import from Animate files†. |
 | Swap Symbol, Duplicate Symbol | **done** | |
@@ -275,7 +275,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Classic ease presets and the custom ease editor | **done** | [ADR 0081](adr/0081-ease-presets-and-custom-eases.md). |
 | Eases per property group on a classic tween | **done** | [ADR 0081](adr/0081-ease-presets-and-custom-eases.md)†. |
 | Classic motion guides | **done** | |
-| Motion tweens: one object, property keyframes | **done** | [ADR 0016](adr/0016-motion-tweens.md). |
+| Motion tweens: one object, property keyframes | **done** | [ADR 0016](adr/0016-motion-tweens.md). Raw artwork, a bitmap, a group or several objects become a symbol first: the window asks first, as the reference app does, and offers its type; the command converts and says what it made ([ADR 0136](adr/0136-the-third-issue-batch-what-merged-what-is-held.md)). |
 | Motion paths edited on the stage | **done** | [ADR 0030](adr/0030-motion-paths.md), [ADR 0038](adr/0038-motion-path-points.md), [ADR 0049](adr/0049-motion-path-pins.md). |
 | Motion Editor: curves per property, eases, handles | **done** | [ADR 0083](adr/0083-motion-editor-and-timeline-retiming.md), [ADR 0092](adr/0092-surviving-gpu-failures-and-motion-editor-filter-tracks.md), [ADR 0099](adr/0099-filter-colour-and-stepped-tracks-built-in-presets-and-filters-on-text.md). |
 | Split, join, retime, stretch a motion tween | **done** | [ADR 0083](adr/0083-motion-editor-and-timeline-retiming.md). |

@@ -116,6 +116,23 @@ fn history_is_bounded_by_memory() {
     assert!(s.can_undo());
 }
 
+/// A History click on a step ahead while an edit is still open (a slider held): the open edit
+/// becomes a step, which leaves nothing ahead, and the click is not an error.
+#[test]
+fn travel_to_ahead_with_an_open_gesture_is_not_an_error() {
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 10, "h": 10}));
+    run(&mut s, "draw.rect", json!({"x": 20, "y": 0, "w": 10, "h": 10}));
+    s.undo().unwrap();
+    assert!(s.can_redo());
+    s.begin_gesture("Move");
+    run(&mut s, "edit.select_all", json!({}));
+    run(&mut s, "element.translate", json!({"dx": 5, "dy": 0}));
+    let v = s.travel_to(2).expect("no error");
+    assert!(!s.can_redo(), "the open edit replaced what was ahead");
+    assert_eq!(v["position"].as_u64(), Some(s.history_len() as u64));
+}
+
 #[test]
 fn travel_to_moves_through_history() {
     let mut s = Session::default();
@@ -901,6 +918,12 @@ fn panic_hunt(only: &str) {
         json!({"x0": 10, "y0": 10, "x1": 45, "y1": 75, "add": true, "from": [1, 2, 3], "snap": 3}),
         json!({"x0": -1e7, "y0": 1e7, "x1": 1e7, "y1": -1e7, "add": false, "from": [45, 45], "snap": 0.2}),
         json!({"x0": 30, "y0": 30, "x1": 30, "y1": 30, "point_slop": -5, "ids": [u64::MAX], "points": "x"}),
+        // Lasso selection (`raw.select_area`, #515): empty, NaN, huge, degenerate, self-crossing and over-limit loops.
+        json!({"points": [], "add": false}),
+        json!({"points": [[0, 0], [f64::NAN, 10], [10, 10]], "add": true}),
+        json!({"points": [[-1e30, 0], [1e30, 1e30], [0, -1e30]], "add": false}),
+        json!({"points": [[0, 0], [100, 100], [100, 0], [0, 100]], "add": false}),
+        json!({"points": (0..10_005).map(|i| json!([i, i % 3])).collect::<Vec<_>>()}),
         // Subselection on raw shapes (ADR 0042): handles that aren't there or move too far,
         // anchors to move along that are hostile, connected sets of anything.
         json!({"id": 3, "cmd": 1, "slot": 2, "dx": 1e30, "dy": 0, "x": 30, "y": 30, "to_x": 31, "to_y": 30, "with": [[30, 30], [1e30, 0]]}),
@@ -1503,6 +1526,55 @@ fn add_delete_and_convert_points() {
 }
 
 #[test]
+fn convert_point_with_handle_pulls_mirrored_curves_and_undoes() {
+    use anicraft_geom::edit::{ANCHOR, C1, C2};
+    let mut s = Session::default();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 80, "object": true}));
+    let id = s.selection.ids().next().unwrap().0;
+    let before = shape_path(&s, id);
+    let a0 = stage_anchor(&s, id, 0);
+    // Zero vector makes no change and adds no undo step.
+    let z = run(&mut s, "path.convert_point", json!({"id": id, "cmd": 0, "smooth": true, "handle": [0, 0]}));
+    assert_eq!(z["changed"], json!(false));
+    assert_eq!(shape_path(&s, id), before);
+    // Bad handle input is rejected.
+    for bad in [json!("nope"), json!([1]), json!([1, null]), json!([1e9, 0])] {
+        assert!(s.execute("path.convert_point", &json!({"id": id, "cmd": 0, "smooth": true, "handle": bad})).is_err(), "{bad}");
+    }
+    // Pull handles on corner 0 (also exercises the implicit closing edge of a rectangle).
+    let drag = Vec2::new(20.0, 30.0);
+    let r = run(&mut s, "path.convert_point", json!({"id": id, "cmd": 0, "smooth": true, "handle": [drag.x, drag.y]}));
+    assert_eq!(r["changed"], json!(true));
+    assert!((stage_anchor(&s, id, 0) - a0).length() < 1e-4, "the anchor did not move");
+    let el = s.visible_elements().into_iter().find(|e| e.id.0 == id).unwrap();
+    let ElementKind::Shape(sh) = &el.kind else { panic!() };
+    let (Some(i), Some(o)) = sh.path.anchor_segments(0) else { panic!("two segments at corner: {:?}", sh.path.cmds) };
+    assert!(matches!(sh.path.cmds[i], anicraft_geom::PathCmd::CubicTo(..)) && matches!(sh.path.cmds[o], anicraft_geom::PathCmd::CubicTo(..)));
+    let h_in = el.transform.apply(sh.path.point(i, C2).unwrap());
+    let h_out = el.transform.apply(sh.path.point(o, C1).unwrap());
+    let (v_in, v_out) = (h_in - a0, h_out - a0);
+    assert!(v_out.dot(drag) > 0.0 && v_in.dot(drag) < 0.0, "opposite sides along drag: {v_in:?} {v_out:?}");
+    assert!(v_out.cross(drag).abs() < 1e-3 && v_in.cross(drag).abs() < 1e-3, "collinear with drag: {v_in:?} {v_out:?}");
+    assert!((v_out.length() - drag.length()).abs() < 1e-3 && (v_in.length() - drag.length()).abs() < 1e-3);
+    // Undo restores the straight rectangle in one step.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(shape_path(&s, id), before);
+    // Ends of an open path get one curve handle each.
+    let open = run(&mut s, "draw.path", json!({"d": "M0 0 L100 0 L100 80", "object": true}))["element"].as_u64().unwrap();
+    let start_a = stage_anchor(&s, open, 0);
+    let end_a = stage_anchor(&s, open, 2);
+    run(&mut s, "path.convert_point", json!({"id": open, "cmd": 0, "smooth": true, "handle": [15, -20]}));
+    run(&mut s, "path.convert_point", json!({"id": open, "cmd": 2, "smooth": true, "handle": [10, 25]}));
+    let el = s.visible_elements().into_iter().find(|e| e.id.0 == open).unwrap();
+    let ElementKind::Shape(sh) = &el.kind else { panic!() };
+    assert!(matches!(sh.path.cmds[1], anicraft_geom::PathCmd::CubicTo(..)) && matches!(sh.path.cmds[2], anicraft_geom::PathCmd::CubicTo(..)));
+    assert!((el.transform.apply(sh.path.point(1, C1).unwrap()) - (start_a + Vec2::new(15.0, -20.0))).length() < 1e-3);
+    assert!((el.transform.apply(sh.path.point(2, C2).unwrap()) - (end_a - Vec2::new(10.0, 25.0))).length() < 1e-3);
+    assert!((el.transform.apply(sh.path.point(0, ANCHOR).unwrap()) - start_a).length() < 1e-3);
+    assert!((el.transform.apply(sh.path.point(2, ANCHOR).unwrap()) - end_a).length() < 1e-3);
+}
+
+#[test]
 fn pencil_modes() {
     let mut s = Session::default();
     let wave: Vec<[f32; 2]> = (0..=200).map(|i| [100.0 + i as f32, 100.0 + (i as f32 * 0.05).sin() * 30.0]).collect();
@@ -1859,6 +1931,7 @@ fn animate_default_keys_map_to_the_same_commands() {
         ("Shift+,", "timeline.first_frame"),
         ("Shift+.", "timeline.last_frame"),
         ("F8", "modify.convert_to_symbol"),
+        ("Ctrl+F8", "library.new_symbol"),
         ("Ctrl+Enter", "control.test_movie"),
         ("Ctrl+B", "modify.break_apart"),
         ("Ctrl+Shift+Z", "modify.remove_transform"),

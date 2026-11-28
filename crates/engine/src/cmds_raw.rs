@@ -11,11 +11,11 @@ use crate::cmds_draw::MAX_EXTENT;
 use crate::merge::{self, Part, mergeable, reach};
 use crate::params::*;
 use crate::{CommandSpec, CutOrigin, EngineError, Result, Session};
-use anicraft_doc::{Element, ElementId, ElementKind, LayerId};
+use anicraft_doc::{Element, ElementId, ElementKind, LayerId, Shape};
 use anicraft_geom::planar::SNAP;
 use anicraft_geom::raw::{self as rawgeom, Cubic};
 use anicraft_geom::walk::cubic_point;
-use anicraft_geom::{Path, PathCmd, Rect, Vec2};
+use anicraft_geom::{Affine, Path, PathCmd, Rect, Vec2, segment_distance};
 use serde_json::{Value, json};
 use std::collections::BTreeSet;
 use std::sync::Arc;
@@ -49,6 +49,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{x0, y0, x1, y1, add?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects it touches",
             true,
             select_rect,
+        ),
+        c(
+            "raw.select_area",
+            "Lasso Selection",
+            "",
+            None,
+            "{points: [[x, y], ..] (a loop in stage coordinates, closed automatically; 3..=10000 points, refuse more; self-intersecting loops use the even-odd rule), add?: bool} the Lasso, on every visible, unlocked layer: the parts of raw fills and strokes inside the loop (cut at its edges, per layer) and the objects whose bounding box (all four corners, with no loop edge crossing its interior) lies wholly inside it; fewer than 3 distinct points or zero area behaves like a zero-size marquee",
+            true,
+            select_area,
         ),
         c("raw.merge", "Merge Shapes", "", None, "{ids?: [..]} the raw shapes (default: the selection) merge again with the raw shapes they touch, in place", true, merge_cmd),
         c("raw.hit", "Selection Tool Target", "", None, "{x, y, slop?, point_slop?} what a Selection-tool drag from (x, y) takes: a point, a segment to bend, a fill, or an object", false, hit),
@@ -728,6 +737,303 @@ fn marquee_layer(s: &mut Session, r: &Rect, mut picked: Vec<ElementId>, partial:
     Ok((cut, origin, inside_all))
 }
 
+// ----- the lasso --------------------------------------------------------------------------------
+
+/// Required list of `[x, y]` stage positions for `raw.select_area` (at most [`MAX_POINTS`],
+/// finite and within [`MAX_EXTENT`]).
+fn area_points_param(p: &Value, key: &str) -> Result<Vec<Vec2>> {
+    let bad = || EngineError::Param(format!("param '{key}' must be a list of [x, y] pairs"));
+    let list = p.get(key).and_then(Value::as_array).ok_or_else(bad)?;
+    if list.len() > MAX_POINTS {
+        return Err(EngineError::Param(format!("param '{key}' has more than {MAX_POINTS} points")));
+    }
+    list.iter()
+        .map(|xy| {
+            let xy = xy.as_array().filter(|a| a.len() == 2).ok_or_else(bad)?;
+            let n = |i: usize| {
+                xy.get(i)
+                    .and_then(Value::as_f64)
+                    .map(|f| f as f32)
+                    .filter(|f| f.is_finite() && f.abs() <= MAX_EXTENT)
+                    .ok_or_else(bad)
+            };
+            Ok(Vec2::new(n(0)?, n(1)?))
+        })
+        .collect()
+}
+
+/// Drops consecutive near-identical vertices and any duplicate closing vertex.
+fn clean_loop(raw: &[Vec2]) -> Vec<Vec2> {
+    let mut out: Vec<Vec2> = Vec::with_capacity(raw.len());
+    for &q in raw {
+        if out.last().is_none_or(|p| p.distance(q) > 1e-6) {
+            out.push(q);
+        }
+    }
+    while out.len() > 1 && out.last().zip(out.first()).is_some_and(|(a, b)| a.distance(*b) <= 1e-6) {
+        out.pop();
+    }
+    out
+}
+
+/// Whether `pts` has fewer than 3 distinct points or all points are collinear (zero enclosed area).
+fn loop_is_degenerate(pts: &[Vec2]) -> bool {
+    let Some(&a) = pts.first() else { return true };
+    if pts.len() < 3 {
+        return true;
+    }
+    let (ax, ay) = (f64::from(a.x), f64::from(a.y));
+    let mut best_d2 = 0.0f64;
+    let mut far = (ax, ay);
+    for &p in &pts[1..] {
+        let (dx, dy) = (f64::from(p.x) - ax, f64::from(p.y) - ay);
+        let d2 = dx * dx + dy * dy;
+        if d2 > best_d2 {
+            best_d2 = d2;
+            far = (f64::from(p.x), f64::from(p.y));
+        }
+    }
+    let len = best_d2.sqrt();
+    if len <= 1e-6 {
+        return true;
+    }
+    let (ux, uy) = (far.0 - ax, far.1 - ay);
+    let max_perp = pts
+        .iter()
+        .map(|p| ((ux * (f64::from(p.y) - ay) - uy * (f64::from(p.x) - ax)).abs()) / len)
+        .fold(0.0f64, f64::max);
+    max_perp <= 1e-6
+}
+
+/// Whether `p` lies inside the closed polygon `pts` under the even-odd rule.
+fn poly_contains_even_odd(pts: &[Vec2], p: Vec2) -> bool {
+    let (px, py) = (f64::from(p.x), f64::from(p.y));
+    let n = pts.len();
+    let mut inside = false;
+    for i in 0..n {
+        let (a, b) = (pts[i], pts[(i + 1) % n]);
+        let (ax, ay, bx, by) = (f64::from(a.x), f64::from(a.y), f64::from(b.x), f64::from(b.y));
+        if (ay > py) != (by > py) && px < ax + (py - ay) * (bx - ax) / (by - ay) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// Whether `p` lies within `tol` of segment `a..b`.
+fn point_on_seg(p: [f64; 2], a: [f64; 2], b: [f64; 2], tol: f64) -> bool {
+    let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
+    let l2 = dx * dx + dy * dy;
+    let t = if l2 > 1e-24 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };
+    let (qx, qy) = (a[0] + t * dx, a[1] + t * dy);
+    let (ex, ey) = (p[0] - qx, p[1] - qy);
+    ex * ex + ey * ey <= tol * tol
+}
+
+/// Whether `p` lies inside (even-odd) or on the boundary of `pts`.
+fn poly_contains_or_edge(pts: &[Vec2], p: Vec2) -> bool {
+    if poly_contains_even_odd(pts, p) {
+        return true;
+    }
+    let q = [f64::from(p.x), f64::from(p.y)];
+    let n = pts.len();
+    (0..n).any(|i| {
+        let (a, b) = (pts[i], pts[(i + 1) % n]);
+        point_on_seg(q, [f64::from(a.x), f64::from(a.y)], [f64::from(b.x), f64::from(b.y)], 1e-4)
+    })
+}
+
+/// Whether segment `a..b` has any point strictly inside the open rectangle `(r.min, r.max)`.
+fn seg_enters_open_rect(a: Vec2, b: Vec2, r: &Rect) -> bool {
+    let (ax, ay, bx, by) = (f64::from(a.x), f64::from(a.y), f64::from(b.x), f64::from(b.y));
+    let (x0, y0, x1, y1) = (f64::from(r.min.x), f64::from(r.min.y), f64::from(r.max.x), f64::from(r.max.y));
+    let (mut lo, mut hi) = (0.0f64, 1.0f64);
+    let clip = |p0: f64, d: f64, min: f64, max: f64, lo: &mut f64, hi: &mut f64| -> bool {
+        if d.abs() <= 1e-18 {
+            p0 > min && p0 < max
+        } else {
+            let (t0, t1) = ((min - p0) / d, (max - p0) / d);
+            let (s0, s1) = if t0 < t1 { (t0, t1) } else { (t1, t0) };
+            *lo = lo.max(s0);
+            *hi = hi.min(s1);
+            *lo < *hi
+        }
+    };
+    clip(ax, bx - ax, x0, x1, &mut lo, &mut hi) && clip(ay, by - ay, y0, y1, &mut lo, &mut hi)
+}
+
+/// Whether segment `a..b` strictly crosses segment `c..d` in the interior of both.
+fn segs_strictly_cross(a: Vec2, b: Vec2, c: Vec2, d: Vec2) -> bool {
+    let cross = |o: Vec2, p: Vec2, q: Vec2| (f64::from(p.x) - f64::from(o.x)) * (f64::from(q.y) - f64::from(o.y)) - (f64::from(p.y) - f64::from(o.y)) * (f64::from(q.x) - f64::from(o.x));
+    let (d1, d2, d3, d4) = (cross(a, b, c), cross(a, b, d), cross(c, d, a), cross(c, d, b));
+    ((d1 > 0.0 && d2 < 0.0) || (d1 < 0.0 && d2 > 0.0)) && ((d3 > 0.0 && d4 < 0.0) || (d3 < 0.0 && d4 > 0.0))
+}
+
+/// Whether the entire bounding box `r` lies inside the closed polygon `pts` (even-odd rule):
+/// all four corners inside or on the boundary, its centre inside, and no loop edge crossing its
+/// interior (handles concave and self-intersecting loops without false positives).
+fn poly_contains_rect(pts: &[Vec2], loop_bounds: &Rect, r: &Rect) -> bool {
+    if !contains(loop_bounds, r) {
+        return false;
+    }
+    let corners = [r.min, Vec2::new(r.max.x, r.min.y), r.max, Vec2::new(r.min.x, r.max.y)];
+    if !corners.iter().all(|&c| poly_contains_or_edge(pts, c)) {
+        return false;
+    }
+    let n = pts.len();
+    if r.width() > 1e-6 && r.height() > 1e-6 {
+        if !poly_contains_even_odd(pts, r.center()) {
+            return false;
+        }
+        !(0..n).any(|i| seg_enters_open_rect(pts[i], pts[(i + 1) % n], r))
+    } else if r.width() > 1e-6 || r.height() > 1e-6 {
+        if !poly_contains_or_edge(pts, r.center()) {
+            return false;
+        }
+        !(0..n).any(|i| segs_strictly_cross(pts[i], pts[(i + 1) % n], r.min, r.max))
+    } else {
+        true
+    }
+}
+
+/// Whether raw shape `sh` (in stage space via `m`, with stage `bounds`) actually overlaps the
+/// closed polygon `pts` (even-odd): a flattened outline point inside or on `pts`, an outline
+/// segment crossing or touching an edge of `pts`, or (for a fill) `pts` lying inside the shape.
+fn shape_overlaps_poly(sh: &Shape, m: &Affine, bounds: &Rect, pts: &[Vec2]) -> bool {
+    let n = pts.len();
+    let padded = bounds.inflate(1e-4);
+    let poly_edges: Vec<(Vec2, Vec2)> = (0..n)
+        .map(|i| (pts[i], pts[(i + 1) % n]))
+        .filter(|&(c, d)| !Rect::from_points(c, d).inflate(1e-4).intersect(&padded).is_empty())
+        .collect();
+    let closed_default = sh.fill.is_some();
+    for pl in sh.path.flatten(m, 0.25) {
+        if pl.points.iter().any(|&p| poly_contains_or_edge(pts, p)) {
+            return true;
+        }
+        let len = pl.points.len();
+        let segs = if pl.closed || closed_default { len } else { len.saturating_sub(1) };
+        for i in 0..segs {
+            let (a, b) = (pl.points[i], pl.points[(i + 1) % len]);
+            let seg_box = Rect::from_points(a, b).inflate(1e-4);
+            for &(c, d) in &poly_edges {
+                if seg_box.intersect(&Rect::from_points(c, d).inflate(1e-4)).is_empty() {
+                    continue;
+                }
+                if segs_strictly_cross(a, b, c, d) || segment_distance(c, a, b) <= 1e-4 {
+                    return true;
+                }
+            }
+        }
+    }
+    sh.fill.is_some() && pts.first().is_some_and(|&q| sh.path.contains(q, m, sh.fill_rule))
+}
+
+/// The Lasso (`raw.select_area`, issue #515): on every visible, unlocked layer, the parts of raw
+/// shapes inside the closed loop (cut at its edges, even-odd rule) and the objects whose bounding
+/// box lies wholly inside it. Designed so a straight-edged polygon mode can call the same command.
+fn select_area(s: &mut Session, p: &Value) -> Result<Value> {
+    let raw_pts = area_points_param(p, "points")?;
+    let add = opt_bool(p, "add")?.unwrap_or(false);
+    if !add {
+        s.selection.clear();
+    }
+    let pts = clean_loop(&raw_pts);
+    if loop_is_degenerate(&pts) {
+        return Ok(json!({"selected": s.selection.id_list(), "cut": 0}));
+    }
+    let mut cutter = Path::new();
+    let mut loop_bounds = Rect::EMPTY;
+    for (i, &q) in pts.iter().enumerate() {
+        loop_bounds.include(q);
+        if i == 0 {
+            cutter.move_to(q);
+        } else {
+            cutter.line_to(q);
+        }
+    }
+    cutter.close();
+    let mut found: Vec<(LayerId, Vec<ElementId>, Vec<ElementId>)> = Vec::new();
+    let layers: Vec<LayerId> = s.timeline().layers.iter().map(|l| l.id).filter(|l| s.gathers(*l)).collect();
+    for l in layers {
+        let (mut picked, mut partial) = (Vec::new(), Vec::new());
+        for e in s.elements_on(l) {
+            let bounds = s.element_bounds_on(l, e.id);
+            if bounds.is_empty() || bounds.intersect(&loop_bounds).is_empty() {
+                continue;
+            }
+            if poly_contains_rect(&pts, &loop_bounds, &bounds) {
+                picked.push(e.id);
+            } else if let Some(sh) = mergeable(&e)
+                && shape_overlaps_poly(sh, &e.transform, &bounds, &pts)
+            {
+                partial.push(e.id);
+            }
+        }
+        if !picked.is_empty() || !partial.is_empty() {
+            found.push((l, picked, partial));
+        }
+    }
+    let mut cut = 0;
+    let (mut origin, mut inside): (CutOrigin, Vec<ElementId>) = (Vec::new(), Vec::new());
+    let mut hit: Vec<LayerId> = Vec::new();
+    for (l, picked, partial) in found {
+        let (n, o, i, took) = s.with_layer(l, |s| lasso_layer(s, &cutter, picked, &partial))?;
+        cut += n;
+        origin.extend(o);
+        inside.extend(i);
+        if took {
+            hit.push(l);
+        }
+    }
+    if !inside.is_empty() {
+        s.pending_cut = Some((origin, inside));
+    }
+    if !hit.contains(&s.layer)
+        && let Some(&top) = hit.first()
+    {
+        s.layer = top;
+    }
+    Ok(json!({"selected": s.selection.id_list(), "cut": cut}))
+}
+
+/// Polygon variant of [`marquee_layer`]: raw shapes partly under `cutter` are cut along it and
+/// the parts inside (even-odd) are selected; `picked` (wholly inside) are selected as-is.
+fn lasso_layer(s: &mut Session, cutter: &Path, mut picked: Vec<ElementId>, partial: &[ElementId]) -> Result<(usize, CutOrigin, Vec<ElementId>, bool)> {
+    let here = s.layer;
+    let mut cut = 0;
+    let (mut origin, mut inside_all) = (Vec::new(), Vec::new());
+    if !partial.is_empty() && on_editable_key(s) {
+        let kf = s.editable_keyframe()?;
+        let existing = kf.elements.clone();
+        let idx: Vec<usize> = existing.iter().enumerate().filter(|(_, e)| partial.contains(&e.id)).map(|(i, _)| i).collect();
+        // Parts already selected (an earlier selection, with Shift) stay selected, cut or not.
+        let parts: Vec<Part> = idx.iter().filter_map(|&i| existing.get(i)).map(|e| Part::Shape(e.as_ref(), s.selection.contains(here, e.id))).collect();
+        match merge::remerge_with(s, &parts, Some(cutter)) {
+            Some(rm) if !rm.inside.is_empty() => {
+                origin = rm.from.iter().filter_map(|&(piece, part)| idx.get(part).and_then(|&i| existing.get(i)).map(|e| (piece, e.id))).collect();
+                cut = rm.inside.len();
+                let gone: Vec<ElementId> = idx.iter().filter_map(|&i| existing.get(i)).map(|e| e.id).collect();
+                s.selection.retain(|l, id| l != here || !gone.contains(&id));
+                let mut inside = rm.inside;
+                inside.extend(rm.picked.iter().filter(|id| !inside.contains(id)).copied().collect::<Vec<_>>());
+                picked.extend(inside.iter().copied());
+                merge::replace(s, &idx, rm.out, false)?;
+                inside_all = inside;
+            }
+            // Only their bounds reached the loop's box: nothing of them lies inside the loop.
+            Some(_) => {}
+            // Too complex to cut at once: select them whole.
+            None => picked.extend(partial.iter().copied()),
+        }
+    } else {
+        picked.extend(partial.iter().copied());
+    }
+    let took = !picked.is_empty();
+    s.selection.extend_on(here, picked);
+    Ok((cut, origin, inside_all, took))
+}
+
 // ----- merging again ----------------------------------------------------------------------------
 
 fn merge_cmd(s: &mut Session, p: &Value) -> Result<Value> {
@@ -745,26 +1051,56 @@ fn merge_cmd(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"selected": s.selection.id_list()}))
 }
 
+/// Which raw elements [`remerge_in_place_mapped`] replaced, and each committed piece's topmost
+/// source element.
+#[derive(Default)]
+pub(crate) struct RemergeMap {
+    pub gone: Vec<ElementId>,
+    pub from: Vec<(ElementId, ElementId)>,
+}
+
 /// Merges the raw shapes `ids` again with the raw shapes they touch, keeping their stacking (an
 /// edit changed them in place). Selected shapes' pieces stay selected.
 pub(crate) fn remerge_in_place(s: &mut Session, ids: &[ElementId]) -> Result<()> {
+    remerge_in_place_mapped(s, ids).map(|_| ())
+}
+
+/// [`remerge_in_place`], returning the pieces that came from `ids` when a merge happened (every
+/// piece when none can be traced; `None` when nothing merged or the merge declined, so `ids`
+/// stayed as edited).
+pub(crate) fn remerge_in_place_ids(s: &mut Session, ids: &[ElementId]) -> Result<Option<Vec<ElementId>>> {
+    let map = remerge_in_place_mapped(s, ids)?;
+    if map.gone.is_empty() {
+        return Ok(None);
+    }
+    let mut mapped: Vec<ElementId> = map.from.iter().filter(|(_, source)| ids.contains(source)).map(|(piece, _)| *piece).collect();
+    if mapped.is_empty() {
+        mapped = map.from.iter().map(|(piece, _)| *piece).collect();
+    }
+    Ok(Some(mapped))
+}
+
+/// [`remerge_in_place`], returning which raw element ids were replaced and each committed piece's
+/// topmost source element id.
+pub(crate) fn remerge_in_place_mapped(s: &mut Session, ids: &[ElementId]) -> Result<RemergeMap> {
     if ids.is_empty() {
-        return Ok(());
+        return Ok(RemergeMap::default());
     }
     let kf = s.editable_keyframe()?;
     let existing = kf.elements.clone();
     let area = existing.iter().filter(|e| ids.contains(&e.id)).filter_map(|e| mergeable(e).map(|sh| reach(sh, &e.transform))).fold(Rect::EMPTY, |r, b| r.union(&b));
     if area.is_empty() {
-        return Ok(());
+        return Ok(RemergeMap::default());
     }
     let touching: Vec<usize> = existing.iter().enumerate().filter(|(_, e)| mergeable(e).is_some_and(|sh| !reach(sh, &e.transform).intersect(&area).is_empty())).map(|(i, _)| i).collect();
     let here = s.layer;
     let parts: Vec<Part> = touching.iter().filter_map(|&i| existing.get(i)).map(|e| Part::Shape(e.as_ref(), s.selection.contains(here, e.id))).collect();
     // Too much to merge at once: the shapes stay as edited.
-    let Some((out, picked)) = merge::remerge(s, &parts) else { return Ok(()) };
+    let Some(rm) = merge::remerge_with(s, &parts, None) else { return Ok(RemergeMap::default()) };
     let gone: Vec<ElementId> = touching.iter().filter_map(|&i| existing.get(i)).map(|e| e.id).collect();
-    merge::replace(s, &touching, out, false)?;
+    let from: Vec<(ElementId, ElementId)> = rm.from.iter().filter_map(|&(piece, part)| touching.get(part).and_then(|&i| existing.get(i)).map(|e| (piece, e.id))).collect();
+    merge::replace(s, &touching, rm.out, false)?;
     s.selection.retain(|l, id| l != here || !gone.contains(&id));
-    s.selection.extend_on(here, picked);
-    Ok(())
+    s.selection.extend_on(here, rm.picked);
+    Ok(RemergeMap { gone, from })
 }

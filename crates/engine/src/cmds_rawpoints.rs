@@ -6,7 +6,7 @@
 //! copy alike: an added point is added to every shape with that edge; a deleted one is joined
 //! across in every shape that has it, so the drawing stays connected.
 
-use crate::cmds_raw::{activate_layer_at, check_extent, follow_edge, positions_param, remerge_in_place, snap_drawn};
+use crate::cmds_raw::{activate_layer_at, check_extent, follow_edge, positions_param, remerge_in_place, remerge_in_place_ids, snap_drawn};
 use crate::merge::{mergeable, reach};
 use crate::params::*;
 use crate::{CommandSpec, EngineError, Result, Session};
@@ -43,7 +43,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert Anchor Points",
             "",
             None,
-            "{points: [[x, y], ..], smooth: bool} makes the raw anchors at those positions smooth (their handles in one line) or corners (handles drawn in), in every shape that has them",
+            "{points: [[x, y], ..], smooth: bool, handle?: [dx, dy], merge?: bool} makes the raw anchors at those positions smooth (their handles in one line; with handle, mirrored at anchor ± (dx, dy)) or corners (handles drawn in), in every shape that has them, and merges again (unless merge is false); returns {converted, changed, ids (the resulting element ids after any merge), merged}",
             true,
             convert_points,
         ),
@@ -208,19 +208,40 @@ fn delete_points(s: &mut Session, p: &Value) -> Result<Value> {
 fn convert_points(s: &mut Session, p: &Value) -> Result<Value> {
     let pts = points(p)?;
     let smooth = opt_bool(p, "smooth")?.ok_or_else(|| EngineError::Param("param 'smooth' is required".into()))?;
+    let handle = opt_vec2(p, "handle")?;
+    let merge_after = opt_bool(p, "merge")?.unwrap_or(true);
+    if smooth && handle == Some(Vec2::ZERO) {
+        return Ok(json!({"converted": 0, "changed": 0, "ids": [], "merged": false}));
+    }
     let mut changed: Vec<ElementId> = Vec::new();
     let mut converted = 0usize;
     for at in pts {
         let kf = s.editable_keyframe()?;
         let edges = edges(&near(kf, at), at);
         let edits: Vec<(Seg, Seg)> = if smooth {
-            match edges.as_slice() {
-                [a, b] => rawgeom::smooth_pair(a, b).map(|(na, nb)| vec![(*a, na), (*b, nb)]).unwrap_or_default(),
+            match (edges.as_slice(), handle) {
+                ([a, b], Some(h)) => {
+                    let anchor = a.c[0];
+                    rawgeom::with_handle(a, anchor - h)
+                        .zip(rawgeom::with_handle(b, anchor + h))
+                        .map(|(na, nb)| vec![(*a, na), (*b, nb)])
+                        .unwrap_or_default()
+                }
+                ([a], Some(h)) => {
+                    let anchor = a.c[0];
+                    rawgeom::with_handle(a, anchor + h).map(|na| vec![(*a, na)]).unwrap_or_default()
+                }
+                ([a, b], None) => rawgeom::smooth_pair(a, b).map(|(na, nb)| vec![(*a, na), (*b, nb)]).unwrap_or_default(),
                 _ => Vec::new(),
             }
         } else {
             edges.iter().filter_map(|e| rawgeom::corner(e).map(|n| (*e, n))).collect()
         };
+        for (_, new) in &edits {
+            let mut bounds = Path::new();
+            bounds.move_to(new.c[0]).cubic_to(new.c[1], new.c[2], new.c[3]);
+            check_extent(&bounds)?;
+        }
         converted += usize::from(!edits.is_empty());
         for (old, new) in edits {
             for id in follow_edge(s, None, &old.c, &new.c)? {
@@ -230,8 +251,15 @@ fn convert_points(s: &mut Session, p: &Value) -> Result<Value> {
             }
         }
     }
-    remerge_in_place(s, &changed)?;
-    Ok(json!({"converted": converted, "changed": changed.len()}))
+    let (ids, merged) = if merge_after {
+        match remerge_in_place_ids(s, &changed)? {
+            Some(mapped) => (mapped, true),
+            None => (changed, false),
+        }
+    } else {
+        (changed, false)
+    };
+    Ok(json!({"converted": converted, "changed": ids.len(), "ids": ids.iter().map(|e| e.0).collect::<Vec<_>>(), "merged": merged}))
 }
 
 // ----- snapping while drawing --------------------------------------------------------------------

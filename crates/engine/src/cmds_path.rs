@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
         c("path.move_points", "Move Points", "", None, "{id (a shape, or text on a path: the path it follows, ADR 0107), points: [[cmd, slot], ..], dx, dy, smooth?: bool} (a handle moved alone at a smooth anchor turns the other one with it, keeping its length, unless smooth is false: Alt breaks the pair)", true, move_points),
         c("path.add_point", "Add Anchor Point", "", None, "{id, x, y, slop?}", true, add_point),
         c("path.delete_points", "Delete Anchor Points", "", None, "{id, cmds: [..]}", true, delete_points),
-        c("path.convert_point", "Convert Anchor Point", "", None, "{id, cmd, smooth: bool}", true, convert_point),
+        c("path.convert_point", "Convert Anchor Point", "", None, "{id, cmd, smooth: bool, handle?: [dx, dy]} (with smooth and handle, sets mirrored handles at anchor + (dx, dy) after and anchor - (dx, dy) before; zero handle makes no change)", true, convert_point),
         c(
             "path.extend",
             "Continue Path",
@@ -274,12 +274,49 @@ fn convert_point(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = opt_u64(p, "cmd")?.ok_or_else(|| EngineError::Param("param 'cmd' is required".into()))?;
     let cmd = usize::try_from(cmd).unwrap_or(usize::MAX);
     let smooth = opt_bool(p, "smooth")?.ok_or_else(|| EngineError::Param("param 'smooth' is required".into()))?;
-    edit_shape(s, p, |sh, _| {
-        let path = Arc::make_mut(&mut sh.path);
+    let handle = opt_vec2(p, "handle")?;
+    if smooth && handle == Some(Vec2::ZERO) {
+        let id = ElementId(opt_u64(p, "id")?.ok_or_else(|| EngineError::Param("param 'id' is required".into()))?);
+        let els = s.visible_elements();
+        let el = els.iter().find(|e| e.id == id).ok_or_else(|| EngineError::State(format!("element {} is not on the active layer at this frame", id.0)))?;
+        let path = match &el.kind {
+            ElementKind::Shape(sh) => &*sh.path,
+            ElementKind::Text(t) => match &t.on_path {
+                Some(on) => &on.path,
+                None => return Err(EngineError::State("text has no points to edit; break it apart (Ctrl+B) to edit its outlines, or attach it to a path and edit the path".into())),
+            },
+            ElementKind::Symbol { .. } => return Err(EngineError::State("symbol instances have no points to edit (double-click to edit the symbol)".into())),
+            ElementKind::Camera => return Err(EngineError::State("the camera has no points to edit".into())),
+            ElementKind::Group { .. } => return Err(EngineError::State("a group has no points of its own (double-click it to edit what is inside)".into())),
+        };
         if path.point(cmd, ANCHOR).is_none() {
             return Err(EngineError::Param(format!("no anchor {cmd} on this path")));
         }
-        let changed = if smooth { path.make_smooth(cmd) } else { path.make_corner(cmd) };
+        return Ok(json!({"changed": false}));
+    }
+    edit_shape(s, p, |sh, m| {
+        if sh.path.point(cmd, ANCHOR).is_none() {
+            return Err(EngineError::Param(format!("no anchor {cmd} on this path")));
+        }
+        let path = Arc::make_mut(&mut sh.path);
+        let changed = match (smooth, handle) {
+            (true, Some(h)) => {
+                let inv = m.inverse().ok_or_else(|| EngineError::State("the shape is scaled to zero".into()))?;
+                let local = inv.apply_vector(h);
+                if !local.is_finite() {
+                    return Err(EngineError::Param("the handle is too large".into()));
+                }
+                let before = path.clone();
+                let changed = path.set_smooth_handles(cmd, local);
+                if changed && let Err(e) = check_path(path) {
+                    *path = before;
+                    return Err(e);
+                }
+                changed
+            }
+            (true, None) => path.make_smooth(cmd),
+            (false, _) => path.make_corner(cmd),
+        };
         Ok(json!({"changed": changed}))
     })
 }

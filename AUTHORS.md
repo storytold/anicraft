@@ -40,3 +40,6 @@ People who have contributed to AniCraft. The repository starts from one initial 
 * ViktorBystrov72: stage zoom measured in device pixels, Hide Edges, and fitting the stage to an imported SVG (#590, #588, #587).
 * Neel Patel (N-NeelPatel): Convert Lines to Fills in a shape's properties (#562).
 * rcoenen: an imported Animate file that keeps its name, and the macOS crash on closing the window, with the move to egui 0.37 (#596, #594).
+* Yusuf Mantam (YusufMntm): the Lasso tool, Smooth, Straighten and Optimize Curves, curve handles pulled out with Alt, Create Object, the question before a motion tween makes a symbol, New Symbol, Fill alpha in Properties, shapes drawn from the centre, Alt-rotate about the opposite corner, saving a brush from Properties, the Eraser sharing the Brush's tip, View Only the Active Layer with folders, and the gradient stop fix (#624, #623, #622, #621, #618, #668, #650, #651, #635, #641, #666, #667, #634).
+* Ap3pp3rs94: Alt-drag a copy with Free Transform (#652).
+* Will Makes (WillMakes): `camera.set` saying which keyframe it edited (#674).

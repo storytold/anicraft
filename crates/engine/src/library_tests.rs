@@ -269,6 +269,57 @@ fn convert_to_symbol_picks_a_free_name() {
 }
 
 #[test]
+fn new_symbol_creates_an_empty_symbol_enters_it_and_undoes_in_one_step() {
+    let mut s = Session::default();
+    let before_lib = s.doc.library.len();
+    let before_stage = s.elements_on(s.layer).len();
+    // Explicit name and kind; edit defaults to true and enters the new empty symbol.
+    let v = run(&mut s, "library.new_symbol", json!({"name": "Hero", "kind": "movie_clip"}));
+    let id = SymbolId(v["symbol"].as_u64().unwrap());
+    assert_eq!((v["name"].as_str(), v["kind"].as_str()), (Some("Hero"), Some("movie_clip")));
+    assert_eq!(s.doc.library.len(), before_lib + 1);
+    assert_eq!(s.editing_symbol(), Some(id), "edit defaults to true");
+    let sym = s.doc.symbol(id).expect("in the Library");
+    assert_eq!(sym.kind, anicraft_doc::SymbolKind::MovieClip);
+    assert_eq!(sym.timeline.layers.len(), 1);
+    assert_eq!(sym.timeline.layers[0].keyframes.len(), 1);
+    assert!(sym.timeline.layers[0].keyframes[0].elements.is_empty(), "the new symbol starts empty");
+    assert_eq!(instances(&s, id.0), 0, "nothing is placed on the stage");
+    // Undo removes the symbol and leaves symbol editing in one step.
+    s.undo().unwrap();
+    assert_eq!(s.doc.library.len(), before_lib);
+    assert!(s.doc.symbol(id).is_none());
+    assert_eq!(s.editing_symbol(), None);
+    assert_eq!(s.elements_on(s.layer).len(), before_stage);
+    // Redo brings it back and re-enters it.
+    s.redo().unwrap();
+    assert!(s.doc.symbol(id).is_some());
+    assert_eq!(s.editing_symbol(), Some(id));
+    run(&mut s, "symbol.exit", json!({"all": true}));
+    // Default name picks a free "Symbol N" that differs from existing names; edit: false stays on stage.
+    let a = run(&mut s, "library.new_symbol", json!({"edit": false}));
+    let b = run(&mut s, "library.new_symbol", json!({"edit": false, "kind": "button"}));
+    assert_eq!(s.editing_symbol(), None, "edit: false does not enter the symbol");
+    assert_ne!(a["name"], b["name"]);
+    assert_eq!(a["kind"], "graphic");
+    assert_eq!(b["kind"], "button");
+    // Folder placement works and duplicates are checked per folder (case aside).
+    let f = folder(&run(&mut s, "library.new_folder", json!({"name": "Cast"})));
+    let in_folder = run(&mut s, "library.new_symbol", json!({"name": "Hero", "folder": f, "edit": false}));
+    assert_eq!(path(&s, in_folder["symbol"].as_u64().unwrap()), "Cast/Hero");
+    // Refusals: duplicate name (case-insensitive), empty/whitespace, slash, unknown kind, missing folder.
+    let lib_before_err = s.doc.library.len();
+    assert!(err(&mut s, "library.new_symbol", json!({"name": "hero"})).contains("already has"));
+    assert!(err(&mut s, "library.new_symbol", json!({"name": "HERO", "folder": f})).contains("already has"));
+    assert!(err(&mut s, "library.new_symbol", json!({"name": ""})).contains("empty"));
+    assert!(err(&mut s, "library.new_symbol", json!({"name": "   "})).contains("empty"));
+    assert!(err(&mut s, "library.new_symbol", json!({"name": "a/b"})).contains("/"));
+    assert!(err(&mut s, "library.new_symbol", json!({"kind": "sprite"})).contains("unknown symbol type"));
+    assert!(err(&mut s, "library.new_symbol", json!({"folder": 999_999})).contains("no folder"));
+    assert_eq!(s.doc.library.len(), lib_before_err, "refused calls add nothing");
+}
+
+#[test]
 fn inside_an_open_symbol_swap_never_nests_and_deleting_it_closes_it() {
     let mut s = Session::default();
     run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 10, "h": 10}));

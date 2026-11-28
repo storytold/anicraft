@@ -63,6 +63,23 @@ pub fn opt_bool(p: &Value, key: &str) -> Result<Option<bool>> {
     }
 }
 
+pub fn opt_vec2(p: &Value, key: &str) -> Result<Option<Vec2>> {
+    match p.get(key) {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::Array(a)) if a.len() == 2 => {
+            let n = |i: usize| -> Result<f32> {
+                let f = a.get(i).and_then(Value::as_f64).ok_or_else(|| bad(key, "a [dx, dy] pair of numbers"))?;
+                if !f.is_finite() || f.abs() > 1e7 {
+                    return Err(bad(key, "a [dx, dy] pair of finite numbers within ±10,000,000"));
+                }
+                Ok(f as f32)
+            };
+            Ok(Some(Vec2::new(n(0)?, n(1)?)))
+        }
+        Some(_) => Err(bad(key, "a [dx, dy] pair of numbers")),
+    }
+}
+
 pub fn opt_color(p: &Value, key: &str) -> Result<Option<Rgba>> {
     match opt_str(p, key)? {
         None => Ok(None),

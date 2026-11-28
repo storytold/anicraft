@@ -410,7 +410,12 @@ pub fn invoke(app: &mut App, id: &str) -> bool {
     let undo = app.undo_key();
     match id {
         "edit.select_all" => select_all(app),
-        "edit.deselect" => app.onion_ui.sel.clear(),
+        "edit.deselect" => {
+            app.onion_ui.sel.clear();
+            if !app.s.selection.is_empty() {
+                return false;
+            }
+        }
         "edit.delete" if has_sel => {
             if let Some(v) = run_on(app, "frames.delete", json!({}), true) {
                 let n = v["deleted"].as_u64().unwrap_or(0) as usize;
@@ -432,6 +437,7 @@ pub fn invoke(app: &mut App, id: &str) -> bool {
         }
         // Paste in Place: onto the keyframes between the markers.
         "edit.paste_in_place" if !app.s.clipboard.is_empty() => {
+            clear_stage_selection(app);
             if let Some(v) = run_on(app, "frames.paste", json!({}), false) {
                 let n = v["keyframes"].as_u64().unwrap_or(0) as usize;
                 app.status_ok(trn!("Pasted in place onto {n} keyframe. {undo} to undo.", "Pasted in place onto {n} keyframes. {undo} to undo.", n, undo = undo));
@@ -475,9 +481,17 @@ fn adopt_selection(app: &mut App) {
     app.onion_ui.sel = picked;
 }
 
+/// Lets go of the playhead's selection (healing any provisional cut) so Edit Multiple Frames
+/// never shows or edits two selections at once.
+fn clear_stage_selection(app: &mut App) {
+    if !app.s.selection.is_empty() {
+        app.run("edit.deselect", json!({}));
+    }
+}
+
 /// Whether a menu command can act with Edit Multiple Frames on (`None`: decided as usual).
 pub fn enabled(app: &App, id: &str) -> Option<bool> {
-    if !editing(app) {
+    if !editing(app) || (app.onion_ui.sel.is_empty() && !app.s.selection.is_empty()) {
         return None;
     }
     let sel = !app.onion_ui.sel.is_empty();
@@ -517,6 +531,7 @@ pub fn context_menu(app: &mut App, ui: &mut egui::Ui) {
 /// A press on the stage with Edit Multiple Frames on: on artwork, select it (unless it is) and
 /// move; elsewhere, a marquee.
 pub fn drag_start(app: &mut App, sp: Pos2, shift: bool, zoom: f32) -> Drag {
+    clear_stage_selection(app);
     let (first, last) = range(app);
     match app.s.multi_frame_pick(first, last, Vec2::new(sp.x, sp.y), 3.0 / zoom.max(1e-3)) {
         Some(it) => {
@@ -544,6 +559,7 @@ pub fn drag_to(app: &mut App, last: &mut Pos2, c: Pos2) {
 
 /// A click: select what is under the pointer (Shift adds or takes away), or nothing.
 pub fn click(app: &mut App, sp: Pos2, shift: bool, zoom: f32) {
+    clear_stage_selection(app);
     let (first, last) = range(app);
     match app.s.multi_frame_pick(first, last, Vec2::new(sp.x, sp.y), 3.0 / zoom.max(1e-3)) {
         Some(it) if shift => match app.onion_ui.sel.iter().position(|s| *s == it) {
@@ -560,6 +576,7 @@ pub fn click(app: &mut App, sp: Pos2, shift: bool, zoom: f32) {
 
 /// A marquee let go: what lies wholly inside it, on every keyframe shown.
 pub fn marquee(app: &mut App, a: Pos2, b: Pos2, shift: bool) {
+    clear_stage_selection(app);
     let r = GRect::from_points(Vec2::new(a.x, a.y), Vec2::new(b.x, b.y));
     let inside: Vec<FrameItem> = items(app).iter().filter(|(_, bb)| !bb.is_empty() && r.contains(bb.min) && r.contains(bb.max)).map(|(it, _)| *it).collect();
     if !shift {
@@ -574,6 +591,7 @@ pub fn marquee(app: &mut App, a: Pos2, b: Pos2, shift: bool) {
 
 /// Select All with Edit Multiple Frames on: every element on every keyframe shown.
 pub fn select_all(app: &mut App) {
+    clear_stage_selection(app);
     app.onion_ui.sel = items(app).iter().map(|(it, _)| *it).collect();
     let n = app.onion_ui.sel.len();
     app.status_ok(trn!("Selected {n} element on the frames between the markers", "Selected {n} elements on the frames between the markers", n));

@@ -14,6 +14,7 @@ use std::path::PathBuf;
 pub enum Tool {
     Select,
     Subselect,
+    Lasso,
     Transform,
     /// Asset Warp (ADR 0079): pins on shapes and bitmaps that bend them.
     Warp,
@@ -71,12 +72,13 @@ impl GapSize {
 }
 
 impl Tool {
-    pub const ALL: [Tool; 24] = [Tool::Select, Tool::Subselect, Tool::Transform, Tool::Warp, Tool::GradientTransform, Tool::Width, Tool::Bone, Tool::Bind, Tool::Pen, Tool::Text, Tool::Pencil, Tool::Brush, Tool::PaintBrush, Tool::Eraser, Tool::Rect, Tool::Oval, Tool::Star, Tool::Line, Tool::PaintBucket, Tool::InkBottle, Tool::Eyedropper, Tool::Camera, Tool::Hand, Tool::Zoom];
+    pub const ALL: [Tool; 25] = [Tool::Select, Tool::Subselect, Tool::Lasso, Tool::Transform, Tool::Warp, Tool::GradientTransform, Tool::Width, Tool::Bone, Tool::Bind, Tool::Pen, Tool::Text, Tool::Pencil, Tool::Brush, Tool::PaintBrush, Tool::Eraser, Tool::Rect, Tool::Oval, Tool::Star, Tool::Line, Tool::PaintBucket, Tool::InkBottle, Tool::Eyedropper, Tool::Camera, Tool::Hand, Tool::Zoom];
 
     pub fn label(self) -> &'static str {
         match self {
             Tool::Select => tr_noop!("Selection"),
             Tool::Subselect => tr_noop!("Subselection"),
+            Tool::Lasso => tr_noop!("Lasso"),
             Tool::Transform => tr_noop!("Free Transform"),
             Tool::Warp => tr_noop!("Asset Warp"),
             Tool::GradientTransform => tr_noop!("Gradient Transform"),
@@ -106,6 +108,7 @@ impl Tool {
         match self {
             Tool::Select => Some("V"),
             Tool::Subselect => Some("A"),
+            Tool::Lasso => Some("L"),
             Tool::Transform => Some("Q"),
             Tool::Warp => Some("Shift+Q"),
             Tool::GradientTransform => Some("F"),
@@ -134,7 +137,8 @@ impl Tool {
     pub fn hint(self) -> &'static str {
         match self {
             Tool::Select => tr_noop!("Click to select, drag to move, drag on empty space to marquee-select. Shift adds to the selection."),
-            Tool::Subselect => tr_noop!("Click a shape to show its points; on a merged drawing, the points of everything connected to it. Drag points or handles to reshape (a shared point moves every shape that has it; a smooth point's handles stay in line, Alt moves one alone); drag a line or fill to move everything connected. Shift adds to the point selection, drag on empty space to marquee points, arrow keys nudge them. Double-click an edge to add a point, Delete removes points, and right-click makes a point smooth or a corner. A motion path's points edit the same way (its ends stay), and so does the path of text on a path (the text follows)."),
+            Tool::Subselect => tr_noop!("Click a shape to show its points; on a merged drawing, the points of everything connected to it. Drag points or handles to reshape (a shared point moves every shape that has it; a smooth point's handles stay in line, Alt moves one alone); Alt-drag an anchor to pull out curve handles; drag a line or fill to move everything connected. Shift adds to the point selection, drag on empty space to marquee points, arrow keys nudge them. Double-click an edge to add a point, Delete removes points, and right-click makes a point smooth or a corner. A motion path's points edit the same way (its ends stay), and so does the path of text on a path (the text follows)."),
+            Tool::Lasso => tr_noop!("Drag a freehand loop to select the parts of raw shapes inside it and objects wholly inside it. Shift adds to the selection, Esc cancels."),
             Tool::Pen => tr_noop!("Click to place corner points, drag to pull smooth handles (Alt moves one handle, Shift keeps 45° steps). Click the first point to close; Enter, Esc or a double-click finishes. Click the last point to make it a corner, drag from it for a new handle, Alt-drag it to draw its curve again; Backspace removes it. On a selected path: click a point to make it a corner and again to delete it, click the outline to add a point, click an open end to continue it. Ctrl-click a path to select it. Points snap to points and lines while Snap to Objects is on."),
             Tool::Text => tr_noop!("Click to type new text, or click text to edit it. Esc or a click elsewhere finishes. The options set the font, size and colour; double-click text with the Selection tool to edit it too."),
             Tool::Pencil => tr_noop!("Drag to draw freehand. The options bar sets Smooth, Straighten or Ink."),
@@ -146,9 +150,9 @@ impl Tool {
             Tool::Bind => tr_noop!("Shows the points of shapes with bones: a square follows one bone, a triangle several. Click a bone to see the points it moves (filled). Click a point, or drag a box around points, to make them follow only that bone; Shift shares the bone with the ones they follow, Ctrl takes them from it. Turn on Paint Weights in Properties to brush the bone's influence on, off or smooth, shown as a heat map."),
             Tool::Warp => tr_noop!("Click a shape or a bitmap to pin it (the first pin covers it with a warp mesh). Drag a pin to bend the artwork around the other pins; with one pin it moves. Click a pin and press Delete to remove it. A pin moved at another frame keys it, and pins tween."),
             Tool::GradientTransform => tr_noop!("Click a shape with a gradient or bitmap fill to show its handles. Drag the centre to move the fill, the square to change its width, the circle to change its size, the knob to rotate it (Shift: 15° steps) and, on a radial gradient, the triangle to move its focal point. A bitmap fill also has a square for its height and diamonds to skew it. Each drag is one undo step."),
-            Tool::Transform => tr_noop!("Drag a handle to scale (Shift keeps proportions, Alt scales from the centre), a line between handles to skew (Alt skews about the centre), just outside a corner to rotate (Shift snaps 15°), inside to move."),
-            Tool::Rect => tr_noop!("Drag to draw a rectangle. Shift draws a square."),
-            Tool::Oval => tr_noop!("Drag to draw an oval. Shift draws a circle."),
+            Tool::Rect => tr_noop!("Drag to draw a rectangle. Shift draws a square, Alt draws from the centre."),
+            Tool::Oval => tr_noop!("Drag to draw an oval. Shift draws a circle, Alt draws from the centre."),
+            Tool::Transform => tr_noop!("Drag a handle to scale (Shift keeps proportions, Alt scales from the centre), a line between handles to skew (Alt skews about the centre), just outside a corner to rotate (Shift snaps 15°, Alt rotates about the opposite corner), inside to move."),
             Tool::Star => tr_noop!("Drag from the centre to draw a star or a polygon (Shape in the options)."),
             Tool::Line => tr_noop!("Drag to draw a line. Shift snaps to 45°."),
             Tool::PaintBucket => tr_noop!("Click inside an outline to fill it (on the layer's lines), or on a fill to recolour it. The gap size closes small openings."),
@@ -245,6 +249,8 @@ pub enum Drag {
     /// pointer to the point. The points that move are `App::raw_points`.
     RawPoint { at: egui::Pos2, off: egui::Vec2 },
     Marquee { start: egui::Pos2, cur: egui::Pos2 },
+    /// Lasso tool (issue #515): freehand loop selection; stage-space points are in `App::lasso`.
+    Lasso,
     /// Edit Multiple Frames (ADR 0047): moving the selection on every keyframe it is on, the
     /// pointer at `last` last frame; or a marquee over them.
     MultiMove { last: egui::Pos2 },
@@ -258,6 +264,8 @@ pub enum Drag {
     /// Subselection: dragging handle `slot` of segment `cmd` of raw shape `id` (ADR 0042); the
     /// pointer was at `last` last frame.
     RawHandle { id: anicraft_engine::doc::ElementId, cmd: usize, slot: u8, last: egui::Pos2 },
+    /// Subselection: Alt-dragging from an anchor to pull out mirrored curve handles.
+    PullHandle { target: crate::pathtools::PullTarget, anchor: anicraft_engine::geom::Vec2, moved: bool },
     /// Subselection: marquee over the selected shapes' anchors.
     PointMarquee { start: egui::Pos2, cur: egui::Pos2 },
     /// Pencil stroke; the samples are in `App::pencil`.
@@ -411,6 +419,8 @@ pub struct App {
     pub prompt: Option<Prompt>,
     /// The Convert to Symbol dialog, and what it chose last (ADR 0053).
     pub convert: Option<crate::convert_symbol::ConvertDialog>,
+    /// The Create New Symbol dialog (Ctrl+F8, #655).
+    pub new_symbol: Option<crate::new_symbol::NewSymbolDialog>,
     /// The Layer Properties dialog while it is open (ADR 0061).
     pub layer_props: Option<crate::layer_props::LayerPropsDialog>,
     /// Open the timeline's Frame View menu on the next frame (screenshots, the audit).
@@ -478,6 +488,8 @@ pub struct App {
     pub pen: Option<pathtools::PenPath>,
     /// Pencil samples of the stroke in progress (stage space).
     pub pencil: Vec<anicraft_engine::geom::Vec2>,
+    /// Lasso loop points in progress (stage space).
+    pub lasso: Vec<anicraft_engine::geom::Vec2>,
     /// A Selection-tool point drag's points (`raw.move_point`'s `points`), and the raw shapes a
     /// bend or point drag changed (merged again when it ends; ADR 0041).
     pub raw_points: serde_json::Value,
@@ -553,7 +565,7 @@ pub struct App {
     pub frame_sel: Option<timeline::FrameSel>,
     pub tl_drag: timeline::TlDrag,
     /// The layer being dragged by its name to another place in the stack (#407).
-    pub tl_layer_drag: Option<anicraft_engine::doc::LayerId>,
+    pub tl_layer_drag: Option<timeline::LayerDrag>,
     /// The layer whose dot is being dragged to its new parent layer in the parenting view
     /// (ADR 0113), and where the dots were drawn this frame.
     pub tl_parent_drag: Option<anicraft_engine::doc::LayerId>,
@@ -847,6 +859,7 @@ impl App {
             left_out_said: false,
             prompt: None,
             convert: None,
+            new_symbol: None,
             layer_props: None,
             tl_frame_view_open: false,
             tl_header_spill: 0.0,
@@ -885,6 +898,7 @@ impl App {
             rect_radius: 0.0,
             pen: None,
             pencil: Vec::new(),
+            lasso: Vec::new(),
             raw_points: serde_json::Value::Null,
             raw_touched: Vec::new(),
             raw_with: Vec::new(),
@@ -1101,6 +1115,13 @@ impl App {
             Ok(v) => {
                 if matches!(id, "edit.copy" | "edit.cut" | "timeline.copy_frames" | "timeline.cut_frames" | "frames.copy" | "frames.cut") {
                     self.copied = true;
+                }
+                // Optimize Curves says what it did, as the reference app's totals message does
+                // (#510): a run that removed nothing is not left looking like a success.
+                if id == "modify.optimize"
+                    && let (Some(before), Some(after)) = (v["before"].as_u64(), v["after"].as_u64())
+                {
+                    self.status_ok(if after < before { tr!("Optimize Curves: {before} curves became {after}", before = before, after = after) } else { tr!("Optimize Curves: nothing to remove at this strength ({before} curves)", before = before) });
                 }
                 if id == "view.hide_edges" {
                     self.status_ok(if self.s.aids.hide_edges { tr!("Selection edges hidden") } else { tr!("Selection edges shown") });
@@ -3508,7 +3529,7 @@ impl App {
 
     /// Any modal (prompt, confirmation, close guard) is open: global shortcuts pause.
     pub fn modal_open(&self) -> bool {
-        self.prompt.is_some() || self.convert.is_some() || self.shape_dialog.is_some() || self.trace.is_some() || self.doc_settings.is_some() || self.audio_keys.is_some() || self.confirm.is_some() || self.tabs.asking() || self.plugin_dialog.is_some() || self.templates.save.is_some() || self.video_import.is_some()
+        self.prompt.is_some() || self.convert.is_some() || self.new_symbol.is_some() || self.shape_dialog.is_some() || self.trace.is_some() || self.doc_settings.is_some() || self.audio_keys.is_some() || self.confirm.is_some() || self.tabs.asking() || self.plugin_dialog.is_some() || self.templates.save.is_some() || self.video_import.is_some()
     }
 
     /// The single entry point for user-initiated commands: asks first when the engine says the
@@ -3803,6 +3824,20 @@ impl App {
             "plugin.run" | "plugin.install" | "plugin.remove" | "plugin.reload" => crate::plugins_ui::status(self, id, v),
             id if id.starts_with("macro.") => crate::macros_ui::done(self, id, v),
             id if id.starts_with("text.") => self.text_note(v),
+            "timeline.create_motion_tween" if v["converted"].as_bool() == Some(true) => {
+                let name = v["symbol_name"].as_str().unwrap_or("");
+                let kind = v["symbol_kind"]
+                    .as_str()
+                    .and_then(|k| match k {
+                        "movie_clip" => Some(anicraft_engine::doc::SymbolKind::MovieClip),
+                        "button" => Some(anicraft_engine::doc::SymbolKind::Button),
+                        "graphic" => Some(anicraft_engine::doc::SymbolKind::Graphic),
+                        _ => None,
+                    })
+                    .map(crate::panels::symbol_kind_label)
+                    .unwrap_or("");
+                self.status_ok(tr!("Converted to {kind} “{name}” and created a motion tween — {undo} to undo", kind = kind, name = name, undo = self.undo_key()));
+            }
             "timeline.remove_frame" => {
                 let n = v["removed"].as_u64().unwrap_or(1);
                 self.status_ok(if n == 1 { tr!("Removed frame — {undo} to undo", undo = self.undo_key()).to_string() } else { trn!("Removed {n} frame — {undo} to undo", "Removed {n} frames — {undo} to undo", n, undo = self.undo_key()) });
@@ -3933,6 +3968,16 @@ impl App {
             crate::convert_symbol::open(self);
             return;
         }
+        if id == "library.new_symbol" {
+            // Empty symbol in the Library, opened for editing (#655).
+            crate::new_symbol::open(self);
+            return;
+        }
+        if id == "timeline.create_motion_tween" {
+            // Ask before converting raw artwork, bitmaps, groups or several objects to a symbol (#604).
+            crate::convert_symbol::open_for_motion_tween(self);
+            return;
+        }
         // A picture copied in another app (a paint program, a screenshot) is what Paste means
         // when it is the newest thing copied (#263).
         if matches!(id, "edit.paste" | "edit.paste_in_place") && self.paste_from_system() {
@@ -3940,13 +3985,17 @@ impl App {
         }
         // Pasted raw artwork floats, selected, until it is deselected (as in Animate), so it
         // can be dragged off what it landed on before the two join (#391).
-        // Modify › Shape › Expand Fill and Soften Fill Edges ask for a distance (ADR 0109).
+        // Modify › Shape › Expand Fill, Soften Fill Edges and Optimize Curves ask for their settings.
         if id == "modify.expand_fill" {
             crate::shape_dialogs::open(self, crate::shape_dialogs::Kind::Expand);
             return;
         }
         if id == "modify.soften_fill_edges" {
             crate::shape_dialogs::open(self, crate::shape_dialogs::Kind::Soften);
+            return;
+        }
+        if id == "modify.optimize" {
+            crate::shape_dialogs::open(self, crate::shape_dialogs::Kind::Optimize);
             return;
         }
         // Modify › Document Settings asks for the stage's size, frame rate and colour (#505;
@@ -4514,7 +4563,7 @@ impl App {
         if play {
             self.toggle_play();
         }
-        if nudge != egui::Vec2::ZERO && crate::onion::editing(self) {
+        if nudge != egui::Vec2::ZERO && crate::onion::editing(self) && !self.onion_ui.sel.is_empty() {
             crate::onion::nudge(self, anicraft_engine::geom::Vec2::new(nudge.x, nudge.y));
         } else if nudge != egui::Vec2::ZERO && !self.s.selection.is_empty() {
             // One undo step: the move, with raw shapes left floating where they land (ADR 0122).
@@ -4954,6 +5003,12 @@ impl App {
             self.raw_anchors.clear();
             self.raw_ends.clear();
         }
+        if self.tool != Tool::Lasso && (self.drag == Drag::Lasso || !self.lasso.is_empty()) {
+            self.lasso.clear();
+            if self.drag == Drag::Lasso {
+                self.drag = Drag::None;
+            }
+        }
         pathtools::upkeep(self);
         crate::motion_path::upkeep(self);
         crate::widthtool::upkeep(self);
@@ -5005,6 +5060,7 @@ impl App {
         crate::drop::frame(self, &ctx);
         self.prompt_window(&ctx);
         crate::convert_symbol::window(self, &ctx);
+        crate::new_symbol::window(self, &ctx);
         crate::shape_dialogs::window(self, &ctx);
         crate::trace_dialog::window(self, &ctx);
         crate::doc_settings::window(self, &ctx);

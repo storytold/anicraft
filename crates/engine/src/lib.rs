@@ -28,7 +28,7 @@ mod cmds_modify;
 mod origin_tests;
 #[cfg(test)]
 mod pivot_tests;
-mod cmds_motion;
+pub mod cmds_motion;
 mod cmds_retime;
 mod cmds_hints;
 mod cmds_layer;
@@ -546,6 +546,7 @@ pub struct Floating {
 /// at once (the parts must be elements to be selected) and records no undo step. It is taken
 /// back as soon as the selection lets go of its pieces with nothing else changed; the first edit
 /// that uses it records one step from before the cut.
+#[derive(Clone)]
 struct Provisional {
     /// Before the cut.
     before: history::Snapshot,
@@ -779,7 +780,15 @@ impl Session {
             return Err(EngineError::NeedsConfirmation(format!("{} {} (pass \"confirm\": true to proceed)", c.title, c.message)));
         }
         self.group_allows(&spec)?;
+        // If `settle_cut` heals a live provisional cut before a mutating command (such as a fresh
+        // marquee or lasso), save the entry state so a failing command restores it atomically.
+        let healed_cut = if spec.mutates && self.live_cut().is_some() {
+            Some((self.snapshot(spec.label), self.provisional.clone(), self.saved_state, self.rec.clone(), self.revision))
+        } else {
+            None
+        };
         self.settle_cut(id, params);
+        let healed_cut = healed_cut.filter(|_| self.provisional.is_none());
         if !spec.mutates {
             let r = (spec.run)(self, params);
             self.settle_cut(id, params);
@@ -850,8 +859,16 @@ impl Session {
                 Ok(v)
             }
             Err(e) => {
-                // Back to the cut, which stays provisional, or to before the command.
-                self.restore(rollback.unwrap_or(before));
+                if let Some((snap, provisional, saved_state, rec, revision)) = healed_cut {
+                    self.restore(snap);
+                    self.provisional = provisional;
+                    self.saved_state = saved_state;
+                    self.rec = rec;
+                    self.revision = revision;
+                } else {
+                    // Back to the cut, which stays provisional, or to before the command.
+                    self.restore(rollback.unwrap_or(before));
+                }
                 Err(e)
             }
         }
@@ -949,7 +966,7 @@ impl Session {
         }
         let Some(p) = self.live_cut() else { return };
         let held = self.selection.ids().any(|s| p.inside.contains(&s));
-        let fresh_marquee = id == "raw.select_rect" && params.get("add").and_then(Value::as_bool) != Some(true);
+        let fresh_marquee = matches!(id, "raw.select_rect" | "raw.select_area") && params.get("add").and_then(Value::as_bool) != Some(true);
         if !held || fresh_marquee || id.starts_with("file.") || id == "edit.undo" || id == "edit.redo" {
             self.heal_cut();
         }
@@ -1106,6 +1123,10 @@ impl Session {
 
     /// Moves through history until `undo_len()` equals `target` (for a History panel click).
     pub fn travel_to(&mut self, target: usize) -> Result<Value> {
+        // An open gesture (a slider still held) becomes its step first: closing it inside the
+        // first redo would drop the steps this was about to redo, and that redo then failed
+        // with "nothing to redo" after the check that there was one.
+        self.end_gesture();
         let mut moved = 0usize;
         while self.history.undo_len() > target && self.history.can_undo() {
             self.undo()?;

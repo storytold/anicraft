@@ -1,21 +1,23 @@
-//! Modify › Shape (ADR 0109): Convert Lines to Fills, Expand Fill and Soften Fill Edges, and
-//! the colour under a point as it is drawn (the colour picker's eyedropper).
+//! Modify › Shape (ADR 0109): Convert Lines to Fills, Expand Fill, Soften Fill Edges, Smooth,
+//! Straighten and Optimize Curves, and the colour under a point as it is drawn (the colour
+//! picker's eyedropper).
 //!
-//! The geometry is `anicraft_geom::outline`: a stroke's outline built from its curves with the
-//! renderer's caps, joins, dashes and width profile, and a fill's outline moved out or in by a
-//! distance. It is worked out in the space of the keyframe (what the artist sees: a stroke's
-//! width and an offset are stage distances however the shape is scaled or skewed) and stored
-//! back in the shape's own space, so its transform and a gradient's placing stay as they were.
-//! Raw shapes are merged again with the drawing they are part of (ADR 0031); drawing objects
-//! stay objects.
+//! The geometry is `anicraft_geom::outline` and `anicraft_geom::curve`: a stroke's outline built
+//! from its curves with the renderer's caps, joins, dashes and width profile, a fill's outline
+//! moved out or in by a distance, and pure curve clean-ups (`smooth`, `straighten`, `optimize`).
+//! It is worked out in the space of the keyframe (what the artist sees: a stroke's width, an
+//! offset and a fitting tolerance are stage distances however the shape is scaled or skewed) and
+//! stored back in the shape's own space, so its transform and a gradient's placing stay as they
+//! were. Raw shapes are merged again with the drawing they are part of (ADR 0031); drawing
+//! objects stay objects.
 
-use crate::cmds_raw::{check_extent, remerge_in_place};
+use crate::cmds_raw::{check_extent, remerge_in_place, remerge_in_place_mapped};
 use crate::cmds_width::id_param;
 use crate::params::*;
 use crate::{CommandSpec, EngineError, Result, Session};
 use anicraft_doc::{Cap, Element, ElementId, ElementKind, Join, Paint, Shape, Stroke};
 use anicraft_geom::outline::{self, LineCap, LineJoin, MAX_SOFTEN_STEPS, StrokeShape};
-use anicraft_geom::{Affine, FillRule, Path, Vec2};
+use anicraft_geom::{Affine, FillRule, Path, Vec2, curve};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -23,8 +25,22 @@ use std::sync::Arc;
 pub const MAX_DISTANCE: f32 = 1000.0;
 /// Soften Fill Edges' steps when none are given (Animate's default).
 pub const DEFAULT_STEPS: u32 = 4;
+/// Default strength for Smooth, Straighten and Optimize Curves.
+pub const DEFAULT_STRENGTH: f32 = 50.0;
 /// Most outlines one command works out (shapes × the outlines each needs).
 const MAX_OUTLINES: usize = 2000;
+/// Most passes `modify.optimize` runs when `repeat` is true.
+const MAX_OPTIMIZE_PASSES: usize = 8;
+
+/// Maps Optimize Curves' strength (0..=100) to a fitting tolerance in stage units:
+/// 0 at 0 (no change), otherwise `0.05 + 8 * (strength / 100)^2` (2.05 px at 50, 8.05 px at 100).
+pub fn optimize_tolerance(strength: f32) -> f32 {
+    if !(strength.is_finite() && strength > 0.0) {
+        return 0.0;
+    }
+    let t = strength.clamp(0.0, 100.0) / 100.0;
+    0.05 + 8.0 * t * t
+}
 
 pub fn specs() -> Vec<CommandSpec> {
     let c = |id, label, menu, shortcut, params, mutates, run| CommandSpec { id, label, menu, shortcut, params, mutates, run };
@@ -55,6 +71,33 @@ pub fn specs() -> Vec<CommandSpec> {
             "{distance (the soft edge's width in stage units, above 0 up to 1000), steps? (1..=50 bands, default 4), direction?: expand|inset (default expand: the edge is added round the fill; inset: taken from it), id? (default: the selected shapes)} surrounds each fill with bands of its own paint whose alpha steps down outwards: band i of n has (n + 1 - i) / (n + 1) of the fill's alpha. Colour and gradient fills only → {softened, bands}",
             true,
             |s, p| s.each_layer(false, |s| soften(s, p)),
+        ),
+        c(
+            "modify.smooth",
+            "Smooth",
+            "Modify/Shape",
+            None,
+            "{strength? (1..=100, default 50), id? (default: the selected shapes)} softens the curves of the selected lines and fill outlines and evens out small bumps; repeatable → {changed}",
+            true,
+            |s, p| s.each_layer(false, |s| smooth_cmd(s, p)),
+        ),
+        c(
+            "modify.straighten",
+            "Straighten",
+            "Modify/Shape",
+            None,
+            "{strength? (1..=100, default 50), id? (default: the selected shapes)} makes nearly straight segments into lines and flattens gentle curves on the selected lines and fill outlines; repeatable → {changed}",
+            true,
+            |s, p| s.each_layer(false, |s| straighten_cmd(s, p)),
+        ),
+        c(
+            "modify.optimize",
+            "Optimize Curves…",
+            "Modify/Shape",
+            None,
+            "{strength? (0..=100, default 50; tolerance is 0 at 0, else 0.05 + 8 * (strength / 100)^2 stage units), repeat?: bool (run until the point count stops dropping), id? (default: the selected shapes)} removes points from the selected lines and fill outlines while keeping their shape → {before, after}",
+            true,
+            |s, p| s.each_layer(false, |s| optimize_cmd(s, p)),
         ),
         c(
             "paint.sample",
@@ -294,6 +337,150 @@ fn soften(s: &mut Session, p: &Value) -> Result<Value> {
         Ok(Some(made))
     })?;
     Ok(json!({"softened": softened, "bands": bands}))
+}
+
+// ----- Smooth, Straighten and Optimize Curves -----------------------------------------------------
+
+fn strength_param(p: &Value, min: f32) -> Result<f32> {
+    let v = opt_f32(p, "strength")?.unwrap_or(DEFAULT_STRENGTH);
+    if !(min..=100.0).contains(&v) {
+        return Err(EngineError::Param(format!("param 'strength' must be between {min} and 100")));
+    }
+    Ok(v)
+}
+
+/// Runs a stage-space path clean-up over the target shapes (`id`, else the selection on the active
+/// layer). Shapes that cannot change are left as they are (no error); raw shapes that do change
+/// merge again with the drawing. When `noop` is true, validates the selection and returns equal
+/// point counts without charging the shape budget. Returns `(changed, before_points, after_points)`.
+fn rewrite_paths(s: &mut Session, p: &Value, nothing: &str, noop: bool, mut op: impl FnMut(&Path) -> Path) -> Result<(usize, usize, usize)> {
+    let ids: Vec<ElementId> = match id_param(p)? {
+        Some(id) => vec![id],
+        None => s.selection.on(s.layer),
+    };
+    if ids.is_empty() {
+        return Err(EngineError::State("nothing is selected".into()));
+    }
+    let visible = s.visible_elements();
+    let visible_ids: Vec<ElementId> = visible.iter().map(|e| e.id).collect();
+    if let Some(id) = ids.iter().find(|id| !visible_ids.contains(id)) {
+        return Err(EngineError::State(format!("element {} is not on the active layer at this frame", id.0)));
+    }
+    if !visible.iter().any(|e| ids.contains(&e.id) && matches!(e.kind, ElementKind::Shape(_))) {
+        return Err(EngineError::State(nothing.into()));
+    }
+    if noop {
+        let pts: usize = visible
+            .iter()
+            .filter(|e| ids.contains(&e.id))
+            .filter_map(|e| match &e.kind {
+                ElementKind::Shape(sh) => Some(sh.path.editable_anchors().len()),
+                _ => None,
+            })
+            .sum();
+        return Ok((0, pts, pts));
+    }
+    let mut budget = MAX_OUTLINES;
+    let mut changed = 0usize;
+    let (mut before_pts, mut after_pts) = (0usize, 0usize);
+    let mut edits: Vec<(ElementId, Path, bool)> = Vec::new();
+    for el in &visible {
+        let ElementKind::Shape(sh) = &el.kind else { continue };
+        if !ids.contains(&el.id) {
+            continue;
+        }
+        let b = sh.path.editable_anchors().len();
+        before_pts += b;
+        if sh.warp.is_some() || sh.path.is_empty() {
+            after_pts += b;
+            continue;
+        }
+        let Some(inv) = el.transform.inverse() else {
+            after_pts += b;
+            continue;
+        };
+        budget = budget.checked_sub(1).ok_or_else(|| EngineError::State(format!("that is more than {MAX_OUTLINES} shapes at once. Edit them a part at a time")))?;
+        let stage = sh.path.transformed(&el.transform);
+        let next_stage = op(&stage);
+        if next_stage.is_empty() || next_stage == stage {
+            after_pts += b;
+            continue;
+        }
+        let next_local = next_stage.transformed(&inv);
+        check_extent(&next_local)?;
+        after_pts += next_local.editable_anchors().len();
+        changed += 1;
+        edits.push((el.id, next_local, sh.merge));
+    }
+    if changed == 0 {
+        return Ok((0, before_pts, after_pts));
+    }
+    let existing = s.editable_keyframe()?.elements.clone();
+    let mut out: Vec<Arc<Element>> = Vec::with_capacity(existing.len());
+    let mut raw: Vec<ElementId> = Vec::new();
+    for el in &existing {
+        if let Some((_, path, merge)) = edits.iter().find(|(id, ..)| *id == el.id)
+            && let ElementKind::Shape(sh) = &el.kind
+        {
+            let shape = Shape { path: Arc::new(path.clone()), ..sh.clone() };
+            if *merge {
+                raw.push(el.id);
+            }
+            out.push(Arc::new(Element { id: el.id, name: el.name.clone(), transform: el.transform, color: el.color, kind: ElementKind::Shape(shape) }));
+        } else {
+            out.push(el.clone());
+        }
+    }
+    s.editable_keyframe()?.elements = out;
+    if !raw.is_empty() {
+        let map = remerge_in_place_mapped(s, &raw)?;
+        let mut committed: Vec<ElementId> = ids.iter().copied().filter(|id| !map.gone.contains(id)).collect();
+        committed.extend(map.from.iter().filter(|(_, src)| ids.contains(src)).map(|(piece, _)| *piece));
+        after_pts = s
+            .editable_keyframe()?
+            .elements
+            .iter()
+            .filter(|e| committed.contains(&e.id))
+            .filter_map(|e| match &e.kind {
+                ElementKind::Shape(sh) => Some(sh.path.editable_anchors().len()),
+                _ => None,
+            })
+            .sum();
+    }
+    Ok((changed, before_pts, after_pts))
+}
+
+fn smooth_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let strength = strength_param(p, 1.0)? / 100.0;
+    let (changed, _, _) = rewrite_paths(s, p, "the selection has no shapes to smooth (select lines or fills, or break a symbol apart)", false, |path| curve::smooth(path, strength))?;
+    Ok(json!({"changed": changed}))
+}
+
+fn straighten_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let strength = strength_param(p, 1.0)? / 100.0;
+    let (changed, _, _) = rewrite_paths(s, p, "the selection has no shapes to straighten (select lines or fills, or break a symbol apart)", false, |path| curve::straighten(path, strength))?;
+    Ok(json!({"changed": changed}))
+}
+
+fn optimize_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let strength = strength_param(p, 0.0)?;
+    let repeat = opt_bool(p, "repeat")?.unwrap_or(false);
+    let tol = optimize_tolerance(strength);
+    let (_, before, after) = rewrite_paths(s, p, "the selection has no shapes to optimize (select lines or fills, or break a symbol apart)", tol <= 0.0, |path| {
+        let mut cur = curve::optimize(path, tol);
+        if repeat {
+            for _ in 1..MAX_OPTIMIZE_PASSES {
+                let prev_pts = cur.editable_anchors().len();
+                let next = curve::optimize(&cur, tol);
+                if next.editable_anchors().len() >= prev_pts || next == cur {
+                    break;
+                }
+                cur = next;
+            }
+        }
+        cur
+    })?;
+    Ok(json!({"before": before, "after": after}))
 }
 
 // ----- the colour at a point -----------------------------------------------------------------------

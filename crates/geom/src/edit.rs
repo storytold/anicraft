@@ -301,6 +301,60 @@ impl Path {
         true
     }
 
+    /// Writes the implicit closing edge of the subpath containing `cmd` as an explicit line,
+    /// without shifting `cmd`.
+    fn close_subpath_explicitly(&mut self, cmd: usize) {
+        let Some(m) = self.subpath_start(cmd) else { return };
+        let Some(PathCmd::MoveTo(start)) = self.cmds.get(m).copied() else { return };
+        let Some(end) = (cmd + 1..self.cmds.len()).find(|&j| !self.is_segment(j)) else { return };
+        if !matches!(self.cmds.get(end), Some(PathCmd::Close)) {
+            return;
+        }
+        let cur = end.checked_sub(1).and_then(|l| self.point(l, ANCHOR)).unwrap_or(start);
+        if cur.distance(start) > LINK_EPS {
+            self.cmds.insert(end, PathCmd::LineTo(start));
+        }
+    }
+
+    /// Turns a line or quadratic segment into a cubic before setting one of its handles: a
+    /// straight line keeps its far end as a corner (control point on the far anchor), and a
+    /// quadratic keeps its curve.
+    fn promote_for_handle(&mut self, cmd: usize, outgoing: bool) {
+        let Some(s) = self.segment_start(cmd) else { return };
+        let Some(c) = self.cmds.get_mut(cmd) else { return };
+        *c = match *c {
+            PathCmd::LineTo(p) => if outgoing { PathCmd::CubicTo(s, p, p) } else { PathCmd::CubicTo(s, s, p) },
+            PathCmd::QuadTo(q, p) => PathCmd::CubicTo(s + (q - s) * (2.0 / 3.0), p + (q - p) * (2.0 / 3.0), p),
+            other => other,
+        };
+    }
+
+    /// Sets mirrored handles at anchor `cmd` from `handle` (the vector from the anchor to the
+    /// handle on the outgoing side): the outgoing segment's `C1` goes to `anchor + handle`, the
+    /// incoming segment's `C2` to `anchor - handle`. Straight segments adjacent to the anchor
+    /// become cubics keeping their far end a corner; quadratics are raised to cubics first.
+    /// Zero or non-finite `handle` makes no change.
+    pub fn set_smooth_handles(&mut self, cmd: usize, handle: Vec2) -> bool {
+        if !handle.is_finite() || handle == Vec2::ZERO {
+            return false;
+        }
+        let Some(a) = self.point(cmd, ANCHOR) else { return false };
+        self.close_subpath_explicitly(cmd);
+        let (i, o) = self.anchor_segments(cmd);
+        if i.is_none() && o.is_none() {
+            return false;
+        }
+        if let Some(i) = i {
+            self.promote_for_handle(i, false);
+            self.set_point(i, C2, a - handle);
+        }
+        if let Some(o) = o {
+            self.promote_for_handle(o, true);
+            self.set_point(o, C1, a + handle);
+        }
+        true
+    }
+
     /// Converts segment `cmd` to an equivalent cubic (no-op for cubics and non-segments).
     pub fn to_cubic(&mut self, cmd: usize) {
         let Some(s) = self.segment_start(cmd) else { return };
@@ -696,6 +750,26 @@ mod tests {
         assert!((i - a).dot(o - a) < 0.0, "on opposite sides");
         assert!(p.make_corner(1));
         assert_eq!(p.point(1, C2), Some(a));
+    }
+
+    #[test]
+    fn set_smooth_handles_on_segment_after_close_does_not_shift_command() {
+        // Segment after an earlier Close: closing the earlier subpath would shift cmd 3 to 4.
+        let mut p = Path::new();
+        p.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(100.0, 0.0)).close().line_to(Vec2::new(100.0, 100.0));
+        let h = Vec2::new(15.0, 5.0);
+        assert!(p.set_smooth_handles(3, h));
+        assert_eq!(p.point(3, ANCHOR), Some(Vec2::new(100.0, 100.0)), "cmd 3 must not shift");
+        assert_eq!(p.segment_start(3), Some(Vec2::new(0.0, 0.0)));
+        assert_eq!(p.point(3, C2), Some(Vec2::new(100.0, 100.0) - h));
+        // When followed by its own Close, the closing edge after cmd is made explicit without shifting cmd.
+        let mut q = Path::new();
+        q.move_to(Vec2::new(0.0, 0.0)).line_to(Vec2::new(100.0, 0.0)).close().line_to(Vec2::new(100.0, 100.0)).close();
+        assert!(q.set_smooth_handles(3, h));
+        let a = Vec2::new(100.0, 100.0);
+        assert_eq!(q.point(3, ANCHOR), Some(a));
+        assert_eq!(q.point(3, C2), Some(a - h));
+        assert_eq!(q.point(4, C1), Some(a + h));
     }
 
     #[test]

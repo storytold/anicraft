@@ -16,6 +16,7 @@ pub fn tool_topic(t: Tool) -> &'static str {
     match t {
         Tool::Select => "drawing.md#the-tools",
         Tool::Subselect => "drawing.md#editing-points-with-subselection",
+        Tool::Lasso => "drawing.md#the-lasso-tool",
         Tool::Transform => "drawing.md#transforming-artwork",
         Tool::Warp => "masks-guides-camera-bones.md#asset-warp",
         Tool::GradientTransform => "drawing.md#gradients-and-bitmap-fills",
@@ -66,6 +67,7 @@ pub enum Dialog {
     FindReplace,
     BrushLibrary,
     ConvertSymbol,
+    NewSymbol,
     ShapeEdges,
     TraceBitmap,
     LayerProperties,
@@ -90,7 +92,7 @@ pub enum Dialog {
 }
 
 impl Dialog {
-    pub const ALL: [Dialog; 31] = [
+    pub const ALL: [Dialog; 32] = [
         Dialog::Preferences,
         Dialog::Shortcuts,
         Dialog::Licenses,
@@ -101,6 +103,7 @@ impl Dialog {
         Dialog::FindReplace,
         Dialog::BrushLibrary,
         Dialog::ConvertSymbol,
+        Dialog::NewSymbol,
         Dialog::ShapeEdges,
         Dialog::TraceBitmap,
         Dialog::LayerProperties,
@@ -137,6 +140,7 @@ impl Dialog {
             Dialog::FindReplace => "find_replace",
             Dialog::BrushLibrary => "brush_library",
             Dialog::ConvertSymbol => "convert_symbol",
+            Dialog::NewSymbol => "new_symbol",
             Dialog::ShapeEdges => "shape_edges",
             Dialog::TraceBitmap => "trace_bitmap",
             Dialog::LayerProperties => "layer_props",
@@ -168,7 +172,7 @@ impl Dialog {
             Dialog::PublishProgress => "exporting-and-publish.md#publish",
             Dialog::FindReplace => "workspace.md#find-and-replace",
             Dialog::BrushLibrary => "drawing.md#the-brush",
-            Dialog::ConvertSymbol => "symbols-and-library.md#making-a-symbol",
+            Dialog::ConvertSymbol | Dialog::NewSymbol => "symbols-and-library.md#making-a-symbol",
             Dialog::ShapeEdges => "drawing.md#lines-to-fills-expanding-and-softening-fills",
             Dialog::TraceBitmap => "images-and-sound.md#trace-bitmap",
             Dialog::LayerProperties => "timeline.md#layer-properties",
@@ -231,13 +235,17 @@ pub const COMMAND_TOPICS: &[(&str, &str)] = &[
     ("instance.", "symbols-and-library.md#instance-properties"),
     ("layer.", "timeline.md#layers"),
     ("library.", "symbols-and-library.md#the-library-panel"),
+    ("library.new_symbol", "symbols-and-library.md#making-a-symbol"),
     ("macro.", "saved-commands.md#saving-steps-as-a-command"),
     ("modify.", "drawing.md#transforming-artwork"),
     ("modify.convert_to_bitmap", "images-and-sound.md#convert-to-bitmap"),
     ("modify.convert_to_symbol", "symbols-and-library.md#making-a-symbol"),
     ("modify.expand_fill", "drawing.md#lines-to-fills-expanding-and-softening-fills"),
     ("modify.lines_to_fills", "drawing.md#lines-to-fills-expanding-and-softening-fills"),
+    ("modify.optimize", "drawing.md#smoothing-straightening-and-optimizing-curves"),
+    ("modify.smooth", "drawing.md#smoothing-straightening-and-optimizing-curves"),
     ("modify.soften_fill_edges", "drawing.md#lines-to-fills-expanding-and-softening-fills"),
+    ("modify.straighten", "drawing.md#smoothing-straightening-and-optimizing-curves"),
     ("modify.trace_bitmap", "images-and-sound.md#trace-bitmap"),
     ("motion.", "tweens.md#motion-tweens"),
     ("paint.", "drawing.md#paint-bucket-ink-bottle-and-eyedropper"),
@@ -353,8 +361,14 @@ pub fn subject(app: &App, ctx: &egui::Context, pointer: bool) -> Subject {
     if let Some(p) = &app.prompt {
         return Subject::Command(p.cmd.to_string());
     }
-    if app.convert.is_some() {
-        return Subject::Dialog(Dialog::ConvertSymbol);
+    if let Some(d) = &app.convert {
+        return match d.purpose {
+            crate::convert_symbol::Purpose::Symbol => Subject::Dialog(Dialog::ConvertSymbol),
+            crate::convert_symbol::Purpose::MotionTween { .. } => Subject::Topic("tweens.md#motion-tweens"),
+        };
+    }
+    if app.new_symbol.is_some() {
+        return Subject::Dialog(Dialog::NewSymbol);
     }
     // Expand Fill and Soften Fill Edges (ADR 0109).
     if app.shape_dialog.is_some() {

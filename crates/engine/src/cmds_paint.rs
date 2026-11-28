@@ -48,7 +48,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Fill",
             "",
             None,
-            "{type?: solid|linear|radial|bitmap (default: the swatch's), color? (solid, \"#rrggbb\" or \"#rrggbbaa\"), stops?: [{offset: 0..1, color: \"#rrggbb\" | \"#rrggbbaa\"}, ..] (2 to 15; each stop has its own alpha), spread?: extend|reflect|repeat, linear_rgb?: bool, focal?: -0.98..0.98 (radial), bitmap?: id, selection?: bool (default true)} sets the fill swatch (what new shapes, the Paint Bucket and the Brush pour) and, unless `selection` is false, the fills of the selected shapes. A shape keeping its kind of fill keeps where its gradient or bitmap lies; one changing kind gets it fitted to its bounds. A new gradient starts white to black → {fill: {type, ..}, changed}",
+            "{type?: solid|linear|radial|bitmap (default: solid when `color` is given, else every fill keeps its own kind: the swatch its, each selected shape its, so `stops` alone changes gradients and leaves solid fills as they are), color? (solid, \"#rrggbb\" or \"#rrggbbaa\"), stops?: [{offset: 0..1, color: \"#rrggbb\" | \"#rrggbbaa\"}, ..] (2 to 15; each stop has its own alpha), spread?: extend|reflect|repeat, linear_rgb?: bool, focal?: -0.98..0.98 (radial), bitmap?: id, selection?: bool (default true)} sets the fill swatch (what new shapes, the Paint Bucket and the Brush pour) and, unless `selection` is false, the fills of the selected shapes. A shape keeping its kind of fill keeps where its gradient or bitmap lies; one changing kind gets it fitted to its bounds. A new gradient starts white to black → {fill: {type, ..}, changed}",
             true,
             set_fill,
         ),
@@ -534,9 +534,10 @@ fn fill_kind(p: &Paint) -> FillKind {
     }
 }
 
-/// What `paint.set_fill` asks for: a kind of fill and the parts given.
+/// What `paint.set_fill` asks for: a kind of fill (`None`: the kind each fill has) and the
+/// parts given.
 struct FillSpec {
-    kind: FillKind,
+    kind: Option<FillKind>,
     color: Option<Rgba>,
     stops: Option<Vec<GradientStop>>,
     spread: Option<Spread>,
@@ -551,12 +552,13 @@ impl FillSpec {
     /// the gradient it replaces, else starts white to black. `None`: a bitmap fill with no
     /// bitmap given or held.
     fn apply(&self, base: &Paint) -> Option<Paint> {
-        let mut p = match self.kind {
+        let kind = self.kind.unwrap_or_else(|| fill_kind(base));
+        let mut p = match kind {
             FillKind::Solid => return Some(Paint::Solid(self.color.unwrap_or_else(|| base.primary_color()))),
             k if k == fill_kind(base) => base.clone(),
             FillKind::Linear | FillKind::Radial => {
                 let stops = base.stops().map_or_else(default_stops, <[GradientStop]>::to_vec);
-                let mut q = if self.kind == FillKind::Linear { Paint::linear(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0), stops) } else { Paint::radial(Vec2::ZERO, 1.0, stops) };
+                let mut q = if kind == FillKind::Linear { Paint::linear(Vec2::new(-1.0, 0.0), Vec2::new(1.0, 0.0), stops) } else { Paint::radial(Vec2::ZERO, 1.0, stops) };
                 if let (Paint::Linear { spread: a, linear_rgb: b, .. } | Paint::Radial { spread: a, linear_rgb: b, .. }, Paint::Linear { spread, linear_rgb, .. } | Paint::Radial { spread, linear_rgb, .. }) = (&mut q, base) {
                     *a = *spread;
                     *b = *linear_rgb;
@@ -623,12 +625,15 @@ pub(crate) fn opt_focal(p: &Value) -> Result<Option<f32>> {
 /// `paint.set_fill`: the Colour panel's fill (type, stops, overflow, linear RGB, bitmap).
 pub(crate) fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let swatch = s.style.fill_paint();
+    // With no type, a colour asks for a solid fill; anything else changes each fill as the
+    // kind it is (#626: the swatch's kind used to be forced on the selection, so a stop added to
+    // a selected gradient turned it into the swatch's solid colour).
     let kind = match opt_str(p, "type")? {
-        None => fill_kind(&swatch),
-        Some("solid") => FillKind::Solid,
-        Some("linear") => FillKind::Linear,
-        Some("radial") => FillKind::Radial,
-        Some("bitmap") => FillKind::Bitmap,
+        None => p.get("color").is_some_and(|c| !c.is_null()).then_some(FillKind::Solid),
+        Some("solid") => Some(FillKind::Solid),
+        Some("linear") => Some(FillKind::Linear),
+        Some("radial") => Some(FillKind::Radial),
+        Some("bitmap") => Some(FillKind::Bitmap),
         Some(other) => return Err(EngineError::Param(format!("unknown fill type '{other}' (solid, linear, radial or bitmap)"))),
     };
     let spread = match opt_str(p, "spread")? {
@@ -643,7 +648,7 @@ pub(crate) fn set_fill(s: &mut Session, p: &Value) -> Result<Value> {
     let new = spec.apply(&swatch).ok_or_else(|| EngineError::Param("a bitmap fill needs 'bitmap' (a Library bitmap's id)".into()))?;
     // The swatch keeps where its fill lies; a new kind lies across the stage.
     let stage = Rect::new(0.0, 0.0, s.doc.stage.width as f32, s.doc.stage.height as f32);
-    let placed = if fill_kind(&swatch) == kind { new } else { new.fitted(&stage) };
+    let placed = if fill_kind(&swatch) == fill_kind(&new) { new } else { new.fitted(&stage) };
     match &placed {
         Paint::Solid(c) => s.style.set_fill_color(*c),
         other => {
@@ -675,7 +680,7 @@ fn set_selected_fills(s: &mut Session, spec: &FillSpec) -> Result<Value> {
         let ElementKind::Shape(sh) = &mut e.kind else { continue };
         let Some(old) = &sh.fill else { continue };
         let Some(mut new) = spec.apply(old) else { continue };
-        if fill_kind(old) != spec.kind {
+        if fill_kind(old) != fill_kind(&new) {
             new = new.fitted(&sh.path.bounds());
         }
         if sh.fill.as_ref() != Some(&new) {

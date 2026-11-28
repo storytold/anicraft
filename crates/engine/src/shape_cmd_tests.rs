@@ -581,3 +581,167 @@ fn the_sample_reads_bitmaps_and_inside_symbols() {
     run(&mut s, "element.set_color_effect", json!({"style": "tint", "tint": "#000000", "tint_amount": 100}));
     assert_eq!(color(&mut s, 320.0, 220.0), "#000000");
 }
+
+// ----- Smooth, Straighten and Optimize Curves -----------------------------------------------------
+
+/// The bounds of the visible shapes' curves (flattened, so curve handles past the outline don't count).
+fn curve_bounds(s: &Session) -> anicraft_geom::Rect {
+    let mut r = anicraft_geom::Rect::EMPTY;
+    for (_, sh, m) in shapes(s) {
+        for pl in sh.path.flatten(&m, 0.1) {
+            for p in pl.points {
+                r.include(p);
+            }
+        }
+    }
+    r
+}
+
+/// Closed circle approximated by `sides` straight segments.
+fn circle_svg(cx: f32, cy: f32, r: f32, sides: usize) -> String {
+    let mut p = Path::new();
+    for i in 0..sides {
+        let a = i as f32 / sides as f32 * std::f32::consts::TAU;
+        let pt = Vec2::new(cx + r * a.cos(), cy + r * a.sin());
+        if i == 0 {
+            p.move_to(pt);
+        } else {
+            p.line_to(pt);
+        }
+    }
+    p.close();
+    p.to_svg()
+}
+
+#[test]
+fn optimize_reduces_points_on_raw_fills_and_drawing_objects_and_undoes() {
+    let d = circle_svg(200.0, 150.0, 70.0, 120);
+    for object in [false, true] {
+        let mut s = blank(object);
+        run(&mut s, "draw.path", json!({"d": d, "fill": "#3366cc", "stroke": null, "object": object}));
+        run(&mut s, "edit.select_all", json!({}));
+        let bounds_before = curve_bounds(&s);
+        let before_doc = s.doc.clone();
+        let v = run(&mut s, "modify.optimize", json!({"strength": 50}));
+        let (before, after) = (v["before"].as_u64().unwrap(), v["after"].as_u64().unwrap());
+        assert!(after < before, "object={object}: expected fewer points, got {before} -> {after}");
+        assert!(after <= 12, "object={object}: circle simplifies tightly: {after}");
+        let bounds_after = curve_bounds(&s);
+        assert!((bounds_after.width() - bounds_before.width()).abs() < 4.0 && (bounds_after.height() - bounds_before.height()).abs() < 4.0, "bounds stay close: {bounds_before:?} vs {bounds_after:?}");
+        // Fill paint and drawing mode stay intact.
+        let all = shapes(&s);
+        assert_eq!(all.len(), 1);
+        assert_eq!(solid(&all[0].1), Rgba::parse_hex("#3366cc"));
+        assert_eq!(all[0].1.merge, !object);
+        // One undo step restores the original path.
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(s.doc, before_doc, "object={object}: undo restores");
+    }
+}
+
+#[test]
+fn smooth_and_straighten_preserve_stroke_settings_and_undo() {
+    let mut s = blank(true);
+    let zig = "M 40 150 L 100 90 L 160 210 L 220 90 L 280 210 L 340 150";
+    run(&mut s, "draw.path", json!({"d": zig, "fill": null, "stroke": "#224488", "stroke_width": 7, "cap": "square", "join": "bevel", "dash": [18, 6], "profile": "taper_both", "object": true}));
+    let before_stroke = shapes(&s)[0].1.stroke.clone();
+    let before_doc = s.doc.clone();
+    let v = run(&mut s, "modify.smooth", json!({"strength": 60}));
+    assert_eq!(v["changed"], json!(1));
+    assert_eq!(shapes(&s)[0].1.stroke, before_stroke, "stroke settings and profile survive smooth");
+    let smoothed_bounds = s.selection_bounds();
+    assert!(smoothed_bounds.height() < 140.0, "zig-zag amplitude shrinks: {smoothed_bounds:?}");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc, before_doc);
+
+    // Straighten turns a gently bent curve into a line while keeping stroke settings.
+    let mut s = blank(true);
+    run(&mut s, "draw.path", json!({"d": "M 40 150 C 140 156 240 156 340 150", "fill": null, "stroke": "#aa2222", "stroke_width": 5, "cap": "none", "dash": [12, 4], "object": true}));
+    let before_stroke = shapes(&s)[0].1.stroke.clone();
+    let v = run(&mut s, "modify.straighten", json!({"strength": 50}));
+    assert_eq!(v["changed"], json!(1));
+    let (_, sh, _) = shapes(&s).remove(0);
+    assert_eq!(sh.stroke, before_stroke);
+    assert!(matches!(sh.path.cmds.get(1), Some(anicraft_geom::PathCmd::LineTo(_))), "bent curve becomes a line: {:?}", sh.path.cmds);
+}
+
+#[test]
+fn curve_commands_check_params_and_leave_unchangeable_shapes_alone() {
+    let mut s = blank(true);
+    for cmd in ["modify.smooth", "modify.straighten", "modify.optimize"] {
+        assert!(s.execute(cmd, &json!({})).unwrap_err().to_string().contains("nothing is selected"), "{cmd}");
+    }
+    // A straight 2-point line cannot simplify further: no error.
+    run(&mut s, "draw.line", json!({"x0": 20, "y0": 20, "x1": 120, "y1": 20}));
+    assert_eq!(run(&mut s, "modify.straighten", json!({}))["changed"], json!(0));
+    assert_eq!(run(&mut s, "modify.optimize", json!({"strength": 0})), json!({"before": 2, "after": 2}));
+    assert_eq!(run(&mut s, "modify.optimize", json!({"strength": 80, "repeat": true})), json!({"before": 2, "after": 2}));
+    // Invalid params error.
+    for bad in [json!({"strength": 0}), json!({"strength": 101}), json!({"strength": -5}), json!({"strength": "lots"})] {
+        assert!(s.execute("modify.smooth", &bad).is_err(), "smooth {bad}");
+        assert!(s.execute("modify.straighten", &bad).is_err(), "straighten {bad}");
+    }
+    for bad in [json!({"strength": -1}), json!({"strength": 101}), json!({"repeat": "yes"})] {
+        assert!(s.execute("modify.optimize", &bad).is_err(), "optimize {bad}");
+    }
+}
+
+#[test]
+fn optimize_at_zero_strength_does_not_charge_shape_budget() {
+    let mut s = blank(true);
+    let line = Arc::new(Path::line(Vec2::new(0.0, 0.0), Vec2::new(20.0, 0.0)));
+    let stroke = Some(Stroke::new(Rgba::BLACK, 2.0));
+    let mut ids = Vec::with_capacity(2001);
+    {
+        let kf = s.editable_keyframe().unwrap();
+        for i in 0..2001u32 {
+            let id = ElementId(1000 + u64::from(i));
+            ids.push(id);
+            kf.elements.push(Arc::new(Element {
+                id,
+                name: String::new(),
+                transform: Affine::translate((i % 50) as f32 * 5.0, (i / 50) as f32 * 5.0),
+                color: Default::default(),
+                kind: ElementKind::Shape(Shape { path: line.clone(), fill: None, stroke: stroke.clone(), fill_rule: FillRule::default(), merge: false, warp: None }),
+            }));
+        }
+    }
+    let layer = s.layer;
+    s.selection.extend_on(layer, ids);
+    let v = run(&mut s, "modify.optimize", json!({"strength": 0}));
+    assert_eq!(v, json!({"before": 4002, "after": 4002}));
+    // Positive strength still enforces the 2,000-shape budget.
+    let err = s.execute("modify.optimize", &json!({"strength": 50})).unwrap_err().to_string();
+    assert!(err.contains("more than 2000"), "{err}");
+}
+
+#[test]
+fn optimize_reports_after_from_committed_remerged_raw_shapes() {
+    let mut s = blank(false);
+    // A raw stroke along y = 100 with a shallow 3.5 px dip around x = 150.
+    let mut p = Path::new();
+    p.move_to(Vec2::new(50.0, 100.0));
+    for i in 1..=40 {
+        let x = 50.0 + i as f32 * 5.0;
+        let dx = (x - 150.0).abs();
+        let y = if dx < 20.0 { 100.0 + 3.5 * (1.0 - dx / 20.0) } else { 100.0 };
+        p.line_to(Vec2::new(x, y));
+    }
+    run(&mut s, "draw.path", json!({"d": p.to_svg(), "fill": null, "stroke": "#000000", "stroke_width": 2, "object": false}));
+    // A short raw stroke ending just above the original dip (at y = 102.5), which the flattened
+    // optimized curve will cross around y = 100.
+    run(&mut s, "draw.line", json!({"x0": 150, "y0": 80, "x1": 150, "y1": 102.5, "stroke": "#ff0000", "stroke_width": 2}));
+    let all = shapes(&s);
+    assert_eq!(all.len(), 2, "the two raw strokes do not touch before optimize");
+    let curve_id = all.into_iter().find(|(_, sh, _)| sh.stroke.as_ref().is_some_and(|st| st.color == Rgba::BLACK)).expect("black raw stroke").0;
+    s.select_only(vec![curve_id]);
+    let v = run(&mut s, "modify.optimize", json!({"strength": 80}));
+    let sel = s.selection.on(s.layer);
+    assert!(sel.len() >= 2, "remerge split the optimized raw stroke at the new crossing: {sel:?}");
+    let committed_anchors: usize = shapes(&s)
+        .iter()
+        .filter(|(id, ..)| sel.contains(id))
+        .map(|(_, sh, _)| sh.path.editable_anchors().len())
+        .sum();
+    assert_eq!(v["after"].as_u64(), Some(committed_anchors as u64), "reported after must match committed raw shapes: {v}");
+}

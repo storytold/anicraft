@@ -218,6 +218,79 @@ fn make_corner_and_make_smooth_on_raw_anchors() {
 }
 
 #[test]
+fn convert_points_with_handle_curves_shared_raw_edges_and_undoes() {
+    let mut s = raw_session();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 80, "fill": "#ff0000", "stroke": "#000000"}));
+    let corner = Vec2::new(100.0, 0.0);
+    // Zero vector makes no change.
+    let z = run(&mut s, "raw.convert_points", json!({"points": [[corner.x, corner.y]], "smooth": true, "handle": [0, 0]}));
+    assert_eq!(z["converted"], json!(0), "{z}");
+    assert!(handles_at(&s, corner).is_empty(), "still a straight corner");
+    // Bad handle input is rejected.
+    for bad in [json!("bad"), json!([1]), json!([1, null]), json!([1e9, 0])] {
+        assert!(s.execute("raw.convert_points", &json!({"points": [[corner.x, corner.y]], "smooth": true, "handle": bad})).is_err(), "{bad}");
+    }
+    let drag = Vec2::new(25.0, 15.0);
+    let v = run(&mut s, "raw.convert_points", json!({"points": [[corner.x, corner.y]], "smooth": true, "handle": [drag.x, drag.y]}));
+    assert_eq!(v["converted"], json!(1), "{v}");
+    assert_eq!(v["merged"], json!(true), "{v}");
+    assert!(has(&anchors(&s), (corner.x, corner.y)), "the anchor did not move");
+    let hs = handles_at(&s, corner);
+    assert_eq!(hs.len(), 2, "two handles at the corner: {hs:?}");
+    assert!(rawgeom::smooth_at(corner, hs[0].at, hs[1].at), "{hs:?}");
+    assert!(hs.iter().any(|h| h.at.distance(corner + drag) < 0.3), "handle on drag side: {hs:?}");
+    assert!(hs.iter().any(|h| h.at.distance(corner - drag) < 0.3), "mirrored opposite handle: {hs:?}");
+    // Every raw stroke sharing those edges matches the fill's curved edge.
+    let fill = raw(&s).into_iter().find(|e| is_fill(e)).unwrap_or_else(|| panic!("a fill"));
+    let ElementKind::Shape(fs) = &fill.kind else { panic!() };
+    for e in raw(&s).iter().filter(|e| !is_fill(e)) {
+        let ElementKind::Shape(sh) = &e.kind else { continue };
+        for pl in sh.path.flatten(&e.transform, 0.05) {
+            for p in pl.points {
+                assert!(fs.path.distance_to_edge(p, &fill.transform) < 0.3, "{p:?} off the fill's edge");
+            }
+        }
+    }
+    // Undo restores the straight rectangle.
+    run(&mut s, "edit.undo", json!({}));
+    assert!(handles_at(&s, corner).is_empty(), "undo removed the handles");
+    // Open raw line end gets one handle along the drag vector.
+    run(&mut s, "draw.line", json!({"x0": 200, "y0": 0, "x1": 300, "y1": 0, "stroke": "#000000"}));
+    let end = Vec2::new(200.0, 0.0);
+    let v = run(&mut s, "raw.convert_points", json!({"points": [[end.x, end.y]], "smooth": true, "handle": [20, 30]}));
+    assert_eq!(v["converted"], json!(1), "{v}");
+    let hs = handles_at(&s, end);
+    assert_eq!(hs.len(), 1, "{hs:?}");
+    assert!(hs[0].at.distance(end + Vec2::new(20.0, 30.0)) < 0.3, "{hs:?}");
+}
+
+#[test]
+fn convert_points_returns_existing_ids_after_remerge() {
+    let mut s = raw_session();
+    run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 80, "fill": "#ff0000", "stroke": "#000000"}));
+    let corner = Vec2::new(100.0, 0.0);
+    // Default merge: true replaces touched shapes; returned ids must name the resulting elements.
+    let v = run(&mut s, "raw.convert_points", json!({"points": [[corner.x, corner.y]], "smooth": true, "handle": [25, 15]}));
+    assert_eq!(v["merged"], json!(true), "{v}");
+    let ids: Vec<u64> = v["ids"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect();
+    assert!(!ids.is_empty(), "post-merge ids should be non-empty: {v}");
+    assert_eq!(v["changed"], json!(ids.len()), "{v}");
+    let live: Vec<u64> = s.visible_elements().iter().map(|e| e.id.0).collect();
+    assert!(ids.iter().all(|id| live.contains(id)), "returned ids {ids:?} must exist in document {live:?}");
+    // Follow-up headless queries using those ids find the curved handles and select the shapes.
+    let pts = run(&mut s, "raw.points", json!({"ids": ids}));
+    assert!(!pts["handles"].as_array().is_none_or(Vec::is_empty), "raw.points on returned ids must see handles: {pts}");
+    run(&mut s, "element.select", json!({"ids": ids}));
+    assert_eq!(s.selection.len(), ids.len(), "element.select accepts every returned id");
+    // With merge: false, edited shapes are kept in place and returned ids also exist.
+    let v2 = run(&mut s, "raw.convert_points", json!({"points": [[corner.x, corner.y]], "smooth": true, "handle": [10, 5], "merge": false}));
+    assert_eq!(v2["merged"], json!(false), "{v2}");
+    let ids2: Vec<u64> = v2["ids"].as_array().into_iter().flatten().filter_map(Value::as_u64).collect();
+    let live2: Vec<u64> = s.visible_elements().iter().map(|e| e.id.0).collect();
+    assert!(!ids2.is_empty() && ids2.iter().all(|id| live2.contains(id)), "merge:false ids {ids2:?} must exist in {live2:?}");
+}
+
+#[test]
 fn drawing_snaps_to_anchors_then_lines_while_snap_to_objects_is_on() {
     let mut s = raw_session();
     run(&mut s, "draw.rect", json!({"x": 0, "y": 0, "w": 100, "h": 80, "fill": "#ff0000", "stroke": "#000000"}));

@@ -1,6 +1,6 @@
 # ADR 0016: Motion tweens and the Motion Editor
 
-* Status: accepted (2026-11-09)
+* Status: accepted (2026-11-09); point 7 changed by [ADR 0136](0136-the-third-issue-batch-what-merged-what-is-held.md) (2026-11-27): raw artwork is always converted, and the window asks first
 * Relates to: roadmap M2 (motion tween + Motion Editor curves), ADR 0001 (persistent document),
   ADR 0003 (file format), ADR 0004 (destructive actions), ADR 0009 (XFL import)
 
