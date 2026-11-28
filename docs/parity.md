@@ -103,7 +103,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 
 | Feature | Status | Notes | Headless |
 |---|---|---|---|
-| Selection | **partial** | Raw shapes, objects, marquee, bend an edge, move a corner ([ADR 0041](adr/0041-selection-tool-on-raw-drawings.md), [ADR 0044](adr/0044-selection-across-layers.md)). A marquee takes the instances and objects it touches, and View › Hide Edges hides the selection's marks ([ADR 0134](adr/0134-outside-parity-batch-zoom-outlines-and-egui-0-37.md)). Missing: a preference for the marquee to take only what it surrounds; the first-use hint about fills and outlines (P-017). |
+| Selection | **partial** | Raw shapes, objects, marquee, bend an edge, move a corner ([ADR 0041](adr/0041-selection-tool-on-raw-drawings.md), [ADR 0044](adr/0044-selection-across-layers.md)). A marquee takes the instances and objects it touches, and View › Hide Edges hides the selection's marks ([ADR 0134](adr/0134-outside-parity-batch-zoom-outlines-and-egui-0-37.md)). A preference says whether the marquee takes objects it only touches or only those wholly inside it (Preferences › Stage, `view.select_touching`). Missing: the first-use hint about fills and outlines (P-017). |
 | Subselection | **done** | [ADR 0042](adr/0042-subselection-and-merging-everywhere.md), [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md). |
 | Free Transform | **partial** | Scale, skew, rotate, the transformation point, a box that turns with the object ([ADR 0111](adr/0111-the-transformation-point-a-turning-box-and-layer-opacity.md)), Envelope ([ADR 0080](adr/0080-drawing-parity-leftovers.md)). Missing: Distort. Open bug: rotation on Windows and FreeBSD ([#479](https://github.com/storytold/anicraft/issues/479)), not reproduced on Windows 10 (P-005). |
 | Gradient Transform | **done** | Gradient and bitmap fills, Lock Fill. |
@@ -142,7 +142,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 
 | Feature | Status | Notes | Headless |
 |---|---|---|---|
-| Merge drawing: raw strokes and fills that cut and join | **done** | [ADR 0031](adr/0031-merge-drawing.md), [ADR 0041](adr/0041-selection-tool-on-raw-drawings.md), [ADR 0042](adr/0042-subselection-and-merging-everywhere.md), [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md); [drawing](guide/drawing.md). Open bug: a hairline between merged curved fills ([#182](https://github.com/storytold/anicraft/issues/182), P-013). |
+| Merge drawing: raw strokes and fills that cut and join | **done** | [ADR 0031](adr/0031-merge-drawing.md), [ADR 0041](adr/0041-selection-tool-on-raw-drawings.md), [ADR 0042](adr/0042-subselection-and-merging-everywhere.md), [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md); [drawing](guide/drawing.md). Fills that share an edge are drawn without a line of the stage between them ([ADR 0138](adr/0138-fills-of-one-merged-drawing-join-without-a-seam.md), [#182](https://github.com/storytold/anicraft/issues/182)). |
 | Object drawing | **done** | Edit inside by double-click. Editing without opening is missing ([#181](https://github.com/storytold/anicraft/issues/181)). |
 | Groups, nested, edited in place | **done** | [ADR 0073](adr/0073-groups-combine-objects-and-selection-modifiers.md). |
 | Break Apart | **done** | |

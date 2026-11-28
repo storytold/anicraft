@@ -137,6 +137,7 @@ fn transform(tr: &Value, t: f64) -> (Affine, f64) {
 
 fn item(path: Path, transform: Affine, fill: Option<Paint>, stroke: Option<Stroke>, rule: FillRule) -> DisplayItem {
     DisplayItem {
+        joins: false,
         path: Arc::new(path),
         transform,
         fill,

@@ -34,18 +34,20 @@ Animator and Designer, plus your own saved workspaces and Reset.
 | Find and Replace | **Edit › Find and Replace** (**Ctrl+F**). |
 | Publish Settings | **File › Publish Settings…** (**Ctrl+Shift+F12**). |
 
-Not in AniCraft yet: Components, Code Snippets, the Assets panel, and moving the Tools panel.
+The Tools panel moves like the others: drag the dotted grip at its top. Not in AniCraft yet:
+Components, Code Snippets and the Assets panel.
 See [The workspace](workspace.md) for a tour.
 
 ## Tools and their keys
 
-Each tool has the key you already know.
+Most tools have the key you already know.
 
 | Tool | Key | Notes |
 |---|---|---|
 | Selection | **V** | Selects raw strokes and fills with the dot pattern; drag an edge to bend it. |
 | Subselection | **A** | Points and handles, on raw drawings and drawing objects. |
 | Free Transform | **Q** | Scale, skew (drag the line between two handles), rotate and move; Shift and Alt as you'd expect. Drag the white circle to move the transformation point, double-click it to centre it; a rotated instance's box turns with it. |
+| Asset Warp | **Shift+Q** | Pins that bend a shape or a bitmap. |
 | Gradient Transform | **F** | Its own button (no flyouts yet). Gradient and bitmap fills, with Lock Fill. |
 | Width | **U** | Variable-width strokes, with profiles in Properties. |
 | Bone | **M** | Joins symbol instances into an armature, or draws bones inside a shape. |
@@ -54,6 +56,7 @@ Each tool has the key you already know.
 | Text | **T** | Static, dynamic and input text. |
 | Pencil | **Shift+Y** | Smooth, Straighten and Ink modes. |
 | Brush | **B** | Like Animate's Classic Brush: paints filled shapes, with pen pressure. |
+| Paint Brush | **Y** | Draws a line in the stroke colour; its width follows pen pressure. |
 | Eraser | **E** | Five erase modes and the Faucet. |
 | Rectangle | **R** | With corner radius. |
 | Oval | **O** | |
@@ -67,9 +70,9 @@ Each tool has the key you already know.
 | Zoom | **Z** | |
 | Object Drawing | **J** | Toggles between merge drawing and drawing objects. |
 
-Not in AniCraft yet: the Lasso, Polygon and Magic Wand tools, the 3D tools,
-Asset Warp, the Paint Brush and Fluid Brush, Deco and the Spray Brush. More on the tools in
-[Drawing](drawing.md).
+Not in AniCraft yet: the Lasso, Polygon and Magic Wand tools, the 3D tools, the Fluid Brush,
+Deco and the Spray Brush. More on the tools in [Drawing](drawing.md); Asset Warp is in
+[Masks, guides, camera and bones](masks-guides-camera-bones.md#asset-warp).
 
 ## Keys that work as in Animate
 
@@ -81,6 +84,7 @@ Asset Warp, the Paint Brush and Fluid Brush, Deco and the Spray Brush. More on t
 | Clear keyframe | **Shift+F6** | Insert › Timeline › Clear Keyframe |
 | Insert blank keyframe | **F7** | Insert › Timeline › Blank Keyframe |
 | Convert to symbol | **F8** | Modify › Convert to Symbol… |
+| Document Settings | **Ctrl+J** | Modify › Document Settings |
 | Actions panel | **F9** | Window › Actions |
 | Play and stop | **Enter** | Control › Play |
 | Previous and next frame | **,** and **.** | Control |
@@ -104,6 +108,8 @@ Asset Warp, the Paint Brush and Fluid Brush, Deco and the Spray Brush. More on t
 | Add shape hint | **Ctrl+Shift+H** | Modify › Shape › Add Shape Hint |
 | Find and Replace, Find Next | **Ctrl+F**, **F3** | Edit › Find and Replace |
 | Movie Explorer | **Alt+F3** | Window › Movie Explorer |
+| Library, Timeline, Tools and Properties panels | **Ctrl+L**, **Ctrl+Alt+T**, **Ctrl+F2**, **Ctrl+F3** | Window |
+| Hide and show panels | **F4** | Window › Hide Panels |
 | Snap to objects | **Ctrl+Shift+/** | View › Snapping › Snap to Objects |
 | Zoom in and out | **Ctrl+=**, **Ctrl+-** | View |
 | Preferences (Windows and Linux) | **Ctrl+U** | Edit › Preferences… |
@@ -115,14 +121,12 @@ frame, and **Shift+PageUp** and **Shift+PageDown** for the previous and next sce
 
 ### Keys that differ
 
-* **Ctrl+K** opens AniCraft's command palette, which finds any command by name. Align is always on
-  the right, and on **Ctrl+Alt+1** to **6**.
+* **Ctrl+K** opens AniCraft's command palette, which finds any command by name. The Align panel
+  has no key by default; aligning is on **Ctrl+Alt+1** to **6**.
 * **Ctrl+G** and **Ctrl+Shift+G** group and ungroup, as in Animate. A drawing object that
   mixes colours, such as the result of a Union, is a group in AniCraft: double-click it to edit
   inside.
 * **Ctrl+F8** (New Symbol): not there yet. Draw something and convert it with **F8**.
-* **Ctrl+J** (Document Settings): it is **Modify › Document Settings**, with no key by default.
-* Panel toggles such as **Ctrl+L** for the Library have no key yet; use the **Window** menu.
 * **Ctrl+0** fits the stage in the window and **Ctrl+1** shows it at 100 %.
 
 Any key can be changed in **Help › Keyboard Shortcuts** (**Ctrl+Alt+Shift+K**, as in Animate), so you can bring back a habit
@@ -143,8 +147,8 @@ Press **J** for Object Drawing to draw shapes that stay separate. Scripts and th
 draw objects unless told otherwise.
 
 This behaviour was rebuilt to match Animate closely, and the remaining differences are tracked in
-issue 42 on [GitHub issues](https://github.com/storytold/AniCraft/issues). One known gap:
-variable-width strokes don't take part in merging yet.
+issue 42 on [GitHub issues](https://github.com/storytold/AniCraft/issues). Variable-width
+strokes merge too: a piece cut from one keeps the widths it had there.
 
 ### Classic, motion and shape tweens
 
@@ -192,16 +196,24 @@ ActionScript 1.0 and 2.0, and scripts placed on instances. See [Interactivity](i
   formats you choose at once. See [Exporting and publishing](exporting-and-publish.md).
 * **Test Movie** (**Ctrl+Enter**) opens in its own window with an Output panel; **Esc** closes it.
 
+## More that works as in Animate
+
+| In Animate | In AniCraft |
+|---|---|
+| Several documents in tabs | A tab for each open document, below the menu bar. See [Document tabs](workspace.md#document-tabs). |
+| Saved workspaces | **Window › Workspace › Save Workspace…** and **Manage Workspaces…**. See [Workspaces](workspace.md#workspaces). |
+| Envelope | **Modify › Transform › Envelope**. The bent artwork is plain shapes afterwards, so there is no Delete Envelope. See [Envelope](drawing.md#envelope). |
+| Brush modes, pressure and brush presets | The Brush's options in Properties: five paint modes, with Paint Selection and Paint Inside, and a pressure curve. **Window › Brush Library** keeps the built-in brushes and your own. See [The Brush](drawing.md#the-brush). |
+| Bone springs and joint translation | **Properties › Bone**. One armature can mix symbol instances and shapes. See [Bone properties](masks-guides-camera-bones.md#bone-properties). |
+| Styles on single characters | Select characters with the Text tool and style them. See [Styling words and characters](text.md#styling-words-and-characters). |
+| Text on a path | **Modify › Text › Attach Text to Path**. See [Text on a path](text.md#text-on-a-path). |
+
 ## Not in AniCraft yet
 
 Besides the tools and keys above, these are still to come:
 
-* saved workspaces and several open documents at once;
-* Envelope and Delete Envelope, and editing a multi-colour drawing object without opening it;
+* editing a multi-colour drawing object without opening it;
 * motion tweens and bones from Animate documents;
-* spring and joint translation for bones, and armatures mixing symbols and shapes;
-* the Brush's Paint Selection and Paint Inside modes, pressure curves and a brush library;
-* per-character text styles and text on a path;
 * full screen and zoom in Test Movie;
 * shared libraries;
 * SWF, AIR and other runtime targets.

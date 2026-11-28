@@ -158,10 +158,11 @@ fn render_cut(dl: &DisplayList, view: &View, cut: bool) -> Result<(Pixmap, Rende
     // Filtered groups are drawn on their own, filtered, and come back as one image each.
     let runs = filtered_runs(dl);
     let in_run = in_runs(dl, &runs);
+    let joined = joined_runs(dl);
 
     // Phase 1 (parallel over items): cull, flatten, stroke and build shaders. Output keeps
     // display-list order.
-    let mut prepared: Vec<Vec<Prepared>> = dl.items.par_iter().zip(&in_run).map(|(item, &skip)| if skip { Vec::new() } else { prepare(item, &view.transform, surface, soft_art(dl, item), cut) }).collect();
+    let mut prepared: Vec<Vec<Prepared>> = dl.items.par_iter().zip(&in_run).zip(&joined).map(|((item, &skip), &run)| if skip { Vec::new() } else { prepare(item, &view.transform, surface, soft_art(dl, item), cut, run) }).collect();
     for r in &runs {
         if let (Some(op), Some(slot)) = (filtered_group(dl, r, view, surface)?, prepared.get_mut(r.start)) {
             slot.push(op);
@@ -185,6 +186,7 @@ fn render_cut(dl: &DisplayList, view: &View, cut: bool) -> Result<(Pixmap, Rende
         op.bounds = op.bounds.intersect(&clips.bounds(c));
         !op.bounds.is_empty()
     });
+    drop_lone_runs(&mut ops);
     stats.drawn = ops.len();
     for op in &ops {
         stats.edges += op.polys.iter().map(Vec::len).sum::<usize>();
@@ -208,10 +210,19 @@ fn render_cut(dl: &DisplayList, view: &View, cut: bool) -> Result<(Pixmap, Rende
         // Open groups, outermost first: each composites into its own band buffer, which blends
         // into the one below at the group's alpha when the group's run of ops ends.
         let mut open: Vec<OpenGroup> = Vec::new();
+        // The run of joined fills being added up (ADR 0138); it goes into the group or the rows
+        // its fills are drawn in when the next op isn't one of it. Its buffers are this
+        // thread's, kept from band to band and frame to frame (a run leaves them empty):
+        // making them anew for every band cost as much as the drawing.
+        let mut run = RUN.take();
         for op in &ops {
             let b = IRect { x0: op.bounds.x0, y0: op.bounds.y0.max(band.y0), x1: op.bounds.x1, y1: op.bounds.y1.min(band.y1) };
             if b.is_empty() {
                 continue;
+            }
+            if run.id != 0 && run.id != op.run {
+                let mask = run.clip.map(|c| band_clips.get(&clips, c, band, w, &mut cov, &mut row));
+                run.flush(band.y0, w, open.last_mut().map_or(&mut *rows, |top| &mut top.buf), mask.as_deref().map(Vec::as_slice));
             }
             let want = op.group.and_then(|g| chains.get(g as usize)).map_or(&[][..], Vec::as_slice);
             let keep = open.iter().zip(want).take_while(|(o, g)| o.id == **g).count();
@@ -233,6 +244,16 @@ fn render_cut(dl: &DisplayList, view: &View, cut: bool) -> Result<(Pixmap, Rende
                     cov.add_polygon(poly);
                 }
             }
+            if op.run != 0 {
+                if let Some(top) = open.last_mut() {
+                    top.dirty = top.dirty.union(&b);
+                }
+                (run.id, run.clip) = (op.run, op.clip);
+                let len = rows.len();
+                let under = open.last_mut().map_or(&mut *rows, |top| &mut top.buf);
+                run.add(&cov, op, b, (band.y0, w, len), &mut row, Some((under, mask.as_deref().map(Vec::as_slice))));
+                continue;
+            }
             match open.last_mut() {
                 Some(top) => {
                     top.dirty = top.dirty.union(&b);
@@ -241,9 +262,14 @@ fn render_cut(dl: &DisplayList, view: &View, cut: bool) -> Result<(Pixmap, Rende
                 None => composite(&cov, op, b, band.y0, w, rows, &mut row, mask.as_deref().map(Vec::as_slice)),
             }
         }
+        if run.id != 0 {
+            let mask = run.clip.map(|c| band_clips.get(&clips, c, band, w, &mut cov, &mut row));
+            run.flush(band.y0, w, open.last_mut().map_or(&mut *rows, |top| &mut top.buf), mask.as_deref().map(Vec::as_slice));
+        }
         while !open.is_empty() {
             close_group(&mut open, rows, &dl.groups, band.y0, w);
         }
+        RUN.set(run);
     });
     // Tens of thousands of small polygon buffers: free them on the pool, off the frame's
     // critical path (it cost about 2 ms at 1080p).
@@ -308,6 +334,19 @@ pub struct Fill {
     /// A hairline (outline mode, ADR 0048): `polys` are open polylines (a closed one repeats
     /// its first point), drawn by [`hairline`]'s distance coverage; `rule` doesn't apply.
     pub hairline: bool,
+    /// Not 0: one of a run of joined fills (ADR 0138), the fills next to it in drawing order
+    /// with the same number. They are fills of one merged drawing, which lie side by side, so
+    /// a pixel two of them share an edge in is covered by both together, not by one over the
+    /// other. Per pixel, a run starts transparent with nothing covered; each of its fills, of
+    /// coverage `k` and colour `s`, with `c` of the pixel covered so far, first hides what it
+    /// must overlap (`o = max(0, c + k − 1)`: the run's colour times `1 − o / c · s.a`), then
+    /// adds `s · k`, and `c` becomes `min(1, c + k)`; when the run ends its colour, times its
+    /// clip's coverage, goes src-over onto what is below. Where one fill covers the pixel
+    /// whole this is src-over, so a fill that covers a pixel whole while the run has nothing
+    /// there (`c` is 0) goes src-over onto what is below at once, inside its clip, and leaves
+    /// `c` at 0. Clip artwork joins the same way, without that shortcut: a coverage clip
+    /// unites with the run's `c` at its end, a soft one composites the run's colour.
+    pub run: u32,
 }
 
 /// A filtered group (a symbol instance with filters) as [`render`] draws it: its items on
@@ -373,7 +412,8 @@ pub fn prepare_scene(dl: &DisplayList, view: &View) -> Result<(Scene, RenderStat
     let surface = IRect { x0: 0, y0: 0, x1: view.width as i32, y1: view.height as i32 };
     let runs = filtered_runs(dl);
     let in_run = in_runs(dl, &runs);
-    let mut prepared: Vec<Vec<Prepared>> = dl.items.par_iter().zip(&in_run).map(|(item, &skip)| if skip { Vec::new() } else { prepare(item, &view.transform, surface, soft_art(dl, item), true) }).collect();
+    let joined = joined_runs(dl);
+    let mut prepared: Vec<Vec<Prepared>> = dl.items.par_iter().zip(&in_run).zip(&joined).map(|((item, &skip), &run)| if skip { Vec::new() } else { prepare(item, &view.transform, surface, soft_art(dl, item), true, run) }).collect();
     let mut layers = Vec::new();
     for r in &runs {
         if let (Some(setup), Some(slot)) = (filter_setup(dl, r, view, surface), prepared.get_mut(r.start)) {
@@ -401,7 +441,8 @@ pub fn prepare_scene(dl: &DisplayList, view: &View) -> Result<(Scene, RenderStat
         op.bounds = op.bounds.intersect(&clips.bounds(c));
         !op.bounds.is_empty()
     });
-    let fill = |op: Prepared| Fill { polys: op.polys, rule: op.rule, shader: op.shader, bounds: op.bounds, clip: op.clip, group: op.group, layer: op.layer, hairline: op.hairline };
+    drop_lone_runs(&mut ops);
+    let fill = |op: Prepared| Fill { polys: op.polys, rule: op.rule, shader: op.shader, bounds: op.bounds, clip: op.clip, group: op.group, layer: op.layer, hairline: op.hairline, run: op.run };
     let mut fills = Vec::with_capacity(ops.len());
     for op in ops {
         stats.edges += op.polys.iter().map(Vec::len).sum::<usize>();
@@ -484,6 +525,7 @@ impl FilterSetup {
             group: Some(self.group),
             layer: None,
             hairline: false,
+            run: 0,
         }
     }
 }
@@ -680,6 +722,156 @@ struct Prepared {
     layer: Option<u32>,
     /// A hairline ([`Fill::hairline`]).
     hairline: bool,
+    /// The run of joined fills it is in, or 0 ([`Fill::run`]).
+    run: u32,
+}
+
+/// Per item, the run of joined fills its fill is in, or 0 ([`Fill::run`]): an item that joins
+/// the one before it ([`DisplayItem::joins`]) when both fills are drawn as fills, in the same
+/// layer, clip and group, with nothing drawn between them (the earlier one has no stroke).
+fn joined_runs(dl: &DisplayList) -> Vec<u32> {
+    let mut out = vec![0u32; dl.items.len()];
+    let plain = |i: &DisplayItem| i.fill.is_some() && i.outline.is_none() && !i.guide && i.warp.is_none();
+    for (at, pair) in dl.items.windows(2).enumerate() {
+        let [a, b] = pair else { continue };
+        if !(b.joins && plain(a) && plain(b) && a.stroke.is_none() && a.layer == b.layer && a.clip == b.clip && a.group == b.group && a.masks == b.masks) {
+            continue;
+        }
+        let Some(&before) = out.get(at) else { continue };
+        // A new run is numbered by its second item, which is never item 0.
+        let id = if before != 0 { before } else { u32::try_from(at + 1).unwrap_or(0) };
+        for slot in out.iter_mut().skip(at).take(2) {
+            *slot = id;
+        }
+    }
+    out
+}
+
+/// Takes the run off a fill no neighbour shares it with (the others were culled, or draw
+/// nothing): alone it is an ordinary fill.
+fn drop_lone_runs(ops: &mut [Prepared]) {
+    let ids: Vec<u32> = ops.iter().map(|o| o.run).collect();
+    for (i, op) in ops.iter_mut().enumerate() {
+        let same = |j: Option<usize>| j.and_then(|j| ids.get(j)).is_some_and(|&r| r == op.run);
+        if op.run != 0 && !same(i.checked_sub(1)) && !same(i.checked_add(1)) {
+            op.run = 0;
+        }
+    }
+}
+
+/// A run of joined fills in one band ([`Fill::run`]): its colour and how much of each pixel it
+/// covers so far, laid out like the band's rows, and the part drawn into.
+#[derive(Default)]
+struct Run {
+    id: u32,
+    clip: Option<u32>,
+    colour: Vec<Premul>,
+    cover: Vec<f32>,
+    dirty: Option<IRect>,
+}
+
+thread_local! {
+    /// A band's run buffers, for the next band this thread draws.
+    static RUN: std::cell::RefCell<Run> = std::cell::RefCell::default();
+}
+
+impl Run {
+    /// Adds coverage `cov` (over `b`) of `op` to the run, in a band of `len` pixels, `w` to a
+    /// row, whose first row is `band_y0`. With `under` (what the run will go onto, and the
+    /// clip coverage it is drawn in), a pixel the fill covers whole where the run has nothing
+    /// yet is drawn there at once: most pixels, which then cost what they do outside a run.
+    fn add(&mut self, cov: &Coverage, op: &Prepared, b: IRect, (band_y0, w, len): (i32, usize, usize), c: &mut Vec<f32>, mut under: Option<(&mut [Premul], Option<&[f32]>)>) {
+        if self.colour.len() < len {
+            self.colour = vec![[0.0; 4]; len];
+            self.cover = vec![0.0; len];
+        }
+        self.dirty = Some(self.dirty.map_or(b, |d| d.union(&b)));
+        let bw = b.width();
+        c.clear();
+        c.resize(bw, 0.0);
+        let solid = op.shader.is_solid();
+        for ry in 0..b.height() {
+            cov.resolve_row(ry, op.rule, c);
+            let py = b.y0 + ry as i32;
+            let start = (py - band_y0) as usize * w + b.x0 as usize;
+            let (Some(colour), Some(cover)) = (self.colour.get_mut(start..start + bw), self.cover.get_mut(start..start + bw)) else { continue };
+            // This row of what is under the run, and of its clip's coverage.
+            let (mut below, mut clip) = (None, None);
+            if let Some((dst, mask)) = under.as_mut() {
+                below = dst.get_mut(start..start + bw);
+                clip = mask.and_then(|m| m.get(start..start + bw));
+                if mask.is_some() && clip.is_none() {
+                    below = None;
+                }
+            }
+            for (i, ((r, have), &k)) in colour.iter_mut().zip(cover.iter_mut()).zip(c.iter()).enumerate() {
+                let k = k.min(1.0);
+                if k <= 1e-4 {
+                    continue;
+                }
+                let s = match solid {
+                    Some(s) => s,
+                    None => op.shader.at(b.x0 + i as i32, py),
+                };
+                if k >= 1.0 {
+                    if *have <= 0.0
+                        && let Some(d) = below.as_mut().and_then(|row| row.get_mut(i))
+                    {
+                        let m = clip.map_or(1.0, |m| m.get(i).copied().unwrap_or(0.0));
+                        if m > 1e-4 {
+                            let inv = 1.0 - s[3] * m;
+                            *d = [s[0] * m + d[0] * inv, s[1] * m + d[1] * inv, s[2] * m + d[2] * inv, s[3] * m + d[3] * inv];
+                        }
+                        continue;
+                    }
+                    // Over what the run has there: src-over, which is what the lines below
+                    // come to.
+                    let keep = 1.0 - s[3];
+                    *r = [r[0] * keep + s[0], r[1] * keep + s[1], r[2] * keep + s[2], r[3] * keep + s[3]];
+                    *have = 1.0;
+                    continue;
+                }
+                // Side by side as far as the pixel has room; what can't be lies over the run.
+                let over = *have + k - 1.0;
+                if over > 0.0 && *have > 0.0 {
+                    let keep = 1.0 - over / *have * s[3];
+                    *r = [r[0] * keep, r[1] * keep, r[2] * keep, r[3] * keep];
+                }
+                *r = [r[0] + s[0] * k, r[1] + s[1] * k, r[2] + s[2] * k, r[3] + s[3] * k];
+                *have = (*have + k).min(1.0);
+            }
+        }
+    }
+
+    /// Ends the run: `each` gets every pixel drawn into (its index in the band, its colour and
+    /// how much of it is covered), and the run is empty again.
+    fn end(&mut self, band_y0: i32, w: usize, mut each: impl FnMut(usize, Premul, f32)) {
+        self.id = 0;
+        let Some(d) = self.dirty.take() else { return };
+        for py in d.y0..d.y1 {
+            let start = (py - band_y0) as usize * w + d.x0 as usize;
+            let (Some(colour), Some(cover)) = (self.colour.get_mut(start..start + d.width()), self.cover.get_mut(start..start + d.width())) else { continue };
+            for (i, (r, have)) in colour.iter_mut().zip(cover.iter_mut()).enumerate() {
+                if *have > 0.0 {
+                    each(start + i, *r, *have);
+                    (*r, *have) = ([0.0; 4], 0.0);
+                }
+            }
+        }
+    }
+
+    /// Ends the run src-over onto `dst` (the band's rows, or a group's), inside `mask`.
+    fn flush(&mut self, band_y0: i32, w: usize, dst: &mut [Premul], mask: Option<&[f32]>) {
+        self.end(band_y0, w, |at, s, _| {
+            let m = match mask {
+                Some(mask) => mask.get(at).copied().unwrap_or(0.0),
+                None => 1.0,
+            };
+            let Some(d) = dst.get_mut(at) else { return };
+            let inv = 1.0 - s[3] * m;
+            *d = [s[0] * m + d[0] * inv, s[1] * m + d[1] * inv, s[2] * m + d[2] * inv, s[3] * m + d[3] * inv];
+        });
+    }
 }
 
 /// The clips of a display list: their mask artwork and where each can be non-zero.
@@ -747,30 +939,55 @@ impl BandClips {
             // A soft mask: its artwork painted onto transparent, then each pixel's opacity or
             // luminance.
             let mut px: Vec<Premul> = vec![[0.0; 4]; w * band.height()];
+            let mut run = Run::default();
             for op in clips.art.get(i).into_iter().flatten() {
                 let b = op.bounds.intersect(&band);
                 if b.is_empty() {
                     continue;
                 }
+                if run.id != 0 && run.id != op.run {
+                    run.flush(band.y0, w, &mut px, None);
+                }
                 cov.reset(b);
                 for poly in &op.polys {
                     cov.add_polygon(poly);
                 }
+                if op.run != 0 {
+                    run.id = op.run;
+                    run.add(cov, op, b, (band.y0, w, px.len()), row, None);
+                    continue;
+                }
                 composite(cov, op, b, band.y0, w, &mut px, row, None);
             }
+            run.flush(band.y0, w, &mut px, None);
             for (d, p) in buf.iter_mut().zip(&px) {
                 *d = mode.reveal(*p);
             }
         }
-        // Union of the artwork's coverage (a ∪ b = a + b − ab), anti-aliased like any fill.
+        // Union of the artwork's coverage (a ∪ b = a + b − ab), anti-aliased like any fill; a
+        // run of joined fills (ADR 0138) unites as one, with what it covers together.
+        let mut run = Run::default();
+        let unite = |buf: &mut [f32], at: usize, k: f32| {
+            if let Some(d) = buf.get_mut(at) {
+                *d = *d + k - *d * k;
+            }
+        };
         for op in clips.art.get(i).into_iter().flatten().filter(|_| !mode.is_soft()) {
             let b = op.bounds.intersect(&band);
             if b.is_empty() {
                 continue;
             }
+            if run.id != 0 && run.id != op.run {
+                run.end(band.y0, w, |at, _, k| unite(&mut buf, at, k));
+            }
             cov.reset(b);
             for poly in &op.polys {
                 cov.add_polygon(poly);
+            }
+            if op.run != 0 {
+                run.id = op.run;
+                run.add(cov, op, b, (band.y0, w, buf.len()), row, None);
+                continue;
             }
             row.clear();
             row.resize(b.width(), 0.0);
@@ -784,6 +1001,7 @@ impl BandClips {
                 }
             }
         }
+        run.end(band.y0, w, |at, _, k| unite(&mut buf, at, k));
         if let Some(p) = parent {
             for (d, m) in buf.iter_mut().zip(p.iter()) {
                 *d *= m;
@@ -881,7 +1099,7 @@ fn drop_unseen(polys: &mut [Vec<Vec2>], surface: IRect) {
 /// the item is a soft mask's artwork, prepared with its paints like any artwork (still marked
 /// as mask artwork). `cut`: what can't reach a pixel is left out ([`unseen`]); off, the item is
 /// prepared whole, for the tests that show the pixels are the same.
-fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool, cut: bool) -> Vec<Prepared> {
+fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool, cut: bool, run: u32) -> Vec<Prepared> {
     let mut out = Vec::new();
     let m = view.mul(&item.transform);
     if !m.is_finite() {
@@ -941,11 +1159,11 @@ fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool, cut: b
             })
             .collect();
         if let Some(b) = hairline::bounds(&polys, surface) {
-            out.push(Prepared { polys, rule: FillRule::NonZero, shader, bounds: b, clip, masks, group, layer: None, hairline: true });
+            out.push(Prepared { polys, rule: FillRule::NonZero, shader, bounds: b, clip, masks, group, layer: None, hairline: true, run: 0 });
         }
         return out;
     }
-    let mut push = |mut polys: Vec<Vec<Vec2>>, rule, shader: Shader| {
+    let mut push = |mut polys: Vec<Vec<Vec2>>, rule, shader: Shader, run: u32| {
         if shader.is_solid().is_some_and(|c| c[3] <= 0.0) {
             return;
         }
@@ -954,12 +1172,12 @@ fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool, cut: b
             if cut && beyond {
                 drop_unseen(&mut polys, surface);
             }
-            out.push(Prepared { polys, rule, shader, bounds: b, clip, masks, group, layer: None, hairline: false });
+            out.push(Prepared { polys, rule, shader, bounds: b, clip, masks, group, layer: None, hairline: false, run });
         }
     };
 
     if is_mask {
-        push(lines.iter().map(|l| l.points.clone()).collect(), item.fill_rule, Shader::Solid([1.0; 4]));
+        push(lines.iter().map(|l| l.points.clone()).collect(), item.fill_rule, Shader::Solid([1.0; 4]), run);
         return out;
     }
     // The stroke is outlined from the flattened lines first, so the fill can then take them
@@ -985,10 +1203,10 @@ fn prepare(item: &DisplayItem, view: &Affine, surface: IRect, soft: bool, cut: b
             }
             _ => Shader::new(fill, &m, &item.color, item.image.as_ref()).smoothed(item.smooth),
         };
-        push(polys, item.fill_rule, shader);
+        push(polys, item.fill_rule, shader, run);
     }
     if let Some((polys, shader)) = stroke {
-        push(polys, FillRule::NonZero, shader);
+        push(polys, FillRule::NonZero, shader, 0);
     }
     out
 }
@@ -1061,6 +1279,8 @@ mod nine_slice_tests;
 mod layer_opacity_tests;
 #[cfg(test)]
 mod cut_tests;
+#[cfg(test)]
+mod join_tests;
 
 #[cfg(test)]
 mod tests {
@@ -1071,6 +1291,7 @@ mod tests {
 
     fn item(path: Path, fill: Paint) -> DisplayItem {
         DisplayItem {
+            joins: false,
             path: Arc::new(path),
             transform: Affine::IDENTITY,
             fill: Some(fill),

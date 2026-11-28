@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 fn item(path: Path, fill: Paint, rule: FillRule) -> DisplayItem {
     DisplayItem {
+        joins: false,
         path: Arc::new(path),
         transform: Affine::IDENTITY,
         fill: Some(fill),

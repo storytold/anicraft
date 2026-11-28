@@ -387,3 +387,26 @@ fn a_moved_selection_floats_until_it_is_deselected() {
     assert_eq!(run(&mut o, "draw.float", json!({}))["floating"], 0);
     assert!(o.floating.is_none());
 }
+
+#[test]
+fn merged_fills_leave_no_line_of_the_stage_between_them() {
+    // Issue #182: an oval drawn over a rectangle cuts it along a curve; the white stage must
+    // not show along the cut (ADR 0138). Red and blue have no green; the stage is all green.
+    let mut s = blank();
+    run(&mut s, "draw.rect", json!({"x": 100, "y": 100, "w": 300, "h": 200, "fill": "#ff0000", "stroke": null}));
+    run(&mut s, "draw.ellipse", json!({"x": 180, "y": 130, "w": 140, "h": 110, "fill": "#0000ff", "stroke": null}));
+    assert_eq!(count(&s), (2, 0));
+    let dl = anicraft_doc::evaluate(&s.doc, 0);
+    assert!(dl.items.last().is_some_and(|i| i.joins), "the fills of one drawing join");
+    // At a zoom that puts the curve across pixels every way.
+    let scale = 1.37;
+    let pm = anicraft_render::render_frame(&s.doc, 0, scale).unwrap();
+    let px = |v: f32| (v * scale) as u32;
+    let mut worst = 0.0f32;
+    for y in px(105.0)..px(295.0) {
+        for x in px(105.0)..px(395.0) {
+            worst = worst.max(pm.pixel(x, y).unwrap()[1]);
+        }
+    }
+    assert!(worst < 0.01, "the stage shows through: {worst}");
+}

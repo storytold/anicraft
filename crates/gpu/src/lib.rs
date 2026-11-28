@@ -212,6 +212,8 @@ pub struct GpuRenderer {
     /// When work may be submitted on the window's device ([`SubmitGate`], ADR 0105).
     gate: Option<Arc<SubmitGate>>,
     filtered_flight: Mutex<FilteredFlight<wgpu::SubmissionIndex>>,
+    /// Whether the scratch allowance is kept ([`fences`]).
+    fenced: bool,
     /// First device failure (an error in a render, an uncaptured error or the device's loss).
     /// Once set, the renderer refuses to draw and callers fall back to the CPU.
     broken: Arc<Mutex<Option<String>>>,
@@ -258,13 +260,18 @@ pub const MAX_LAYER_PIXELS: u64 = 1 << 23;
 const SHARED_FILTER_BYTES: u64 = 64 << 20;
 const DISCRETE_FILTER_BYTES: u64 = 128 << 20;
 
-fn filter_budget(device_type: wgpu::DeviceType, backend: wgpu::Backend) -> u64 {
-    match (device_type, backend) {
-        // Device::poll(Wait) cannot fence a browser WebGPU submission.
-        (_, wgpu::Backend::BrowserWebGpu) => 0,
-        (wgpu::DeviceType::DiscreteGpu, _) => DISCRETE_FILTER_BYTES,
+fn filter_budget(device_type: wgpu::DeviceType) -> u64 {
+    match device_type {
+        wgpu::DeviceType::DiscreteGpu => DISCRETE_FILTER_BYTES,
         _ => SHARED_FILTER_BYTES,
     }
+}
+
+/// Whether a submission can be waited for, which is what the scratch allowance is counted by.
+/// In the browser `Device::poll(Wait)` can't wait for one, so there the allowance isn't kept:
+/// filtered layers are drawn as before it, within the per-call limits ([`MAX_LAYER_PIXELS`]).
+fn fences(backend: wgpu::Backend) -> bool {
+    backend != wgpu::Backend::BrowserWebGpu
 }
 
 /// Charge short-lived buffers with a page-sized minimum. This is an admission
@@ -532,7 +539,8 @@ impl GpuRenderer {
                 Home::Window(gate) => gate,
                 Home::Own => None,
             },
-            filtered_flight: Mutex::new(FilteredFlight::new(filter_budget(info.device_type, info.backend))),
+            filtered_flight: Mutex::new(FilteredFlight::new(filter_budget(info.device_type))),
+            fenced: fences(info.backend),
             broken,
         };
         r.self_test()?;
@@ -547,6 +555,7 @@ impl GpuRenderer {
         use anicraft_doc::{ColorTransform, DisplayItem, ElementId, Filter, Group, LayerId, Paint, Pixels, Rgba};
         use anicraft_geom::{Affine, FillRule, Path};
         let item = |path: Path, fill: Paint| DisplayItem {
+            joins: false,
             path: Arc::new(path),
             transform: Affine::IDENTITY,
             fill: Some(fill),
@@ -728,7 +737,9 @@ impl GpuRenderer {
     /// Reserve scratch before encoding, then charge it until that submission completes. Both
     /// window textures and headless readbacks share the same queue and the same allowance.
     fn reserve_filtered(&self, layers: u64, output: u64) -> Result<Option<FilterReservation<'_>>, GpuError> {
-        if layers == 0 { return Ok(None); }
+        if layers == 0 || !self.fenced {
+            return Ok(None);
+        }
         let bytes = layers + output;
         let mut flight = self.filtered_flight.lock().unwrap_or_else(PoisonError::into_inner);
         let room = flight.make_room(bytes, |index| self.device.poll(wgpu::PollType::Wait {

@@ -1,6 +1,6 @@
 # Command reference
 
-Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 406 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
+Everything you can do in AniCraft is a command: the menus, the shortcuts, the command palette (**Ctrl+K**, macOS **⌘K**), `anicraft-cli` and AI assistants over MCP all run the same 407 commands, listed here by menu. The id is what scripts and [working headless](../working-headless.md) use; the parameters are what a command takes as JSON. Commands that change the document are one undo step each. Your own shortcuts (**Help › Keyboard Shortcuts**) replace the defaults shown here; see the [shortcut reference](shortcuts.md).
 
 This page is generated from the command registry, so it always matches the version of AniCraft it came with.
 
@@ -581,8 +581,10 @@ These commands have no menu item: the panels, the stage and the timeline use the
   Parameters: ``{index, at} moves this scene's guide `index` (as view.aids lists them) to `at`; refused while guides are locked``
 - **Delete Guide** `view.guide_delete` · changes the document
   Parameters: ``{index} removes this scene's guide `index`; refused while guides are locked``
+- **Marquee Takes Touched Objects** `view.select_touching`
+  Parameters: `{on?: bool} (default: toggle) the marquee takes the objects it only touches (on, as AniCraft starts) or only the objects wholly inside it; kept with the preferences`
 - **Rulers, Grid and Guides** `view.aids`
-  Parameters: `{} whether the rulers, grid and guides show and snap, whether selection edges are hidden, the grid's and guides' settings, and this scene's guides [{axis, at}, ..]`
+  Parameters: `{} whether the rulers, grid and guides show and snap, whether selection edges are hidden, whether the marquee takes objects it only touches (select_touching), the grid's and guides' settings, and this scene's guides [{axis, at}, ..]`
 - **Combine Objects** `modify.combine` · changes the document
   Parameters: `{op: union|intersect|punch|crop} combines the selected shapes on the active layer, bottom to top as they are stacked (ADR 0073). union: one drawing object of everything (a group of the merged pieces when they have more than one colour or keep lines); intersect: the area every one covers, in the topmost's fill and stroke; punch: the topmost's area cut out of each of the others; crop: each of the others cut to the topmost's area. Punch and crop remove the topmost. A result of one fill (or one line) is a drawing object, one of several is a group of raw shapes → {op, created}`
 - **List Library** `library.items`
@@ -636,7 +638,7 @@ These commands have no menu item: the panels, the stage and the timeline use the
 - **Move Point** `raw.move_point` · changes the document
   Parameters: ``{x, y, to_x, to_y, with?: [[x, y], ..], points?: [[id, cmd], ..], snap?, slop?, merge?: bool} moves the corner or end at (x, y), with every raw shape that shares it, to (to_x, to_y), snapped within `snap` to points, lines and fill edges (while Snap to Objects is on); the anchors at `with` move by as much; returns the points to pass on while a drag goes on``
 - **Select Parts** `raw.select_rect` · changes the document
-  Parameters: `{x0, y0, x1, y1, add?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects it touches`
+  Parameters: ``{x0, y0, x1, y1, add?: bool, touch?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects it touches, or with `touch` false only the objects wholly inside it (default: as view.select_touching is set)``
 - **Merge Shapes** `raw.merge` · changes the document
   Parameters: `{ids?: [..]} the raw shapes (default: the selection) merge again with the raw shapes they touch, in place`
 - **Selection Tool Target** `raw.hit`

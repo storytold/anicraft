@@ -120,6 +120,11 @@ pub struct DisplayItem {
     /// image as drawn (`rest`) to where it shows (`shown`); renderers draw the image through
     /// its triangles. `None` for everything else (a warped shape's path is already bent).
     pub warp: Option<Arc<crate::warp::WarpMesh>>,
+    /// This item and the one before it are shapes of one merged drawing (ADR 0031: the raw
+    /// shapes of one keyframe, whose fills lie side by side and never under each other). Where
+    /// two such fills share an edge a renderer adds up what each covers of a pixel instead of
+    /// drawing one over the other, so nothing below shows through the edge (ADR 0138).
+    pub joins: bool,
 }
 
 /// Back-to-front list of shapes.
@@ -1036,12 +1041,14 @@ fn eval_timeline(doc: &Document, tl: &Timeline, frame: u32, cx: &Ctx<'_>, out: &
                 image: None,
                 smooth: true,
                 warp: None,
+                joins: false,
             });
         }
         let Some((kf_start, elements)) = shown else { continue };
         // Data bindings (ADR 0118): a table's column in place of a bound instance's property.
         let elements = doc.bound_elements(elements, frame);
-        let lc = LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf };
+        let merged = std::cell::Cell::new(usize::MAX);
+        let lc = LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf, merged: &merged };
         // A layer below full opacity (its own, or a folder's it is in; ADR 0111) fades as one:
         // its artwork composites in a group, and the group blends at the layer's opacity, so
         // its overlapping parts don't show through each other. Mask artwork ignores opacity,
@@ -1075,6 +1082,10 @@ struct LayerCtx<'a> {
     outline: Option<Rgba>,
     /// The layer's space (and, inside a group, the group's) to stage space.
     xf: Affine,
+    /// How long the display list was just after this layer's last merged shape went into it
+    /// (`usize::MAX` before the first): a merged shape that goes in at that length follows
+    /// another of the same drawing ([`DisplayItem::joins`]).
+    merged: &'a std::cell::Cell<usize>,
 }
 
 fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, out: &mut DisplayList, play: Option<&Play<'_>>) {
@@ -1083,7 +1094,7 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
     if !cx.work.visit(el) {
         return;
     }
-    let LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf } = *lc;
+    let LayerCtx { layer, frame, kf_start, clip, masks, guide, outline: layer_outline, xf: layer_xf, merged: _ } = *lc;
     // In the player, a symbol instance has its own path, and maybe properties a script set.
     let child = match (&el.kind, play) {
         (ElementKind::Symbol { .. }, Some(p)) => Some(p.child(el.id)),
@@ -1114,7 +1125,12 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
                 Some(x) => x,
                 None => (s.path.clone(), xf, s.fill.clone(), s.stroke.clone()),
             };
+            let joins = s.merge && lc.merged.get() == out.items.len();
+            if s.merge {
+                lc.merged.set(out.items.len() + 1);
+            }
             out.items.push(DisplayItem {
+                joins,
                 path,
                 transform,
                 fill,
@@ -1172,6 +1188,7 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
                 image: None,
                 smooth: true,
                 warp: None,
+                joins: false,
             };
             match &t.field {
                 // Mask artwork: a field's text masks; its box and border don't.
@@ -1203,7 +1220,9 @@ fn eval_element(doc: &Document, cx: &Ctx<'_>, lc: &LayerCtx<'_>, el: &Element, o
                 (color, cx.group)
             };
             let inner = Ctx { color, depth: cx.depth + 1, root: Some((root_layer, root_el)), group, slice: None, camera: None, ..*cx };
-            let lc = LayerCtx { xf, ..*lc };
+            // A group's raw shapes merge only with each other: a drawing of their own.
+            let merged = std::cell::Cell::new(usize::MAX);
+            let lc = LayerCtx { xf, merged: &merged, ..*lc };
             for m in members.layers.iter().rev().filter(|l| l.visible && l.kind != LayerKind::Guide).filter_map(|l| l.keyframe_at(0)).flat_map(|k| k.elements.iter()) {
                 eval_element(doc, &inner, &lc, m, out, play);
             }

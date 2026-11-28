@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+* **No line of the stage between merged fills** (backlog P-013, ADR 0138, #182). Two fills of
+  one merged drawing that share an edge, such as a shape cut by a curve, showed a hairline of
+  whatever was below along it: each was anti-aliased on its own and drawn over the other.
+  Fills of one drawing are now added up where they meet, on the stage (CPU and GPU), in Test
+  Movie and in every picture and video export; a mask drawn as several fills no longer leaks
+  along their edges. The same frame takes the same time to draw (2.4 ms for 1,000 joined fills
+  at 1280 × 720). Not yet in SVG, HTML and Lottie exports, where the viewer draws each fill.
+* **A preference for the marquee** (Preferences › Stage): **The marquee takes objects it
+  touches**, on as before. Off, a box dragged with the Selection tool takes only the objects
+  wholly inside it. Headless: `view.select_touching {on}`, and `touch` on `raw.select_rect`.
+* **The guide tells the truth** (backlog P-016). Every "not yet" in the guide was checked
+  against the code. "Coming from Animate" no longer lists as missing what has shipped (moving
+  the Tools panel, Asset Warp, the Paint Brush, Ctrl+J and the panel keys, saved workspaces,
+  document tabs, Envelope, bone springs, the brush library and pressure curves, per-character
+  styles, text on a path), and the drawing chapter covers the Paint Brush, pressure curves and
+  the Brush Library.
+* **From outside** (M8): leaving the zoom field without typing
+  keeps a fitted view, and the view's centre is right at very small zooms (ViktorBystrov72,
+  #633); no fragments of an older picture show on the pasteboard while stage tiles are
+  replaced (Untoldent, #669); the GPU counts the scratch memory of filtered work still in
+  flight and hands a tile to the CPU instead of running out (Untoldent, #664; in the browser,
+  where that can't be counted, filtered layers still draw on the GPU).
+* **A test that failed now and then** (`stage_work_is_submitted_only_inside_the_frame`): it
+  watched the window's submit gate, which every other test that draws a frame opens and closes
+  from its own thread. It now has a gate of its own; nothing in the app changed.
+
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.

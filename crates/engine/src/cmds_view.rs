@@ -44,7 +44,16 @@ pub fn specs() -> Vec<CommandSpec> {
         c("view.guide_delete", "Delete Guide", "", None, "{index} removes this scene's guide `index`; refused while guides are locked", true, guide_delete),
         c("view.guides_clear", "Clear Guides", "View/Guides", None, "{} removes every guide from this scene (undoable)", true, guides_clear),
         c("view.snap_pixels", "Snap to Pixels", "View/Snapping", None, "{on?: bool} (default: toggle) points being drawn, dragged or moved go to whole stage pixels where nothing else snaps them", false, |s, p| toggle(s, p, |a| &mut a.snap_pixels)),
-        c("view.aids", "Rulers, Grid and Guides", "", None, "{} whether the rulers, grid and guides show and snap, whether selection edges are hidden, the grid's and guides' settings, and this scene's guides [{axis, at}, ..]", false, |s, _| Ok(aids_json(s))),
+        c(
+            "view.select_touching",
+            "Marquee Takes Touched Objects",
+            "",
+            None,
+            "{on?: bool} (default: toggle) the marquee takes the objects it only touches (on, as AniCraft starts) or only the objects wholly inside it; kept with the preferences",
+            false,
+            |s, p| toggle(s, p, |a| &mut a.select_touching),
+        ),
+        c("view.aids", "Rulers, Grid and Guides", "", None, "{} whether the rulers, grid and guides show and snap, whether selection edges are hidden, whether the marquee takes objects it only touches (select_touching), the grid's and guides' settings, and this scene's guides [{axis, at}, ..]", false, |s, _| Ok(aids_json(s))),
     ]
 }
 
@@ -65,6 +74,7 @@ pub(crate) fn aids_json(s: &Session) -> Value {
         "guides": {"show": a.show_guides, "lock": a.lock_guides, "snap": a.snap_guides, "accuracy": a.guide_accuracy.key(), "color": color_hex(s.doc.aids.guide_color), "list": guides_json(s)},
         "snap_pixels": a.snap_pixels,
         "snap_objects": s.style.snap_objects,
+        "select_touching": a.select_touching,
     })
 }
 

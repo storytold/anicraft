@@ -386,6 +386,9 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
     let mut reset_confirms = false;
     let mut about_act: Option<crate::desktop_ui::Act> = None;
     let mut theme_act: Option<ThemeAct> = None;
+    // The marquee's choice is the session's (`view.select_touching`), so a script can set it
+    // too; the command runs once the window is drawn.
+    let mut touching = app.s.aids.select_touching;
     let to_about = std::mem::take(&mut app.prefs_to_about);
     let title = if crate::platform::OS == crate::platform::Os::Mac { tr!("Settings") } else { tr!("Preferences") };
     let shown = crate::windows::new(ctx, title)
@@ -594,6 +597,13 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
                             form_note(ui, LW, text(Type::Caption, s));
                         }
                     }
+                    ui.add_space(4.0);
+                    form_row(ui, LW, tr!("Selection"), |ui| {
+                        ui.vertical(|ui| {
+                            crate::theme::checkbox(ui, &mut touching, text(Type::Body, tr!("The marquee takes objects it touches")));
+                            form_note(ui, toggle_indent, text(Type::Caption, tr!("Off, dragging a box with the Selection tool takes only the objects that are wholly inside it. Shapes drawn without Object Drawing are cut at the box's edges either way.")));
+                        });
+                    });
                     // How the window itself is drawn (#207, #255): read when AniCraft starts.
                     let backends = crate::platform::window_backends(crate::platform::OS);
                     if !backends.is_empty() {
@@ -726,6 +736,9 @@ fn preferences(app: &mut App, ctx: &egui::Context) {
     }
     if let Some(a) = about_act {
         crate::desktop_ui::apply(app, a);
+    }
+    if touching != app.s.aids.select_touching {
+        app.run("view.select_touching", json!({"on": touching}));
     }
     if p != app.prefs {
         app.set_prefs(ctx, p);

@@ -82,6 +82,10 @@ pub const CLIPPED: u32 = 1;
 /// soft mask its paint composites into the level's colour).
 pub const ART: u32 = 2;
 
+/// An op header's flags above this many bits: the fill's run of joined fills
+/// ([`Fill::run`], ADR 0138), or 0.
+pub const RUN_SHIFT: u32 = 2;
+
 /// An entry whose first word has this bit is a control entry, not a fill.
 pub const CTRL: u32 = 0x8000_0000;
 /// `[OPEN, group, 0, 0]`: push the colour so far and continue on transparent.
@@ -349,7 +353,9 @@ pub fn bin_with(scene: &Scene, width: u32, height: u32, gpu: Option<&crate::gpu_
         } else {
             0
         };
-        op_heads.extend_from_slice(&[kind, rule, ramp, flags]);
+        // A run numbered past what the flags hold (a billion items) is drawn unjoined.
+        let run = if f.run < 1 << (32 - RUN_SHIFT) { f.run } else { 0 };
+        op_heads.extend_from_slice(&[kind, rule, ramp, flags | (run << RUN_SHIFT)]);
     }
     paints.extend_from_slice(&ramps);
     if paints.len() != PAINT_VEC4S * ops.len() + table_len {

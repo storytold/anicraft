@@ -126,6 +126,11 @@ portable copy, `data/themes` beside the app). To check a file without opening An
 Both settings are also in **View › Stage Rendering**, so you can switch without opening
 Preferences.
 
+* **Selection**: **The marquee takes objects it touches** is on to begin with: a box dragged
+  with the Selection tool selects every symbol instance, group, drawing object, text and bitmap
+  it reaches. Turn it off to select only the objects that are wholly inside the box. Shapes
+  drawn without Object Drawing are cut at the box's edges either way.
+
 * **Window graphics**: how the whole window is drawn. **Automatic** (the default) tries the best
   way for your computer first and the next one if it doesn't work. If the window flickers or
   goes black, choose another way: **DirectX 12**, **Vulkan** or **OpenGL** on Windows, **Metal**

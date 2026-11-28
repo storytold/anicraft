@@ -957,6 +957,7 @@ mod tests {
     /// `path` stroked with `st` in 50 % black on a white 400 × 300 stage: each pixel's ink.
     fn drawn(path: &str, st: Stroke) -> Vec<f32> {
         let item = DisplayItem {
+            joins: false,
             path: std::sync::Arc::new(Path::from_svg(path).unwrap()),
             transform: Affine::IDENTITY,
             fill: None,

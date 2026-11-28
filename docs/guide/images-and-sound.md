@@ -437,7 +437,9 @@ Lottie animations carry no sound. See [Exporting and Publish](exporting-and-publ
 
 ## Not yet
 
-* Picking a colour from a bitmap's pixels with the Eyedropper.
+* Picking a colour from a bitmap's pixels with the Eyedropper tool (it picks up whole fills).
+  The eyedropper of an open colour picker does take the colour of a pixel: see
+  [Choosing colours](drawing.md#choosing-colours).
 * Panning beyond what the envelope does.
 * Convert Audio to Keyframes on the camera or an armature layer, a filter's values, or with a
   classic tween between the keys; the sound's own effect (a fade) isn't counted in its

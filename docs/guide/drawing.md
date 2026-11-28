@@ -19,13 +19,16 @@ your hand.
 | Selection | **V** | Select, move and bend artwork |
 | Subselection | **A** | Edit points and curve handles |
 | Free Transform | **Q** | Scale, skew, rotate and move |
+| Asset Warp | **Shift+Q** | Bend a shape or a bitmap with pins |
 | Gradient Transform | **F** | Move, turn and stretch a gradient or bitmap fill |
 | Width | **U** | Vary a line's thickness along it |
 | Bone | **M** | Join symbol instances into a poseable armature |
+| Bind | **Shift+M** | Choose which points of a shape follow which bone |
 | Pen | **P** | Draw precise curves point by point |
 | Text | **T** | Type text on the stage |
 | Pencil | **Shift+Y** | Draw freehand lines |
 | Brush | **B** | Paint filled shapes |
+| Paint Brush | **Y** | Draw lines whose width follows pen pressure |
 | Eraser | **E** | Rub out lines and fills |
 | Rectangle | **R** | Draw rectangles and squares |
 | Oval | **O** | Draw ovals and circles |
@@ -42,7 +45,7 @@ While a drawing tool is in your hand, its options appear at the top of **Propert
 and stroke, line style, and the tool's own settings. You can change any of these keys in the
 shortcut editor (**Ctrl+Alt+Shift+K**).
 
-The Bone and Camera tools are covered in
+The Bone, Bind, Asset Warp and Camera tools are covered in
 [Masks, guides, camera and bones](masks-guides-camera-bones.md), and the Text tool in
 [Text](text.md).
 
@@ -66,8 +69,8 @@ you don't want, and fill the spaces.
 that never cut or merge, and they're easy to move, stack and edit one at a time.
 
 To switch between them, press **J**, or tick **Object drawing** in the tool's options in
-Properties. The setting applies to the Rectangle, Oval, PolyStar, Line, Pen, Pencil and Brush
-tools.
+Properties. The setting applies to the Rectangle, Oval, PolyStar, Line, Pen, Pencil, Brush and
+Paint Brush tools.
 
 The Eraser only erases merged drawing. Drawing objects, symbols and text are left alone by
 it. To turn a drawing object back into merged drawing, select it and choose **Modify › Break
@@ -94,7 +97,9 @@ With the **Selection** tool (**V**) on merged drawing:
 * **Drag a marquee** to select the parts of fills and lines under it, cut at the marquee's
   edges, plus any objects it touches (symbol instances, groups, drawing objects, text and
   bitmaps are taken whole). **Shift** adds more. If you click away without
-  changing anything, the drawing is whole again.
+  changing anything, the drawing is whole again. To take only the objects that are wholly
+  inside the marquee, turn off **The marquee takes objects it touches** in
+  [Preferences](preferences-shortcuts-accessibility.md#stage).
 * **Drag an unselected line** or the edge of a fill to **bend** it into a curve through the
   pointer. Its ends stay put, and a straight edge bends into one even arc wherever you grab it.
 * **Ctrl-drag** (**⌘-drag** on a Mac) a line or the edge of a fill to add a **corner point**
@@ -175,6 +180,22 @@ the tip sweeps. A click paints a single dab. The options set the **Size** (or pr
 
 The last three never cover lines. With
 a pen tablet, pressure sets the width, from 10 % to the full size.
+
+**Pressure.** Under **Pressure**, tick **Size**, **Opacity** or both to choose what the pen's
+pressure changes. **Curve** shapes the response: pick one of the presets beside it, or drag
+the points of the curve (drag elsewhere on it to add a point, double-click a point to remove
+it). Without a pen, **Speed as pressure** makes a faster stroke thinner.
+
+**Brushes.** The **Brush** menu in the options picks a ready-made brush, such as Ink Pen,
+Marker or Chalk. **Library…** beside it, or **Window › Brush Library**, shows every brush with
+a preview. To keep a brush of your own, set it up in Properties, type a name in the Brush
+Library and click **Save Brush**. Right-click a brush of yours to rename or delete it;
+**Import…** and **Export…** move your brushes between computers as a brush set file.
+
+**The Paint Brush** (**Y**) draws a line in the stroke colour instead of a filled shape. Its
+width follows the pen's pressure and the brush's tapers, and you can reshape it afterwards
+with the Width tool (see [Variable-width lines](#variable-width-lines)). It uses the same
+brushes and pressure settings, and **[** and **]** change its size.
 
 **Texture and scatter.** **Texture** lets a paper grain show through the paint, like charcoal
 on rough paper; the grain stays put on the stage, so strokes laid over each other share it.

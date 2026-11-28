@@ -563,6 +563,7 @@ mod tests {
 
     fn item(path: Path, fill: Option<Paint>) -> DisplayItem {
         DisplayItem {
+            joins: false,
             path: Arc::new(path),
             transform: Affine::IDENTITY,
             fill,
@@ -752,6 +753,7 @@ mod group_tests {
     #[test]
     fn groups_become_opacity_groups_around_their_run() {
         let it = |g: Option<u32>| DisplayItem {
+            joins: false,
             path: Arc::new(Path::rect(0.0, 0.0, 4.0, 4.0)),
             transform: Affine::IDENTITY,
             fill: Some(Paint::Solid(Rgba::BLACK)),
@@ -781,6 +783,7 @@ mod group_tests {
     #[test]
     fn links_escape_xml_attributes_and_drop_denied_schemes() {
         let shape = DisplayItem {
+            joins: false,
             path: Arc::new(Path::rect(0.0, 0.0, 10.0, 10.0)),
             transform: Affine::IDENTITY,
             fill: Some(Paint::Solid(Rgba::BLACK)),

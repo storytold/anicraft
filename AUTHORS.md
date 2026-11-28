@@ -22,7 +22,7 @@ People who have contributed to AniCraft. The repository starts from one initial 
 * nocturney: localisation tests (Hebrew plurals, the product name).
 * Vincent Agerbech (va-moviestarplanet): XFL group placement.
 * scks1: raw drawings that align, distribute, turn and take strokes as one shape.
-* Untoldent: the selection stipple and its gradient detail (#404), the scene breadcrumb, names selected in dialogs.
+* Untoldent: the selection stipple and its gradient detail (#404), the scene breadcrumb, names selected in dialogs, the GPU's count of filtered scratch memory in flight (#664), no stale pasteboard fragments while stage tiles are replaced (#669).
 * gmrmad1: the zoom field, the Scale lock, playhead and scene-end fixes.
 * Koolskull: group registration at the centre of the artwork.
 * Kushagra Kumar (kk376): drawing with the camera layer hidden.
@@ -37,6 +37,6 @@ People who have contributed to AniCraft. The repository starts from one initial 
 * Hagai Baram (hrb9): the Hebrew fallback face, `iw` read as Hebrew, and right-to-left language detection, private-use tags included (#486).
 * FredApps: a test that linked artwork survives SVG export and re-import (#500).
 * Ayberk A. (AyberkA0): View Only the Active Layer, frame stepping that stops at the ends, a press that selects at once, an empty cell that selects, transparent PNG frames, the marquee that takes what it touches, Distribute to Layers, Match Size and Space Evenly, filter cards that fold, raw shapes moved from Properties, To Stage inside a symbol, aligning by outlines, and a swatch that closes the picker (#572 to #584).
-* ViktorBystrov72: stage zoom measured in device pixels, Hide Edges, and fitting the stage to an imported SVG (#590, #588, #587).
+* ViktorBystrov72: stage zoom measured in device pixels, Hide Edges, fitting the stage to an imported SVG, and the fitted zoom kept when the zoom field loses focus (#590, #588, #587, #633).
 * Neel Patel (N-NeelPatel): Convert Lines to Fills in a shape's properties (#562).
 * rcoenen: an imported Animate file that keeps its name, and the macOS crash on closing the window, with the move to egui 0.37 (#596, #594).

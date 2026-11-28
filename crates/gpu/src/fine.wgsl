@@ -9,6 +9,10 @@
 // colour, all in f32, as the oracle does. A hairline (ADR 0048) is 1 − the distance from the
 // pixel centre to its nearest segment (crates/render/src/hairline.rs).
 //
+// A run of joined fills (ADR 0138; crates/render/src/lib.rs › Fill::run) is added up on its own
+// and composited once, when the next entry isn't one of it: fills of one merged drawing lie
+// side by side, so the pixels of an edge two of them share are covered by both together.
+//
 // Masks and groups (ADR 0029) are control entries in the same list, mirroring the oracle's band
 // compositor (crates/render/src/lib.rs): clip artwork unites into a level's coverage (a soft
 // mask's, ADR 0070, composites its paint and gives its opacity or luminance), levels
@@ -70,6 +74,8 @@ const CLIPPED: u32 = 1u;
 const ART: u32 = 2u;
 const MAX_GROUP_DEPTH: u32 = 8u;
 const HAIRLINE: u32 = 2u;
+// An op's run of joined fills is its flags above this many bits (0: none).
+const RUN_SHIFT: u32 = 2u;
 
 // Mean of clamp(u, 0, 1) for u running linearly from u0 to u1.
 fn avg_clamp(u0: f32, u1: f32) -> f32 {
@@ -389,11 +395,37 @@ fn pixel(wg: vec3<u32>, lid: vec3<u32>) -> vec4<f32> {
     // artwork's colour so far.
     var level_mode = 0u;
     var level_colour = vec4<f32>(0.0);
+    // The run of joined fills being added up: its number (0: none), its colour and how much
+    // of the pixel it covers so far, the clip coverage its fills are drawn in, and whether it
+    // is clip artwork.
+    var run = 0u;
+    var run_c = vec4<f32>(0.0);
+    var run_k = 0.0;
+    var run_m = 1.0;
+    var run_art = false;
     let start = index[tile * 2u];
     let count = index[tile * 2u + 1u];
     for (var i = 0u; i < count; i++) {
         let e = params.at.x + (start + i) * 4u;
         let op = index[e];
+        var id = 0u;
+        if (op & CTRL) == 0u {
+            id = index[params.at.y + op * 4u + 3u] >> RUN_SHIFT;
+        }
+        if run != 0u && run != id {
+            // The run ends (the oracle's `Run::flush` and `Run::end`).
+            if run_art {
+                if level_mode != 0u {
+                    level_colour = run_c + level_colour * (1.0 - run_c.a);
+                } else {
+                    level = level + run_k - level * run_k;
+                }
+            } else {
+                let s = run_c * run_m;
+                c = s + c * (1.0 - s.a);
+            }
+            run = 0u;
+        }
         if (op & CTRL) != 0u {
             switch op {
                 case OPEN: {
@@ -456,6 +488,35 @@ fn pixel(wg: vec3<u32>, lid: vec3<u32>) -> vec4<f32> {
             cov = fold(w, rule);
         }
         let flags = index[h + 3u];
+        if id != 0u {
+            if run == 0u {
+                run = id;
+                run_c = vec4<f32>(0.0);
+                run_k = 0.0;
+                run_art = (flags & ART) != 0u;
+                run_m = select(1.0, mask, (flags & CLIPPED) != 0u);
+            }
+            // The oracle's `Run::add`: side by side as far as the pixel has room; what can't
+            // be lies over the run.
+            let k = min(cov, 1.0);
+            if k > 1e-4 {
+                let s = shade(op, index[h], index[h + 2u], centre, x, y);
+                if k >= 1.0 && run_k <= 0.0 && !run_art {
+                    // Covered whole with nothing in the run yet: drawn at once.
+                    if run_m > 1e-4 {
+                        c = s * run_m + c * (1.0 - s.a * run_m);
+                    }
+                    continue;
+                }
+                let over = run_k + k - 1.0;
+                if over > 0.0 && run_k > 0.0 {
+                    run_c *= 1.0 - over / run_k * s.a;
+                }
+                run_c += s * k;
+                run_k = min(run_k + k, 1.0);
+            }
+            continue;
+        }
         if (flags & ART) != 0u {
             if level_mode != 0u {
                 // Soft mask artwork composites as drawn (the oracle's `composite`).
@@ -477,6 +538,11 @@ fn pixel(wg: vec3<u32>, lid: vec3<u32>) -> vec4<f32> {
         }
         let s = shade(op, index[h], index[h + 2u], centre, x, y);
         c = s * cov + c * (1.0 - s.a * cov);
+    }
+    // A run the tile's list ends with (clip artwork's always ends at its level's end).
+    if run != 0u && !run_art {
+        let s = run_c * run_m;
+        c = s + c * (1.0 - s.a);
     }
     return c;
 }

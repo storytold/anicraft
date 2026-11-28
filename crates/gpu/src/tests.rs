@@ -17,6 +17,7 @@ const MEAN_TARGET: f64 = 1.0;
 
 fn item(path: Path, fill: Paint) -> DisplayItem {
     DisplayItem {
+        joins: false,
         path: Arc::new(path),
         transform: Affine::IDENTITY,
         fill: Some(fill),
@@ -144,6 +145,44 @@ fn filtered_scratch_counts_the_extra_allocations_for_higher_filter_quality() {
     assert!(cost(&job) > low_quality, "extra passes have scratch costs at the same layer size");
 }
 
+/// Fills of one merged drawing (ADR 0138), each after the first joining the one before: the
+/// two halves of a square cut by a curve, a strip along its right side, and an ellipse lying
+/// over all three (a shape moved onto the drawing and not merged yet), turned off the pixel
+/// grid so the shared edges cross pixels and tiles every way. `alpha` fades every other fill.
+fn joined_parts(alpha: f32) -> Vec<DisplayItem> {
+    let v = Vec2::new;
+    let mut a = Path::new();
+    a.move_to(v(0.0, 0.0));
+    a.line_to(v(40.0, 0.0));
+    a.cubic_to(v(63.0, 25.0), v(17.0, 55.0), v(40.0, 80.0));
+    a.line_to(v(0.0, 80.0));
+    a.close();
+    let mut b = Path::new();
+    b.move_to(v(40.0, 0.0));
+    b.line_to(v(80.0, 0.0));
+    b.line_to(v(80.0, 80.0));
+    b.line_to(v(40.0, 80.0));
+    b.cubic_to(v(17.0, 55.0), v(63.0, 25.0), v(40.0, 0.0));
+    b.close();
+    let parts = [
+        (a, Rgba::new(0.9, 0.1, 0.1, 1.0)),
+        (b, Rgba::new(0.1, 0.2, 0.9, alpha)),
+        (Path::rect(80.0, 0.0, 30.0, 80.0), Rgba::new(0.2, 0.7, 0.3, 1.0)),
+        (Path::ellipse(70.0, 40.0, 30.0, 21.0), Rgba::new(1.0, 0.9, 0.2, alpha)),
+    ];
+    let place = Affine::translate(21.3, 7.6).mul(&Affine::rotate(0.1));
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(n, (path, color))| {
+            let mut i = item(path, Paint::Solid(color));
+            i.transform = place;
+            i.joins = n > 0;
+            i
+        })
+        .collect()
+}
+
 /// Analytic scenes: each stresses one part of the coverage or paint model.
 fn scenes() -> Vec<(&'static str, DisplayList, View)> {
     let red = Rgba::new(0.9, 0.1, 0.1, 1.0);
@@ -247,6 +286,8 @@ fn scenes() -> Vec<(&'static str, DisplayList, View)> {
     huge.color = ColorTransform::alpha(0.5).concat(&ColorTransform::tint(Rgba::hex(0x4cd07d), 0.7));
     out.push(("off-surface", list(vec![huge]), view(100, 80, Some(Rgba::WHITE))));
     out.push(("outlines", outlined(), view(150, 110, Some(Rgba::WHITE))));
+    out.push(("joined fills", list(joined_parts(1.0)), view(150, 110, Some(Rgba::WHITE))));
+    out.push(("joined fills, faded", list(joined_parts(0.5)), view(150, 110, None)));
     out.extend(composited_scenes());
     out
 }
@@ -406,6 +447,21 @@ fn composited_scenes() -> Vec<(&'static str, DisplayList, View)> {
     dl.set_clip_mode(1, MaskMode::Luminance);
     dl.set_clip_mode(3, MaskMode::Alpha);
     out.push(("soft masks", dl, view(120, 100, Some(Rgba::WHITE))));
+    // Joined fills (ADR 0138) as a mask's artwork, as a soft mask's, inside a mask, and in a
+    // group that fades.
+    let art = |clip: u32, alpha: f32| joined_parts(alpha).into_iter().map(move |mut i| {
+        i.masks = Some(clip);
+        i
+    });
+    let mut items = vec![clipped(item(Path::rect(0.0, 0.0, 150.0, 110.0), grad()), 0)];
+    items.extend(art(0, 1.0));
+    items.push(clipped(item(Path::rect(0.0, 0.0, 150.0, 110.0), Paint::Solid(blue)), 1));
+    items.extend(art(1, 0.5));
+    items.extend(joined_parts(0.5).into_iter().map(|i| in_group(clipped(i, 2), 0)));
+    items.push(mask(Path::ellipse(75.0, 50.0, 61.3, 44.1), 2));
+    let mut dl = DisplayList { items, clip_parents: vec![None, None, None], groups: vec![group(None, 0.7, BlendMode::Normal)], ..Default::default() };
+    dl.set_clip_mode(1, MaskMode::Alpha);
+    out.push(("joined fills in masks and a group", dl, view(150, 110, Some(Rgba::WHITE))));
     out
 }
 
@@ -423,8 +479,30 @@ fn emulate(b: &Binned, v: &View) -> Vec<Premul> {
             let mut stack: Vec<Premul> = Vec::new();
             let (mut mask, mut level) = (1.0f32, 0.0f32);
             let (mut level_mode, mut level_colour) = (0u32, [0.0f32; 4]);
-            for i in 0..count {
+            // The run of joined fills being added up (ADR 0138), as `fine.wgsl` keeps it.
+            let (mut run, mut run_c, mut run_k, mut run_m, mut run_art) = (0u32, [0.0f32; 4], 0.0f32, 1.0f32, false);
+            for i in 0..=count {
+                // One more turn after the last entry ends a run the list ends with.
                 let e = b.entries_at as usize + (start + i) * 4;
+                let id = if i == count || b.index[e] & bn::CTRL != 0 { 0 } else { b.op_heads[b.index[e] as usize * 4 + 3] >> bn::RUN_SHIFT };
+                if run != 0 && run != id {
+                    if run_art && level_mode != 0 {
+                        for k in 0..4 {
+                            level_colour[k] = run_c[k] + level_colour[k] * (1.0 - run_c[3]);
+                        }
+                    } else if run_art {
+                        level = level + run_k - level * run_k;
+                    } else {
+                        let s = run_c.map(|v| v * run_m);
+                        for k in 0..4 {
+                            c[k] = s[k] + c[k] * (1.0 - s[3]);
+                        }
+                    }
+                    run = 0;
+                }
+                if i == count {
+                    break;
+                }
                 let (op, first, n, bd) = (b.index[e] as usize, b.index[e + 1] as usize, b.index[e + 2] as usize, b.index[e + 3]);
                 match b.index[e] {
                     bn::OPEN => {
@@ -478,6 +556,34 @@ fn emulate(b: &Binned, v: &View) -> Vec<Premul> {
                         b.paints[b.op_heads[hd + 2] as usize + i]
                     }
                 };
+                if id != 0 {
+                    if run == 0 {
+                        (run, run_c, run_k, run_art) = (id, [0.0; 4], 0.0, flags & bn::ART != 0);
+                        run_m = if flags & bn::CLIPPED != 0 { mask } else { 1.0 };
+                    }
+                    let k = cov.min(1.0);
+                    if k > 1e-4 {
+                        let s = shade();
+                        if k >= 1.0 && run_k <= 0.0 && !run_art {
+                            if run_m > 1e-4 {
+                                for j in 0..4 {
+                                    c[j] = s[j] * run_m + c[j] * (1.0 - s[3] * run_m);
+                                }
+                            }
+                            continue;
+                        }
+                        let over = run_k + k - 1.0;
+                        if over > 0.0 && run_k > 0.0 {
+                            let keep = 1.0 - over / run_k * s[3];
+                            run_c = run_c.map(|v| v * keep);
+                        }
+                        for j in 0..4 {
+                            run_c[j] += s[j] * k;
+                        }
+                        run_k = (run_k + k).min(1.0);
+                    }
+                    continue;
+                }
                 if flags & bn::ART != 0 {
                     if level_mode != 0 {
                         if cov > 1e-4 {
@@ -817,6 +923,7 @@ fn degenerate_geometry_bins_without_trouble() {
         group,
         layer: None,
         hairline: false,
+        run: 0,
     };
     // A fill naming a layer that isn't there draws nothing.
     let mut lost = fill(None, None);

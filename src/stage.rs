@@ -2889,6 +2889,7 @@ mod pattern_tests {
     fn item(path: Path, fill: bool, stroke: Option<f32>) -> anicraft_engine::doc::DisplayItem {
         use anicraft_engine::doc::{ColorTransform, DisplayItem, ElementId, LayerId, Paint, Rgba, Stroke};
         DisplayItem {
+            joins: false,
             path: std::sync::Arc::new(path),
             transform: Affine::IDENTITY,
             fill: fill.then_some(Paint::Solid(Rgba::new(1.0, 0.0, 0.0, 1.0))),

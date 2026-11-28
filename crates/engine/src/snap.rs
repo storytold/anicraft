@@ -86,12 +86,15 @@ pub struct ViewAids {
     pub snap_pixels: bool,
     pub grid_accuracy: Accuracy,
     pub guide_accuracy: Accuracy,
+    /// The marquee takes the objects it only touches (the default); off, only the objects
+    /// wholly inside it. Raw shapes are cut at its edges either way.
+    pub select_touching: bool,
 }
 
 impl Default for ViewAids {
     fn default() -> Self {
         // As in Animate: guides show and snap; the rulers, grid and pixel snapping are off.
-        ViewAids { rulers: false, hide_edges: false, show_grid: false, show_guides: true, lock_guides: false, snap_grid: false, snap_guides: true, snap_pixels: false, grid_accuracy: Accuracy::Normal, guide_accuracy: Accuracy::Normal }
+        ViewAids { rulers: false, hide_edges: false, show_grid: false, show_guides: true, lock_guides: false, snap_grid: false, snap_guides: true, snap_pixels: false, grid_accuracy: Accuracy::Normal, guide_accuracy: Accuracy::Normal, select_touching: true }
     }
 }
 

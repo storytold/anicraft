@@ -676,4 +676,14 @@ fn a_marquee_takes_the_instances_and_groups_it_touches() {
     run(&mut s, "raw.select_rect", json!({"x0": -10, "y0": 50, "x1": 350, "y1": 150}));
     let kinds: Vec<&'static str> = s.selected_elements().iter().map(|(_, e)| match e.kind { ElementKind::Symbol { .. } => "symbol", ElementKind::Group { .. } => "group", _ => "other" }).collect();
     assert!(kinds.contains(&"symbol") && kinds.contains(&"group") && kinds.len() == 2, "{kinds:?}");
+    // With touching switched off, only what is wholly inside: the same marquee takes nothing,
+    // and one around the group takes the group alone.
+    assert_eq!(run(&mut s, "view.select_touching", json!({"on": false}))["select_touching"], false);
+    run(&mut s, "raw.select_rect", json!({"x0": -10, "y0": 50, "x1": 350, "y1": 150}));
+    assert!(s.selection.is_empty(), "{:?}", s.selection.id_list());
+    run(&mut s, "raw.select_rect", json!({"x0": 50, "y0": -10, "x1": 310, "y1": 110}));
+    assert!(matches!(s.selected_elements().as_slice(), [(_, e)] if matches!(e.kind, ElementKind::Group { .. })));
+    // One marquee can ask for the other way.
+    run(&mut s, "raw.select_rect", json!({"x0": -10, "y0": 50, "x1": 350, "y1": 150, "touch": true}));
+    assert_eq!(s.selection.len(), 2);
 }

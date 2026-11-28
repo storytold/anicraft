@@ -46,7 +46,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Select Parts",
             "",
             None,
-            "{x0, y0, x1, y1, add?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects it touches",
+            "{x0, y0, x1, y1, add?: bool, touch?: bool} the marquee, on every visible, unlocked layer: the parts of raw fills and strokes under the rectangle (cut at its edges, per layer) and the objects it touches, or with `touch` false only the objects wholly inside it (default: as view.select_touching is set)",
             true,
             select_rect,
         ),
@@ -631,11 +631,13 @@ fn on_editable_key(s: &Session) -> bool {
 }
 
 /// The marquee (ADR 0041, 0044): on every visible, unlocked layer, the parts of raw shapes under
-/// the rectangle (cut at its edges) and the objects it touches (#522).
+/// the rectangle (cut at its edges) and the objects it touches (#522), or only those wholly
+/// inside it when touching isn't enough (`view.select_touching`).
 fn select_rect(s: &mut Session, p: &Value) -> Result<Value> {
     let a = Vec2::new(f32_req(p, "x0")?, f32_req(p, "y0")?);
     let b = Vec2::new(f32_req(p, "x1")?, f32_req(p, "y1")?);
     let add = opt_bool(p, "add")?.unwrap_or(false);
+    let touch = opt_bool(p, "touch")?.unwrap_or(s.aids.select_touching);
     let r = Rect::from_points(a, b);
     if !add {
         s.selection.clear();
@@ -655,10 +657,12 @@ fn select_rect(s: &mut Session, p: &Value) -> Result<Value> {
                 continue;
             }
             // An object (instance, group, drawing object, text, bitmap) the marquee touches is
-            // taken whole (#522); a raw shape partly under it is cut at its edges.
-            if contains(&r, &bounds) || mergeable(&e).is_none() {
+            // taken whole (#522), unless only objects wholly inside it are wanted; a raw shape
+            // partly under it is cut at its edges.
+            let raw = mergeable(&e).is_some();
+            if contains(&r, &bounds) || (touch && !raw) {
                 picked.push(e.id);
-            } else {
+            } else if raw {
                 partial.push(e.id);
             }
         }

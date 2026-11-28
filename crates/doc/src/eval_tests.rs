@@ -1142,3 +1142,26 @@ fn layers_long_outlines_and_long_libraries_count_as_work() {
     let dl = evaluate(&modest, 0);
     assert!(!dl.left_out && dl.items.len() == 1 << 10);
 }
+
+#[test]
+fn shapes_of_one_merged_drawing_join_the_one_before() {
+    // Raw shapes of one keyframe join each other (ADR 0138); a drawing object between them,
+    // and another layer's drawing, don't.
+    let raw = |id| {
+        let mut e = shape_el(id, 0.0);
+        if let ElementKind::Shape(s) = &mut e.kind {
+            s.merge = true;
+        }
+        e
+    };
+    let mut d = Document::default();
+    for e in [raw(1), raw(2), shape_el(3, 0.0), raw(4), raw(5)] {
+        push(layer0(&mut d), 0, e);
+    }
+    let mut bottom = Layer::new(LayerId(7), "bottom");
+    push(&mut bottom, 0, raw(6));
+    push(&mut bottom, 0, raw(7));
+    d.timeline_mut(0).layers.push(Arc::new(bottom));
+    let joins: Vec<(u64, bool)> = evaluate(&d, 0).items.iter().map(|i| (i.element.0, i.joins)).collect();
+    assert_eq!(joins, [(6, false), (7, true), (1, false), (2, true), (3, false), (4, false), (5, true)]);
+}

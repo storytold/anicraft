@@ -202,7 +202,8 @@ function onTick(e:Event):void {
 * Event bubbling, mouse listeners on the stage, and event fields such as `stageX` and
   `charCode`.
 * `getChildByName`, stage properties, sound and timers from scripts.
-* `Event.CHANGE` and other text field events, `htmlText` and text formatting from scripts.
+* Text field events other than `Event.CHANGE`, and text formatting from scripts other than
+  `htmlText`.
 * ActionScript 1.0 and 2.0, and scripts attached to instances in older documents.
 * `navigateToURL` and other calls that reach outside the movie are ignored and noted in Output.
 

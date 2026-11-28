@@ -26,6 +26,7 @@ fn bitmap_shape() -> Shape {
 /// The display item of `shape` (its warp's mesh when it bends it), placed by `transform`.
 fn item(shape: &Shape, transform: Affine, smooth: bool) -> DisplayItem {
     DisplayItem {
+        joins: false,
         path: shape.path.clone(),
         transform,
         fill: shape.fill.clone(),
