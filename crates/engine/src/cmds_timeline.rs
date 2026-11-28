@@ -35,6 +35,8 @@ pub fn specs() -> Vec<CommandSpec> {
         c("timeline.goto", "Go to Frame", "", None, "{frame}", false, goto),
         c("timeline.next_frame", "Next Frame", "Control", Some("."), "{} (on the last frame it stays there)", false, |s, _| step(s, 1)),
         c("timeline.prev_frame", "Previous Frame", "Control", Some(","), "{} (on the first frame it stays there)", false, |s, _| step(s, -1)),
+        c("timeline.prev_keyframe", "Previous Keyframe", "Control", Some("Alt+,"), "{layer? | layers?: [..] | all_layers?: true}", false, |s, p| step_keyframe(s, p, false)),
+        c("timeline.next_keyframe", "Next Keyframe", "Control", Some("Alt+."), "{layer? | layers?: [..] | all_layers?: true}", false, |s, p| step_keyframe(s, p, true)),
         c("timeline.first_frame", "Go to First Frame", "Control", Some("Home"), "{}", false, |s, _| {
             s.set_frame(0);
             Ok(json!({"frame": 0}))
@@ -834,6 +836,36 @@ fn step(s: &mut Session, d: i64) -> Result<Value> {
     // A playhead already past the last frame (on an empty cell) isn't pulled back by Next.
     let f = (now + d).clamp(0, last.max(now));
     s.set_frame(f as u32);
+    Ok(json!({"frame": s.frame}))
+}
+
+fn step_keyframe(s: &mut Session, p: &Value, next: bool) -> Result<Value> {
+    let all = opt_bool(p, "all_layers")?.unwrap_or(false);
+    let ids: Vec<LayerId> = if all {
+        s.timeline().layers.iter().filter(|l| l.kind != LayerKind::Folder).map(|l| l.id).collect()
+    } else if p.get("layer").is_some_and(|v| !v.is_null()) || p.get("layers").is_some_and(|v| !v.is_null()) {
+        target_layers(s, p)?
+    } else {
+        vec![s.layer]
+    };
+    let tl = s.timeline();
+    let mut starts: Vec<u32> = ids
+        .iter()
+        .filter_map(|id| tl.layer(*id))
+        .filter(|l| l.kind != LayerKind::Folder)
+        .flat_map(|l| l.keyframes.iter().map(|k| k.start))
+        .collect();
+    starts.sort_unstable();
+    starts.dedup();
+    let cur = s.frame;
+    let chosen = if next {
+        starts.into_iter().find(|&f| f > cur)
+    } else {
+        starts.into_iter().rfind(|&f| f < cur)
+    };
+    if let Some(f) = chosen {
+        s.set_frame(f);
+    }
     Ok(json!({"frame": s.frame}))
 }
 
