@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+* **Adding a colour stop to a gradient keeps it a gradient** (#626): clicking the colour-stop bar
+  (or changing Overflow, Linear RGB or Focal point) on a selected linear or radial fill when the
+  tool's fill swatch held a different fill type no longer switches the fill to the swatch's type.
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.
