@@ -68,6 +68,82 @@ fn in_group(mut i: DisplayItem, g: u32) -> DisplayItem {
     i
 }
 
+#[test]
+fn a_scratch_fence_timeout_falls_back_and_keeps_the_timed_out_submission_charged() {
+    let mut flight = FilteredFlight::new(100);
+    flight.submitted(1, 20);
+    flight.submitted(2, 50);
+    let mut waited = Vec::new();
+    let result = flight.make_room(70, |index| {
+        waited.push(*index);
+        if *index == 1 { Ok(()) } else { Err(wgpu::PollError::Timeout) }
+    });
+    assert!(matches!(result, Err(GpuError::TooLarge(_))));
+    assert_eq!(waited, [1, 2]);
+    assert_eq!(flight.bytes, 50, "only the completed fence releases its charge");
+
+    waited.clear();
+    flight.make_room(70, |index| {
+        waited.push(*index);
+        Ok(())
+    }).unwrap();
+    assert_eq!(waited, [2], "a later render retries the outstanding fence");
+    assert_eq!(flight.bytes, 0);
+}
+
+#[test]
+fn an_oom_with_a_device_error_lowers_the_budget_and_reports_the_device_error() {
+    fn cause() -> wgpu::ErrorSource {
+        Box::new(std::io::Error::other("test GPU error"))
+    }
+    let oom = || wgpu::Error::OutOfMemory { source: cause() };
+    for error in [
+        wgpu::Error::Validation { source: cause(), description: "invalid binding".into() },
+        wgpu::Error::Internal { source: cause(), description: "internal error".into() },
+    ] {
+        let description = describe(&error);
+        let flight = Mutex::new(FilteredFlight::<u32>::new(SHARED_FILTER_BYTES));
+        assert!(matches!(
+            render_scope_result((Some(oom()), Some(error)), &flight),
+            Err(GpuError::Device(message)) if message == description
+        ));
+        let mut flight = flight.into_inner().unwrap();
+        assert!(matches!(
+            flight.make_room(SHARED_FILTER_BYTES, |_| panic!("an over-budget render must fall back before waiting")),
+            Err(GpuError::TooLarge(_))
+        ));
+    }
+
+    let flight = Mutex::new(FilteredFlight::<u32>::new(DISCRETE_FILTER_BYTES));
+    assert!(matches!(render_scope_result((Some(oom()), None), &flight), Err(GpuError::TooLarge(_))));
+    assert!(flight.into_inner().unwrap().limit < DISCRETE_FILTER_BYTES);
+}
+
+#[test]
+fn filtered_scratch_counts_the_extra_allocations_for_higher_filter_quality() {
+    use anicraft_doc::{Filter, FilterParam};
+
+    let v = view(24, 24, None);
+    let bin = || binning::bin(&prepare_scene(&list(vec![]), &v).unwrap().0, v.width, v.height).unwrap();
+    let mut job = Job { binned: bin(), layers: vec![] };
+    let cost = |job: &Job| {
+        let mut cost = Cost::default();
+        job.cost(&mut cost);
+        cost.filtered_scratch()
+    };
+    assert_eq!(cost(&job), 0, "unfiltered frames bypass the scratch allowance");
+    let mut shadow = Filter::new("drop_shadow").unwrap();
+    shadow.set_param(FilterParam::Quality, 1.0);
+    job.layers.push(LayerJob {
+        at: 0, job: Box::new(Job { binned: bin(), layers: vec![] }), view: v,
+        ops: vec![anicraft_render::filters::resolve(&shadow, 1.0)],
+    });
+    let low_quality = cost(&job);
+    shadow.set_param(FilterParam::Quality, 3.0);
+    job.layers[0].ops[0] = anicraft_render::filters::resolve(&shadow, 1.0);
+    assert!(cost(&job) > low_quality, "extra passes have scratch costs at the same layer size");
+}
+
 /// Analytic scenes: each stresses one part of the coverage or paint model.
 fn scenes() -> Vec<(&'static str, DisplayList, View)> {
     let red = Rgba::new(0.9, 0.1, 0.1, 1.0);
@@ -1039,6 +1115,81 @@ fn gpu_matches_the_oracle_on_bitmap_fills() {
 
 fn filtered_group(filters: Vec<anicraft_doc::Filter>) -> Group {
     Group { parent: None, alpha: 1.0, blend: BlendMode::Normal, filters: Arc::from(filters), clip: None }
+}
+
+#[test]
+fn failed_filtered_renders_keep_uploads_charged_until_the_queue_fence() {
+    let g = match GpuRenderer::new().or_else(|_| GpuRenderer::software()) {
+        Ok(g) => g,
+        Err(e) => {
+            eprintln!("skipping the failed filtered render test: {e}");
+            return;
+        }
+    };
+    let wait = |index: &wgpu::SubmissionIndex| g.device.poll(wgpu::PollType::Wait {
+        submission_index: Some(index.clone()),
+        timeout: Some(std::time::Duration::from_secs(2)),
+    }).map(|_| ());
+    // Only the failed render should have a charge when we test the fence.
+    {
+        let mut flight = g.filtered_flight.lock().unwrap();
+        let limit = flight.limit;
+        flight.make_room(limit, wait).unwrap();
+    }
+    let oversized = Arc::new(anicraft_doc::Pixels {
+        width: g.limits.max_texture_dimension_2d + 1,
+        height: 1,
+        rgba: Vec::new(),
+    });
+    let view = view(64, 64, None);
+    for (binning, texture) in [(Binning::Gpu, false), (Binning::Cpu, true), (Binning::Cpu, false)] {
+        if matches!(binning, Binning::Gpu) && let Some(reason) = g.gpu_binning_off() {
+            eprintln!("skipping GPU binning for the failed filtered render test: {reason}");
+            continue;
+        }
+        let target = if texture { "texture" } else { "readback" };
+        eprintln!("failed filtered render test on {} ({binning:?}, {target})", g.adapter);
+        // A fresh bitmap makes each child queue a texture write before the parent rejects
+        // its oversized bitmap, even when the child uses CPU binning.
+        let bitmap = pixels(1, 1, 1);
+        let mut items = symbol_items(0);
+        items.push(in_group(bitmap_item(Path::rect(16.0, 16.0, 8.0, 8.0), &bitmap, true, Affine::IDENTITY), 0));
+        let mut dl = list(items.clone());
+        dl.items.push(bitmap_item(Path::rect(52.0, 6.0, 10.0, 10.0), &oversized, true, Affine::IDENTITY));
+        dl.groups.push(filtered_group(vec![anicraft_doc::Filter::Blur { blur_x: 4.0, blur_y: 4.0, quality: 1 }]));
+        let (mut job, _, _, _) = g.prepare(&dl, &view, Binning::Cpu).unwrap();
+        let [child] = job.layers.as_mut_slice() else { panic!("expected one filtered child") };
+
+        let (cached, _) = g.cached_images();
+        let result = if matches!(binning, Binning::Gpu) {
+            // Filter preparation keeps the neutralized group on its fills, which forces CPU
+            // binning. Plan the same child artwork without the group to exercise GPU uploads
+            // through the real readback recording and abort path.
+            for item in &mut items {
+                item.group = None;
+            }
+            *child.job = g.prepare(&list(items), &child.view, binning).unwrap().0;
+            let binned = &child.job.binned;
+            let plan = binned.gpu.as_ref().expect("the filtered child must have a GPU binning plan");
+            assert!(!plan.headers.is_empty() && !binned.op_heads.is_empty(), "the child must upload both index ranges");
+            let mut cost = Cost::default();
+            job.cost(&mut cost);
+            g.run_readback(&job, &view, Output::Premul8, cost.filtered_scratch()).map(|_| ())
+        } else if texture {
+            g.render_texture_with(&dl, &view, binning).map(|_| ())
+        } else {
+            g.render_with(&dl, &view, Output::Premul8, binning).map(|_| ())
+        };
+        assert!(matches!(result, Err(GpuError::NeedsFull(NeedsFull::Bitmaps))), "{result:?}");
+        assert_eq!(g.cached_images().0, cached + 1, "the child's bitmap must be uploaded before recording fails");
+        assert!(g.broken().is_none());
+
+        let mut flight = g.filtered_flight.lock().unwrap();
+        let limit = flight.limit;
+        assert!(matches!(flight.make_room(limit, |_| Err(wgpu::PollError::Timeout)), Err(GpuError::TooLarge(_))),
+            "{binning:?}, {target}: a later render must wait for the abandoned frame's uploads");
+        flight.make_room(limit, wait).unwrap();
+    }
 }
 
 /// Every filter, its sides and switches, on a small symbol: a red square with a translucent

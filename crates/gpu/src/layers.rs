@@ -162,6 +162,16 @@ pub(crate) fn passes(ops: &[FilterOp]) -> u64 {
         .sum()
 }
 
+/// Upper bound on the temporary parameter and ramp buffers recorded per chain.
+pub(crate) fn scratch_bytes(ops: &[FilterOp]) -> u64 {
+    let ramps = ops.iter().filter_map(|op| match op {
+        FilterOp::Bevel { paint: BevelPaint::Ramp(ramp), .. } | FilterOp::GradientGlow { ramp, .. } => Some(ramp.len()),
+        _ => None,
+    });
+    passes(ops) * super::scratch_allocation((PARAM_WORDS * size_of::<u32>()) as u64)
+        + ramps.map(|len| super::scratch_allocation((len * size_of::<Premul>()) as u64)).sum::<u64>()
+}
+
 impl Recorder<'_> {
     fn dispatch(&self, enc: &mut wgpu::CommandEncoder, pipe: &wgpu::ComputePipeline, p: Params, ramp: &wgpu::Buffer, groups: (u32, u32)) {
         let ubuf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor { label: Some("filter-params"), contents: bytemuck::cast_slice(&p.words), usage: wgpu::BufferUsages::UNIFORM });

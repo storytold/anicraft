@@ -64,6 +64,9 @@ anicraft-actions = { path = "crates/actions" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+clap = { version = "4", features = ["derive", "env"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 rayon = "1"
 # Unions of flattened polygons on an integer grid, for a stroke's outline (ADR 0110): pure
 # Rust, no unsafe in our use, MIT OR Apache-2.0 (its i_float, i_shape, i_tree and i_key_sort: MIT).

@@ -1,6 +1,6 @@
 //! Tools bar, edit bar, status bar, Properties and Library panels.
 
-use crate::app::{App, Tool};
+use crate::app::{App, Tool, ZoomDraft};
 use crate::icons::{self, Icon};
 use crate::theme::{Section, T, TARGET, TOOL_BUTTON, TOOL_ICON, Type, color, section, text, to_color32, with_type};
 use anicraft_engine::doc::{ColorEffect, ColorStyle, ElementKind, LibraryItem, LineType, MAX_PATH_OFFSET, Paint, Rgba, SymbolKind, TextKind, evaluate_layer_elements};
@@ -427,32 +427,33 @@ pub fn edit_bar(app: &mut App, ui: &mut egui::Ui) {
             crate::icons::paint(ui.painter(), Rect::from_center_size(arrow.response.rect.center(), vec2(12.0, 12.0)), Icon::ChevronDown, if arrow.response.hovered() { T.icon_hot } else { T.icon });
             arrow.response.set_name(tr!("Zoom presets"));
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("zoom_arrow"), arrow.response.rect));
-            // The percentage itself is typed here: focus to type a value, Enter or focus loss applies it.
+            // Enter submits the displayed percentage; other focus loss applies only edits.
             let was_editing = app.zoom_text.is_some();
-            let mut value = app.zoom_text.take().unwrap_or_else(|| format!("{:>4.0}%", z * 100.0));
-            let field = with_type(ui, Type::Data, |ui| ui.add(egui::TextEdit::singleline(&mut value).desired_width(56.0).char_limit(7)).named(tr!("Zoom")));
+            let mut draft = app.zoom_text.take().unwrap_or_else(|| ZoomDraft { text: format!("{:>4.0}%", z * 100.0), edited: false });
+            let field = with_type(ui, Type::Data, |ui| {
+                ui.add(egui::TextEdit::singleline(&mut draft.text).desired_width(56.0).char_limit(7)).named(tr!("Zoom"))
+            });
             ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("zoom_field"), field.rect));
-            if !was_editing && field.gained_focus() {
+            if !was_editing && field.gained_focus() && !field.changed() {
                 // Type digits over digits, not over the percent sign.
-                value = format!("{:.0}", z * 100.0);
+                draft.text = format!("{:.0}", z * 100.0);
             }
-            let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if field.lost_focus() || (enter && field.has_focus()) {
-                let typed = value.trim();
+            draft.edited |= field.changed();
+            let enter = (field.has_focus() || (was_editing && field.lost_focus())) && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if field.lost_focus() || enter {
+                let typed = draft.text.trim();
                 let typed = typed.strip_suffix('%').unwrap_or(typed).trim();
-                if let Ok(pct) = typed.parse::<f32>()
+                if (draft.edited || enter)
+                    && let Ok(pct) = typed.parse::<f32>()
                     && pct.is_finite()
                 {
                     app.zoom_about(canvas, canvas.center(), pct / (100.0 * ppp), ppp);
                 }
-                app.zoom_text = None;
                 if enter {
                     ui.memory_mut(|m| m.surrender_focus(field.id));
                 }
             } else if field.has_focus() {
-                app.zoom_text = Some(value);
-            } else {
-                app.zoom_text = None;
+                app.zoom_text = Some(draft);
             }
             // Beside the zoom, as in Animate (#251): a toggle, on = the pasteboard is hidden.
             let clip = app.view.clip_to_stage;

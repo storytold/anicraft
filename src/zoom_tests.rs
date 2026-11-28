@@ -171,4 +171,38 @@ fn fit_in_window_shows_the_whole_large_stage_below_the_manual_zoom_limit() {
         sized_frame(&ctx, &mut app, size, vec![event], modifiers);
     }
     assert_eq!(app.view.zoom, fitted, "Zoom Out from Fit does not jump up to the manual minimum");
+
+    let (field, _) = zoom_rects(&ctx);
+    let stage_center = app.stage_cache.canvas.center();
+    for (at, editing) in [(field.center(), true), (stage_center, false)] {
+        for event in [Event::PointerMoved(at), button(at, true, Modifiers::NONE), button(at, false, Modifiers::NONE)] {
+            sized_frame(&ctx, &mut app, size, vec![event], Modifiers::NONE);
+        }
+        sized_frame(&ctx, &mut app, size, Vec::new(), Modifiers::NONE);
+        assert_eq!(app.zoom_text.is_some(), editing, "the field receives and then loses focus");
+        assert_eq!(app.view.zoom, fitted, "leaving the unedited field keeps the fitted zoom");
+    }
+
+    for event in [Event::PointerMoved(field.center()), button(field.center(), true, Modifiers::NONE), button(field.center(), false, Modifiers::NONE)] {
+        sized_frame(&ctx, &mut app, size, vec![event], Modifiers::NONE);
+    }
+    assert!(app.zoom_text.as_ref().is_some_and(|draft| !draft.edited), "the field is focused and still untouched");
+    for pressed in [true, false] {
+        let event = Event::Key { key: egui::Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+        sized_frame(&ctx, &mut app, size, vec![event], Modifiers::NONE);
+    }
+    assert!(app.zoom_text.is_none(), "Enter submits the field");
+    assert!(!app.view.fit, "Enter changes fit to manual zoom");
+    assert!((app.view.zoom * scale - 0.05).abs() < 1e-6, "the submitted value uses the manual 5% minimum");
+}
+
+#[test]
+fn view_centre_inverts_the_actual_zoom_below_a_thousandth() {
+    let ctx = egui::Context::default();
+    let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+    app.view.zoom = 0.000625;
+    app.view.pan = vec2(10.0, -8.0);
+    let stage_center = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32) * 0.5;
+    let offset_points = (stage_center - app.view_center_stage()) * app.view.zoom;
+    assert!((offset_points - app.view.pan).length() < 0.01, "expected pan {:?}, got {offset_points:?}", app.view.pan);
 }

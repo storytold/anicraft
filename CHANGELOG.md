@@ -59,6 +59,75 @@
   symbol in the Library (optionally inside a folder) and opens it for editing without placing an
   instance on the stage. Also available from the Library panel's New Symbol button and as
   `library.new_symbol`.
+* **Create Object in Properties** (#614). With raw (merge-drawing) shapes selected, Properties
+  now shows a **Create Object** button (also **Modify › Combine Objects › Create Object**,
+  `modify.create_object`) that turns one or more selected raw shapes on the active layer—including
+  a partial marquee selection—into a drawing object in one undo step (or a group of the merged
+  pieces when they have several colours or keep lines, as Union does).
+* **Subselection: Alt-drag an anchor to pull out curve handles** (#615). Holding **Alt** and
+  dragging from an anchor point pulls out mirrored Bézier handles live on both drawing objects
+  and merged drawings (**Shift** constrains to 45° steps; one undo step). An **Alt**-click
+  without dragging leaves the shape unchanged, and **Alt** on a handle still moves that handle
+  alone. Headless: optional `handle: [dx, dy]` on `path.convert_point` and `raw.convert_points`
+  (plus `merge?: bool` on `raw.convert_points`).
+* **Modify › Shape: Smooth, Straighten and Optimize Curves** (#510).
+  * **Smooth** (`modify.smooth`) softens curves and evens out small bumps on selected lines and
+    fill outlines, repeatable and keeping open endpoints fixed.
+  * **Straighten** (`modify.straighten`) turns nearly straight segments into lines, flattens
+    gentle curves toward their chord and collapses nearly collinear line runs.
+  * **Optimize Curves…** (`modify.optimize`) removes extra points while keeping sharp corners and
+    the shape's look, with a strength slider (0–100 %) and optional multiple passes, returning the
+    before and after point counts.
+* **Lasso tool (L)** (#515, backlog P-018). Draw a freehand loop on the stage to cut out and
+  select the parts of merged fills and lines inside it and pick objects wholly inside it, across
+  every visible, unlocked layer (**Shift** adds, **Esc** cancels, a click on empty stage clears).
+  Headless: `raw.select_area {points, add?}` (even-odd rule for self-intersecting loops; ready
+  for a straight-edged Polygon mode to call the same command).
+
+
+* **Create Motion Tween asks before converting raw artwork to a symbol** (#604).
+  * Running **Insert › Create Motion Tween** (or the timeline, Properties or Motion Editor buttons)
+    on raw shapes, a bitmap, a group or several objects now asks before converting the artwork to
+    a symbol, lets you choose the symbol type (reusing Convert to Symbol's choices and default),
+    and leaves the document unchanged on Cancel. A keyframe that already holds a single symbol
+    instance creates the tween directly with no dialog.
+  * Headless `timeline.create_motion_tween` now accepts an optional `kind` (`graphic`,
+    `movie_clip` or `button`, default `graphic`) and reports the created `symbol`, `symbol_name`
+    and `symbol_kind` whenever it converts artwork, still in one undo step.
+
+## 0.3.0 (2026-11-28)
+
+The first release since 0.2.1 (2026-11-12). It carries everything listed below, from the Flash 8 to
+CS4 `.fla` import to the start-up fixes (#430) that address the "app won't open" reports. The
+entries between here and the `.fla` import are the last changes before the release.
+
+* **`anicraft-cli` follows RFC-0018** (#662, #665; storytold/craft-contrib#95): the same exit codes,
+  help, errors, completions and man pages as the other Craft CLIs.
+  * **Scripts to check.** A usage error (an unknown flag, a bad number, malformed JSON in `--options`
+    or in `exec`'s parameters) now exits 2 with the usage on stderr, before anything is opened or
+    written; it was 1, or silently ignored. A malformed script file given to `run` still exits 1,
+    after the document is opened.
+    A flag the subcommand does not take is refused instead of dropped, a flag given twice is
+    refused, and `anicraft-cli` with no arguments prints the help on stderr and exits 2. The
+    `version` word is gone; `--version` and `-V` work everywhere.
+  * **Nothing replaces an input by accident.** `render`, `render-seq`, `gif`, `apng`, `webp` and
+    `export` refuse an output that is the document they render, and `run` and `exec` refuse
+    `--save` onto the document they opened unless `--in-place` is given.
+  * `--overwrite`, `--background` and `guide search --json` take an optional `yes|no`
+    (`--overwrite yes` still works). A non-Unicode document path opens.
+  * The Linux tarball, deb and rpm install bash, zsh and fish completions and a man page per
+    subcommand.
+* **Filtered GPU renders count their temporary memory** (#664, extracted from #660 by Untoldent):
+  overlapping filtered renders no longer hold GPU scratch buffers beyond the limits; one render
+  falls back to the CPU under pressure instead of disabling a healthy GPU.
+* **Stale pasteboard fragments no longer show while a tile redraws** (#669 by Untoldent): dragging
+  across the stage edge or zooming keeps one placeholder per missing tile and stops painting it once
+  its replacement is ready.
+* **Fit zoom survives leaving the Zoom field, and panning is right at very small zoom** (#633 by
+  ViktorBystrov72, follow-up to #590): focus loss applies the Zoom field only if it was edited, and
+  the centre conversion uses the real zoom below 0.1 %.
+* **A batch taken just before `forget_pictures` is always thrown away** (#672, M8).
+
 * **Flash 8 to CS4 `.fla` files open** (backlog P-039, ADR 0120, #163; by rcoenen, #478 and
   #481): the binary `.fla` of the Flash 8 to CS4 era, which AniCraft used to refuse, now opens
   like an Animate file, untitled, so Save asks for a new `.anicraft` name.
@@ -198,31 +267,6 @@
   * One step further back in the undo history is redrawn when you return to it (a few
     milliseconds) instead of being found in memory.
 
-* **Create Object in Properties** (#614). With raw (merge-drawing) shapes selected, Properties
-  now shows a **Create Object** button (also **Modify › Combine Objects › Create Object**,
-  `modify.create_object`) that turns one or more selected raw shapes on the active layer—including
-  a partial marquee selection—into a drawing object in one undo step (or a group of the merged
-  pieces when they have several colours or keep lines, as Union does).
-* **Subselection: Alt-drag an anchor to pull out curve handles** (#615). Holding **Alt** and
-  dragging from an anchor point pulls out mirrored Bézier handles live on both drawing objects
-  and merged drawings (**Shift** constrains to 45° steps; one undo step). An **Alt**-click
-  without dragging leaves the shape unchanged, and **Alt** on a handle still moves that handle
-  alone. Headless: optional `handle: [dx, dy]` on `path.convert_point` and `raw.convert_points`
-  (plus `merge?: bool` on `raw.convert_points`).
-* **Modify › Shape: Smooth, Straighten and Optimize Curves** (#510).
-  * **Smooth** (`modify.smooth`) softens curves and evens out small bumps on selected lines and
-    fill outlines, repeatable and keeping open endpoints fixed.
-  * **Straighten** (`modify.straighten`) turns nearly straight segments into lines, flattens
-    gentle curves toward their chord and collapses nearly collinear line runs.
-  * **Optimize Curves…** (`modify.optimize`) removes extra points while keeping sharp corners and
-    the shape's look, with a strength slider (0–100 %) and optional multiple passes, returning the
-    before and after point counts.
-* **Lasso tool (L)** (#515, backlog P-018). Draw a freehand loop on the stage to cut out and
-  select the parts of merged fills and lines inside it and pick objects wholly inside it, across
-  every visible, unlocked layer (**Shift** adds, **Esc** cancels, a click on empty stage clears).
-  Headless: `raw.select_area {points, add?}` (even-odd rule for self-intersecting loops; ready
-  for a straight-edged Polygon mode to call the same command).
-
 * **Timeline and panel bugs from the tracker** (M8, backlog P-009 and P-010, ADR 0131).
   * **Several layers selected at once** (#512). **Ctrl**-click a layer's name to add it or take
     it out, **Shift**-click for every layer from the active one, or **Shift+Up** and
@@ -244,17 +288,6 @@
     under the tools opens its colour picker (#246), and the docks keep their size while the
     pointer moves over them at every interface scale (#159, not reproduced; the issue stays
     open for a retest).
-
-* **Create Motion Tween asks before converting raw artwork to a symbol** (#604).
-  * Running **Insert › Create Motion Tween** (or the timeline, Properties or Motion Editor buttons)
-    on raw shapes, a bitmap, a group or several objects now asks before converting the artwork to
-    a symbol, lets you choose the symbol type (reusing Convert to Symbol's choices and default),
-    and leaves the document unchanged on Cancel. A keyframe that already holds a single symbol
-    instance creates the tween directly with no dialog.
-  * Headless `timeline.create_motion_tween` now accepts an optional `kind` (`graphic`,
-    `movie_clip` or `button`, default `graphic`) and reports the created `symbol`, `symbol_name`
-    and `symbol_kind` whenever it converts artwork, still in one undo step.
-
 * **Text reads right: mixed directions, and letters from a fallback face** (M5, backlog P-008,
   ADR 0130). With outside pull requests #39 and #40 by SoldierPePe, whose commits are merged
   here and rebuilt on styled text.

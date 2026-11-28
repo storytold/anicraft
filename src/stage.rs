@@ -3,8 +3,9 @@
 //!
 //! The stage is cut into `TILE`-pixel tiles on a device-pixel grid at the current zoom. Each
 //! frame asks for the visible tiles as one batch (plus a one-tile margin as look-ahead), keeps
-//! finished tiles as textures, and draws any older tiles that cover a gap (previous zoom or
-//! state, scaled) underneath, so panning and zooming never reveal an empty stage.
+//! finished tiles as textures. Older opaque tiles can cover the stage while new ones render.
+//! Transparent placeholders scale during zoom while no current tiles are ready. Once any
+//! current tile is ready, transparent placeholders fill only matching, missing rectangles.
 //!
 //! Memory and frame time stay flat (ADR 0132). The pictures of a document state and zoom that
 //! are no longer on screen go as soon as the view is drawn again, here and in the render
@@ -45,8 +46,11 @@ struct TileTex {
     set: u64,
     /// Stage-space rectangle `[x0, y0, x1, y1]` this tile covers.
     rect: [f32; 4],
+    /// Device pixels per stage pixel when the tile was rendered.
+    scale: f32,
     tex: TileImage,
     used: u64,
+    opaque: bool,
 }
 
 /// A tile's texture: uploaded from the CPU's bytes, or drawn there by the GPU stage (ADR 0029).
@@ -140,7 +144,7 @@ impl Cache {
         }
     }
 
-    fn upload(&mut self, ctx: &egui::Context, img: &FrameImage, rect: [f32; 4], keep: &[u64]) -> Option<String> {
+    fn upload(&mut self, ctx: &egui::Context, img: &FrameImage, spec: &TileSpec, keep: &[u64]) -> Option<String> {
         if let Some(e) = &img.error {
             return Some(e.clone());
         }
@@ -160,7 +164,7 @@ impl Cache {
             }
         };
         self.tick += 1;
-        self.tiles.push(TileTex { key: img.key, set: img.set, rect, tex, used: self.tick });
+        self.tiles.push(TileTex { key: img.key, set: img.set, rect: spec.rect, scale: spec.view.transform.m[0], tex, used: self.tick, opaque: spec.opaque() });
         // Evict least recently used tiles that are not on screen.
         while self.tiles.len() > MAX_TILE_TEXTURES {
             let victim = self.tiles.iter().enumerate().filter(|(_, t)| !keep.contains(&t.key)).min_by_key(|(_, t)| t.used).map(|(i, _)| i);
@@ -179,6 +183,12 @@ impl Cache {
 struct TileSpec {
     rect: [f32; 4],
     view: View,
+}
+
+impl TileSpec {
+    fn opaque(&self) -> bool {
+        self.view.background.is_some_and(|color| color.a >= 1.0)
+    }
 }
 
 /// Most tiles along one side: a screen's worth and the look-ahead ring, many times over.
@@ -1179,7 +1189,7 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
                     if img.error.is_none() {
                         app.stage_cache.drawn_by = Some((img.gpu, img.fallback.clone()));
                     }
-                    if let Some(e) = app.stage_cache.upload(ui.ctx(), &img, jobs[i].0.rect, &keys) {
+                    if let Some(e) = app.stage_cache.upload(ui.ctx(), &img, &jobs[i].0, &keys) {
                         error = Some(e);
                     }
                 }
@@ -1231,22 +1241,53 @@ pub fn show(app: &mut App, ui: &mut egui::Ui) {
             svc.prefetch(ahead);
         }
 
-        // Draw: tiles from earlier zooms/states that cover the view go first (scaled, as a
-        // placeholder), then the current tiles on top.
-        let view_rect = [(vis.min.x - st_origin.x) / st_zoom, (vis.min.y - st_origin.y) / st_zoom, (vis.max.x - st_origin.x) / st_zoom, (vis.max.y - st_origin.y) / st_zoom];
-        let overlaps = |r: &[f32; 4]| r[0] < view_rect[2] && r[2] > view_rect[0] && r[1] < view_rect[3] && r[3] > view_rect[1];
+        let tiles = &app.stage_cache.tiles;
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        let mut stale: Vec<&TileTex> = app.stage_cache.tiles.iter().filter(|t| !keys.contains(&t.key) && overlaps(&t.rect)).collect();
-        if ready < keys.len() {
-            stale.sort_by_key(|t| t.used);
-            for t in stale.iter().rev().take(96).rev() {
-                let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
-                painter.image(t.tex.id(), r, uv, Color32::WHITE);
-            }
-        }
-        for t in app.stage_cache.tiles.iter().filter(|t| keys.contains(&t.key)) {
+        let paint_tile = |painter: &egui::Painter, t: &TileTex| {
             let r = Rect::from_min_max(st_screen(Vec2::new(t.rect[0], t.rect[1])), st_screen(Vec2::new(t.rect[2], t.rect[3])));
             painter.image(t.tex.id(), r, uv, Color32::WHITE);
+        };
+        if ready < keys.len() {
+            let view_rect = [(vis.min.x - st_origin.x) / st_zoom, (vis.min.y - st_origin.y) / st_zoom, (vis.max.x - st_origin.x) / st_zoom, (vis.max.y - st_origin.y) / st_zoom];
+            let overlaps_view = |r: &[f32; 4]| r[0] < view_rect[2] && r[2] > view_rect[0] && r[1] < view_rect[3] && r[3] > view_rect[1];
+            let mut scaled_transparent: Vec<_> = if ready == 0 {
+                tiles.iter().filter(|t| !t.opaque && t.scale != z && overlaps_view(&t.rect)).collect()
+            } else {
+                Vec::new()
+            };
+            scaled_transparent.sort_unstable_by_key(|t| std::cmp::Reverse(t.used));
+            if let Some(latest) = scaled_transparent.first() {
+                // During a zoom, the old grid can be the only picture. Use one set and one
+                // texture per rectangle so overlapping stale pictures do not stack alpha.
+                let clipped = painter.with_clip_rect(vis);
+                let mut painted = std::collections::HashSet::new();
+                for t in scaled_transparent.iter().filter(|t| t.set == latest.set && painted.insert(t.rect.map(f32::to_bits))) {
+                    paint_tile(&clipped, t);
+                }
+            } else {
+                // Fill missing rectangles once. A ready transparent tile cannot hide stale
+                // pixels beneath it, so only missing tiles can use these placeholders.
+                for (spec, job) in &jobs {
+                    if !tiles.iter().any(|t| t.key == job.key)
+                        && let Some(old) = tiles.iter().filter(|t| !t.opaque && t.rect == spec.rect).max_by_key(|t| t.used)
+                    {
+                        paint_tile(&painter, old);
+                    }
+                }
+            }
+            if bg.is_some_and(|color| color.a >= 1.0) {
+                // Opaque fallbacks cover transparent placeholders only where they overlap.
+                // Keep them inside the stage, clear of any ready transparent pasteboard tiles.
+                let stage_painter = painter.with_clip_rect(stage_rect);
+                let mut stale_opaque: Vec<_> = tiles.iter().filter(|t| t.opaque && !keys.contains(&t.key) && overlaps_view(&t.rect)).collect();
+                stale_opaque.sort_by_key(|t| t.used);
+                for t in stale_opaque.iter().rev().take(96).rev() {
+                    paint_tile(&stage_painter, t);
+                }
+            }
+        }
+        for t in tiles.iter().filter(|t| keys.contains(&t.key)) {
+            paint_tile(&painter, t);
         }
 
         // While a background render catches up with a drag, outline where the selection is now,
@@ -5485,6 +5526,345 @@ mod pasteboard_tests {
         assert!(clipped.iter().all(|t| t.rect[0] >= 0.0 && t.rect[1] >= 0.0 && t.rect[2] <= 1280.0 && t.rect[3] <= 720.0));
         covered_once(&clipped, z, [0.0, 0.0, 1280.0, 720.0]);
     }
+
+    fn drag_across_stage_edge(app: &mut App, ctx: &egui::Context) {
+        use egui::{Event, PointerButton};
+        use std::time::{Duration, Instant};
+
+        app.view.fit = false;
+        app.view.zoom = 0.65;
+        app.view.clip_to_stage = false;
+        app.prefs.render_mode = RenderMode::Immediate;
+        app.s.execute("draw.rect", &json!({"x": 110, "y": 130, "w": 96, "h": 72, "fill": "#e84539", "stroke": null})).unwrap();
+        app.s.execute("modify.convert_to_symbol", &json!({"name": "Stage edge fixture"})).unwrap();
+        app.s.execute("symbol.set_kind", &json!({"kind": "movie_clip"})).unwrap();
+        let frame = |app: &mut App, events| {
+            app.shot.as_mut().unwrap().frames = 0;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), events, ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out
+        };
+        let started = Instant::now();
+        loop {
+            frame(app, vec![]);
+            if app.stage_cache.ready.0 == app.stage_cache.ready.1 && app.stage_cache.drawn_by.as_ref().is_some_and(|(used_gpu, _)| !used_gpu) {
+                break;
+            }
+            assert!(started.elapsed() < Duration::from_secs(90), "stage renderer did not start");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let zoom = app.view.zoom;
+        let size = vec2(app.s.doc.stage.width as f32, app.s.doc.stage.height as f32);
+        let raw = app.stage_cache.canvas.center() + app.view.pan - size * zoom * 0.5;
+        let origin = pos2(raw.x.round(), raw.y.round());
+        let at = |x, y| origin + vec2(x, y) * zoom;
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let exterior = |t: &TileTex| t.rect[2] == 0.0 && t.rect[1] == 0.0;
+        let glow = json!({"type": "glow", "blur_x": 18, "blur_y": 18, "strength": 2, "quality": 3});
+        let shadow = json!({"type": "drop_shadow", "blur_x": 16, "blur_y": 16, "distance": 20, "angle": 180, "quality": 3});
+        for (label, filters) in [
+            ("unfiltered", vec![]), ("glow", vec![glow.clone()]), ("shadow", vec![shadow.clone()]), ("both", vec![glow.clone(), shadow]),
+        ] {
+            app.stage_cache.forget_document();
+            app.prefs.render_mode = RenderMode::Immediate;
+            app.s.execute("element.set_filters", &json!({"filters": filters})).unwrap();
+            frame(app, vec![]);
+            let steps = app.s.history_len();
+            let mut previous_exterior = None;
+            for (x, y) in [(8.0, 130.0), (230.0, 285.0), (8.0, 380.0), (220.0, 220.0)] {
+                let from = app.s.selection_bounds().center();
+                let from = at(from.x, from.y);
+                let to = at(x, y);
+                assert!(app.stage_cache.canvas.contains(from) && app.stage_cache.canvas.contains(to));
+                frame(app, vec![Event::PointerMoved(from)]);
+                frame(app, vec![button(from, true)]);
+                app.prefs.render_mode = RenderMode::Auto;
+                for fraction in [0.25, 0.5, 0.75, 1.0] {
+                    frame(app, vec![Event::PointerMoved(from.lerp(to, fraction))]);
+                }
+                // Settle each drag so we can inspect the rendered exterior tile.
+                app.prefs.render_mode = RenderMode::Immediate;
+                frame(app, vec![button(to, false)]);
+                assert_eq!(app.s.selection.len(), 1);
+                assert!((app.s.selection_bounds().center().x - x).abs() < 2.0, "{label}: drag did not reach {x}");
+                let slot = app.stage_cache.tiles.iter().enumerate().filter(|(_, t)| exterior(t)).max_by_key(|(_, t)| t.used).unwrap().0;
+                let tile = &app.stage_cache.tiles[slot];
+                let image = app.stage_cache.service.as_ref().unwrap().wait_for(tile.key, 1000).unwrap();
+                assert!(!image.gpu, "{label}: {:?}", image.fallback);
+                assert_eq!(image.rgba_premul.as_chunks::<4>().0.iter().any(|px| px[3] != 0), x < 10.0, "{label}: exterior tile at x={x}");
+                if x < 10.0 {
+                    previous_exterior = Some(app.stage_cache.tiles.swap_remove(slot));
+                }
+            }
+            assert_eq!(app.s.history_len(), steps + 4, "{label}: one Undo per drag");
+            let after = app.s.doc.clone();
+            app.s.undo().unwrap();
+            assert_ne!(app.s.doc, after);
+            app.s.redo().unwrap();
+            assert_eq!(app.s.doc, after);
+
+            // Present the previous crossing and the new position as a partial view.
+            // A settled view drops the previous textures, so keep one real tile from
+            // the immediately preceding crossing to control when its replacement arrives.
+            let current_slot = app.stage_cache.tiles.iter().position(exterior).unwrap();
+            let current = app.stage_cache.tiles.swap_remove(current_slot);
+            let previous = previous_exterior.unwrap();
+            assert_eq!(previous.rect, current.rect);
+            assert_ne!(previous.set, current.set);
+            let (old_id, current_id) = (previous.tex.id(), current.tex.id());
+            let inside = app.stage_cache.tiles.iter().position(|t| t.rect[0] == 0.0 && t.rect[1] == 0.0).unwrap();
+            app.stage_cache.tiles.swap_remove(inside);
+            app.stage_cache.tiles.push(previous);
+
+            app.prefs.render_mode = RenderMode::Background;
+            let draws = |out: &egui::FullOutput, id| {
+                out.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Mesh(m) if m.texture_id == id))
+            };
+            app.stage_cache.service.as_ref().unwrap().forget_pictures();
+            let out = frame(app, vec![]);
+            assert!(draws(&out, old_id), "{label}: the missing exterior tile should use its placeholder");
+
+            app.stage_cache.tiles.push(current);
+            app.stage_cache.service.as_ref().unwrap().forget_pictures();
+            let out = frame(app, vec![]);
+            assert!(app.stage_cache.ready.0 < app.stage_cache.ready.1, "test needs a pending interior tile");
+            assert!(draws(&out, current_id), "{label}: the current transparent tile must be painted");
+            assert!(!draws(&out, old_id), "{label}: an old exterior fragment was painted under the current tile");
+        }
+    }
+
+    #[test]
+    fn ordinary_stage_drag_does_not_paint_old_pasteboard_fragments() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.prefs.stage_renderer = crate::prefs::StageRenderer::Cpu;
+        drag_across_stage_edge(&mut app, &ctx);
+    }
+
+    #[test]
+    fn ordinary_stage_zoom_keeps_transparent_artwork_until_tiles_arrive() {
+        let ctx = egui::Context::default();
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.prefs.stage_renderer = crate::prefs::StageRenderer::Cpu;
+        app.prefs.render_mode = RenderMode::Immediate;
+        app.view.fit = false;
+        app.view.zoom = 0.75;
+        app.view.clip_to_stage = true;
+        app.s.execute("view.grid_set", &json!({"show": true, "over_objects": false})).unwrap();
+        app.s.execute("draw.rect", &json!({"x": 120, "y": 130, "w": 96, "h": 72, "fill": "#e84539", "stroke": null})).unwrap();
+        let frame = |app: &mut App| {
+            app.shot.as_mut().unwrap().frames = 0;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| app.frame(ui));
+            out.textures_delta.clear();
+            out
+        };
+        let mesh = |out: &egui::FullOutput, id| {
+            out.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Mesh(m) if m.texture_id == id => Some(m.calc_bounds()),
+                _ => None,
+            })
+        };
+        let artwork_tile = |t: &TileTex| t.rect[0] == 0.0 && t.rect[1] == 0.0;
+        let settled = frame(&mut app);
+        assert_eq!(app.stage_cache.ready.0, app.stage_cache.ready.1);
+        let old = app.stage_cache.tiles.iter().find(|t| artwork_tile(t)).unwrap();
+        assert!(!old.opaque);
+        let image = app.stage_cache.service.as_ref().unwrap().wait_for(old.key, 1000).unwrap();
+        assert!(image.rgba_premul.as_chunks::<4>().0.iter().any(|px| px[3] != 0));
+        let old_id = old.tex.id();
+        let old_rect = old.rect;
+        let old_width = mesh(&settled, old_id).unwrap().width();
+        let old_scale = app.stage_cache.last_scale;
+
+        app.view.zoom = 1.25;
+        let zooming = frame(&mut app);
+        assert!(matches!(app.stage_cache.ready, (0, needed) if needed > 1));
+        assert!(mesh(&zooming, old_id).expect("the old artwork tile should be painted during zoom").width() > old_width);
+
+        // The zoom has stopped changing, but the background worker still owes us its first tile.
+        app.stage_cache.service.as_ref().unwrap().forget_pictures();
+        let pending = frame(&mut app);
+        assert_eq!(app.stage_cache.ready.0, 0);
+        assert!(mesh(&pending, old_id).is_some());
+
+        let old = app.stage_cache.tiles.swap_remove(app.stage_cache.tiles.iter().position(artwork_tile).unwrap());
+        app.stage_cache.shown_state = None;
+        frame(&mut app);
+        let current = app.stage_cache.tiles.iter().find(|t| artwork_tile(t)).unwrap();
+        assert!(!current.opaque);
+        assert_ne!(current.rect, old_rect);
+        let current_id = current.tex.id();
+
+        // Return to this zoom with just one current tile cached.
+        app.stage_cache.tiles.retain(|t| t.tex.id() == current_id);
+        app.stage_cache.tiles.push(old);
+        app.stage_cache.last_scale = old_scale;
+        let partial = frame(&mut app);
+        assert!(matches!(app.stage_cache.ready, (1, needed) if needed > 1));
+        assert!(mesh(&partial, current_id).is_some());
+        assert!(mesh(&partial, old_id).is_none(), "the scaled old tile must not show through the replacement");
+
+        app.stage_cache.shown_state = None;
+        frame(&mut app);
+        assert_eq!(app.stage_cache.ready.0, app.stage_cache.ready.1);
+        assert!(app.stage_cache.tiles.iter().all(|t| t.tex.id() != old_id), "the completed view must evict the old zoom's textures");
+    }
+
+
+    #[test]
+    fn ordinary_stage_grid_off_keeps_one_placeholder_until_opaque_replacement() {
+        let ctx = egui::Context::default();
+        ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::MIN);
+        let mut app = App::with_context(&ctx, anicraft_engine::Session::default(), Some(std::path::PathBuf::from("unused.png")));
+        app.prefs.stage_renderer = crate::prefs::StageRenderer::Cpu;
+        app.prefs.render_mode = RenderMode::Background;
+        app.view.fit = false;
+        app.view.zoom = 0.75;
+        app.view.clip_to_stage = true;
+        app.s.execute("view.grid_set", &json!({"show": true, "over_objects": false})).unwrap();
+        app.s.execute("draw.rect", &json!({"x": 120, "y": 130, "w": 96, "h": 72, "fill": "#e84539", "stroke": null})).unwrap();
+
+        let frame = |app: &mut App| {
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 940.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| show(app, ui));
+            out.textures_delta.clear();
+            out
+        };
+        let draws = |out: &egui::FullOutput, id| {
+            out.shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Mesh(m) if m.texture_id == id)).count()
+        };
+
+        let bytes = 32 * 1024 * 1024;
+        app.stage_cache.service = Some(RenderService::without_thread(bytes));
+        let settled = frame(&mut app);
+        assert!(matches!(app.stage_cache.ready, (ready, needed) if ready == needed && needed > 1));
+        let art = app.stage_cache.tiles.iter().find(|t| t.rect[0] == 0.0 && t.rect[1] == 0.0).unwrap();
+        assert!(!art.opaque);
+        let (rect, old_id) = (art.rect, art.tex.id());
+        assert_eq!(draws(&settled, old_id), 1);
+        let zoom = app.stage_cache.last_scale.unwrap();
+        let stage_px = ((app.s.doc.stage.width as f32 * zoom).ceil() as u32, (app.s.doc.stage.height as f32 * zoom).ceil() as u32);
+        let px = rect.map(|v| (v * zoom).round());
+
+        // Keep another transparent texture for the same rectangle, as after a nearby edit.
+        let pic = app.s.stage_picture();
+        let transparent = tiles_for(zoom, stage_px, px, 0, None, false).remove(0);
+        let mut older = anicraft_engine::render_service::render_job(&make_job_for(0, pic.state, &pic.doc, pic.frame, transparent.view, None));
+        assert!(older.rgba_premul.as_chunks::<4>().0.iter().any(|pixel| pixel[3] != 0));
+        older.key = !older.key;
+        assert!(app.stage_cache.upload(&ctx, &older, &transparent, &[]).is_none());
+        let duplicate_id = app.stage_cache.tiles.last().unwrap().tex.id();
+
+        app.s.execute("view.grid_set", &json!({"show": false})).unwrap();
+        let svc = RenderService::new(bytes, None);
+        assert!(svc.has_thread());
+        app.stage_cache.service = Some(svc);
+        let pending = frame(&mut app);
+        assert_eq!(app.stage_cache.last_scale, Some(zoom));
+        assert_eq!(app.stage_cache.ready.0, 0);
+        assert_eq!(draws(&pending, old_id) + draws(&pending, duplicate_id), 1, "artwork must remain visible exactly once while the opaque tile is missing");
+
+        let pic = app.s.stage_picture();
+        let opaque = tiles_for(zoom, stage_px, px, 0, Some(pic.doc.stage.background), false).remove(0);
+        let job = make_job_for(0, pic.state, &pic.doc, pic.frame, opaque.view, None);
+        // Install just one finished replacement so the other tiles still need placeholders.
+        let svc = RenderService::new(bytes, None);
+        assert!(svc.has_thread());
+        let replacement = svc.render_now(job);
+        let key = replacement.key;
+        app.stage_cache.service = Some(svc);
+        let partial = frame(&mut app);
+        assert_eq!(app.stage_cache.ready.0, 1);
+        let current = app.stage_cache.tiles.iter().find(|t| t.key == key).unwrap();
+        assert!(current.opaque);
+        assert_eq!(draws(&partial, current.tex.id()), 1);
+        assert_eq!(draws(&partial, old_id) + draws(&partial, duplicate_id), 0, "a ready replacement removes both old candidates");
+    }
+
+    #[test]
+    fn ordinary_stage_composites_pixels_across_partial_fallback_overlap() {
+        let (clear, red, green, blue, white) = (Color32::TRANSPARENT, Color32::RED, Color32::GREEN, Color32::BLUE, Color32::WHITE);
+        for (label, background, opaque_count, replacement, expected) in [
+            ("partial opaque", BG, 1, false, [green, red, red, red]),
+            ("multiple opaque", BG, 2, false, [green, blue, red, red]),
+            ("complete opaque", BG, 4, false, [green, blue, green, blue]),
+            ("ready opaque", BG, 2, true, [white; 4]),
+            ("transparent background", Rgba { a: 0.0, ..BG }, 2, false, [red; 4]),
+            ("ready transparent", Rgba { a: 0.0, ..BG }, 2, true, [blue, clear, clear, clear]),
+        ] {
+            let ctx = egui::Context::default();
+            ctx.options_mut(|o| o.max_passes = std::num::NonZeroUsize::MIN);
+            let mut session = anicraft_engine::Session::default();
+            session.doc.stage.height = 1280;
+            session.doc.stage.background = background;
+            let mut app = App::with_context(&ctx, session, Some(std::path::PathBuf::from("unused.png")));
+            app.prefs.stage_renderer = crate::prefs::StageRenderer::Cpu;
+            app.view.fit = false;
+            app.view.zoom = 0.5;
+            app.view.clip_to_stage = true;
+            // Seed the textures left by an incomplete grid-under zoom. A frame with changed
+            // scale skips render requests, so readiness depends only on the textures we install.
+            app.stage_cache.last_scale = Some(1.0);
+            let mut cache_tile = |key, spec: &TileSpec, pixels: Vec<Color32>| {
+                let size = if pixels.len() == 1 { [1, 1] } else { [2, 2] };
+                let tex = ctx.load_texture("stage overlap fixture", egui::ColorImage::new(size, pixels), egui::TextureOptions::NEAREST);
+                app.stage_cache.tiles.push(TileTex {
+                    key, set: 0, rect: spec.rect, scale: spec.view.transform.m[0], opaque: spec.opaque(),
+                    tex: TileImage::Uploaded(tex), used: key,
+                });
+            };
+            let old = tiles_for(0.5, (640, 640), [0.0, 0.0, 512.0, 512.0], 0, None, false).remove(0);
+            cache_tile(1, &old, vec![red]);
+            // Each old opaque texture covers a quarter of the matching transparent tile.
+            for (i, (x, y, color)) in [(0.0, 0.0, green), (512.0, 0.0, blue), (0.0, 512.0, green), (512.0, 512.0, blue)].into_iter().take(opaque_count).enumerate() {
+                let opaque = tiles_for(1.0, (1280, 1280), [x, y, x + 512.0, y + 512.0], 0, Some(BG), false).remove(0);
+                cache_tile(i as u64 + 2, &opaque, vec![color]);
+            }
+            if replacement {
+                let current = tiles_for(0.5, (640, 640), [0.0, 0.0, 512.0, 512.0], 0, Some(background), false).remove(0);
+                let pic = app.s.stage_picture();
+                let job = make_job_for(0, pic.state, &pic.doc, pic.frame, current.view, None);
+                let pixels = if current.opaque() { vec![white] } else { vec![blue, clear, clear, clear] };
+                cache_tile(job.key, &current, pixels);
+            }
+
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(900.0, 900.0))), ..Default::default() };
+            let mut out = ctx.run_ui(input, |ui| show(&mut app, ui));
+            let top_left = app.stage_cache.canvas.center() - vec2(320.0, 320.0);
+            let origin = pos2(top_left.x.round(), top_left.y.round());
+            // Composite the stage texture meshes at four device-pixel centres. The painter
+            // maps the full texture onto each mesh, and the fixture texels are solid or clear.
+            let actual = [vec2(64.5, 64.5), vec2(320.5, 64.5), vec2(64.5, 320.5), vec2(320.5, 320.5)].map(|offset| {
+                let point = origin + offset;
+                let mut pixel = clear;
+                for shape in &out.shapes {
+                    if !shape.clip_rect.contains(point) {
+                        continue;
+                    }
+                    let egui::Shape::Mesh(mesh) = &shape.shape else { continue };
+                    let bounds = mesh.calc_bounds();
+                    if !bounds.contains(point) || !app.stage_cache.tiles.iter().any(|t| t.tex.id() == mesh.texture_id) {
+                        continue;
+                    }
+                    let delta = &out.textures_delta.set[&mesh.texture_id][0];
+                    let egui::ImageData::Color(image) = &delta.image;
+                    let x = ((point.x - bounds.min.x) / bounds.width() * image.width() as f32) as usize;
+                    let y = ((point.y - bounds.min.y) / bounds.height() * image.height() as f32) as usize;
+                    let texel = image[(x, y)];
+                    if texel.is_opaque() {
+                        pixel = texel;
+                    }
+                }
+                pixel
+            });
+            out.textures_delta.clear();
+            assert!(matches!(app.stage_cache.ready, (ready, needed) if ready == usize::from(replacement) && needed > 1));
+            assert_eq!(actual, expected, "{label} tile pixels");
+        }
+    }
+
 
     #[test]
     fn pasteboard_tiles_work_far_away_zoomed_and_stay_bounded() {

@@ -18,19 +18,46 @@ On macOS, press ⌘ where this guide says Ctrl, and ⌥ where it says Alt.
 * **Linux**: the deb and rpm packages install it as `/usr/bin/anicraft-cli`; the tarball has it
   next to `anicraft`.
 
-Run it with no arguments, or with `--help`, to see every subcommand. `anicraft-cli --version`
-prints the version.
+Run it with `--help` to see every subcommand, and `<subcommand> --help` for one. `anicraft-cli
+--version` (or `-V`) prints the version, and so does `-V` after any subcommand. The Linux
+packages install a man page for each subcommand (`man anicraft-cli-render`) and completions for
+bash, zsh and fish.
 
-Three rules hold everywhere:
+These rules hold everywhere:
 
 * Subcommands that open a document accept a `.anicraft` file, an Animate `.fla` or `.xfl`
   file, an XFL folder, or `--sample` for the built-in sample animation. See
   [Converting Animate files](#converting-animate-files) to save an import as `.anicraft`.
 * **Frame flags on the command line are 1-based**, as on the timeline: `--frame 1` is the first
   frame. Frame numbers inside JSON params are 0-based, as everywhere in the engine.
-* **An option a subcommand doesn't know is an error**, with exit code 2 and the subcommand's
-  usage, before anything is opened or written. A mistyped `--frmae 12` never renders frame 1
-  as if you had asked for it.
+* **The exit code says what went wrong**: 0 for success, 1 when a command ran and failed, 2 for
+  a command line that is wrong, and 128 plus the signal number for a process ended by a signal
+  (130 for Ctrl+C), as in the shell. Results go to standard output and `error: …` messages to
+  standard error.
+* **A command line that is wrong is an error before anything is opened or written**, with exit
+  code 2 and the subcommand's usage: a flag the subcommand doesn't take, a flag given twice, a
+  value that isn't a number where one is needed, JSON that doesn't parse, or flags that
+  conflict. A mistyped `--frmae 12` never renders frame 1 as if you had asked for it. A value
+  that starts with `-` is written `--out=-image.png`.
+* **Nothing is replaced by accident.** An output that would replace the document it was made
+  from is refused, and `run` and `exec` save onto the document they opened only with
+  `--in-place`. See [Replacing files](#replacing-files).
+* **`--plugins <folder>`**, also read from the `ANICRAFT_PLUGINS` environment variable when the
+  flag is not given (a blank variable counts as unset), loads WebAssembly plug-ins first. No
+  other environment variable sets an option, and none can turn on a flag that overwrites.
+
+### RFC-0018
+
+The command-line tool follows
+[RFC-0018, command-line conventions](https://github.com/storytold/craft-contrib/blob/main/rfcs/0018-cli-conventions.md).
+Its help is the reference for every flag, as the rule asks; this page is the guide. What it
+does not meet yet:
+
+* `serve`, `mcp` and the control channel report an error to the assistant as text inside their
+  protocol, not as a typed error.
+* The ast-grep rules and the `AGENTS.md` line that asks agents to run them wait for the shared
+  workflow in craft-common-actions.
+* macOS and Windows have no man pages or completions (the RFC leaves them out).
 
 ## Rendering
 
@@ -39,7 +66,7 @@ Three rules hold everywhere:
 | `info <file>` | A JSON description of the document: stage, scenes, layers, keyframes, library. |
 | `render <file> --out frame.png [--frame N] [--scale S]` | One frame as a PNG. |
 | `render-seq <file> --out-dir dir [--from A] [--to B] [--scale S]` | A numbered PNG sequence. |
-| `gif <file> --out anim.gif [--from A] [--to B] [--scale S] [--overwrite yes]` | An animated GIF. |
+| `gif <file> --out anim.gif [--from A] [--to B] [--scale S] [--overwrite]` | An animated GIF. |
 | `apng <file> --out anim.png [...]` | An animated PNG, full colour with real transparency. |
 | `webp <file> --out anim.webp [...]` | A lossless animated WebP. |
 | `formats` | A JSON list of available export formats and their IDs. |
@@ -47,7 +74,7 @@ Three rules hold everywhere:
 | `new --out file.anicraft [--width W] [--height H] [--fps F]` | A new, empty document. |
 
 `apng` and `webp` take the same range and scale flags as `gif`, plus `--loop forever` (the
-default) or `--loop N` for how many times it plays, and `--background yes` to draw the stage
+default) or `--loop N` for how many times it plays, and `--background` to draw the stage
 colour instead of transparency.
 
 Use the `id` from `formats` with `export --format`. To use an exporter plug-in, pass the
@@ -68,12 +95,20 @@ anicraft-cli export --sample --format svg --frame 1 --out preview.svg
 ### Replacing files
 
 Exports never overwrite a file silently. If the output already exists, the command fails and
-says so ("Replace existing file? f.png already exists…"). Pass `--overwrite yes` to `gif`,
-`apng`, `webp` or `export` when you want to replace it. To replace a PNG, use `export`
-with the `png` format:
+says so ("Replace existing file? f.png already exists…"). Pass `--overwrite` (`--overwrite yes`
+works too) to `gif`, `apng`, `webp` or `export` when you want to replace it. To replace a PNG,
+use `export` with the `png` format:
 
 ```sh
-anicraft-cli export shot010.anicraft --format png --frame 24 --out f24.png --overwrite yes
+anicraft-cli export shot010.anicraft --format png --frame 24 --out f24.png --overwrite
+```
+
+An export never replaces the document it renders, and `--overwrite` doesn't change that.
+`run` and `exec` write a document with `--save`; saving onto the document they opened replaces
+it, so that needs `--in-place`:
+
+```sh
+anicraft-cli run shot010.anicraft title.json --save shot010.anicraft --in-place
 ```
 
 ## Running any command
@@ -347,7 +382,7 @@ same order, as the search field in the guide's pages:
 
 ```sh
 anicraft-cli guide search onion skin
-anicraft-cli guide search export gif --limit 3 --json yes
+anicraft-cli guide search export gif --limit 3 --json
 ```
 
 Each result gives the section's heading, its chapter, the page to open and a passage around the

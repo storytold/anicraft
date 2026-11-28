@@ -224,6 +224,12 @@ impl StageView {
     }
 }
 
+/// The percentage being typed, with edits tracked across frames until it is submitted.
+pub struct ZoomDraft {
+    pub text: String,
+    pub edited: bool,
+}
+
 /// In-progress pointer gesture on the stage.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Drag {
@@ -544,7 +550,7 @@ pub struct App {
     pub xf: crate::xform::State,
     /// The zoom edit-bar field's draft while it has the keyboard (view state, not undoable):
     /// `None` shows the current zoom, `Some` is what is being typed.
-    pub zoom_text: Option<String>,
+    pub zoom_text: Option<ZoomDraft>,
     /// The bone picked on the stage (ADR 0043; view state).
     pub bone_sel: Option<anicraft_engine::doc::BoneId>,
     /// The Bind tool's options: Paint Weights, the brush, the focused point (ADR 0090).
@@ -4184,7 +4190,9 @@ impl App {
 
     pub fn view_center_stage(&self) -> egui::Vec2 {
         let size = egui::vec2(self.s.doc.stage.width as f32, self.s.doc.stage.height as f32);
-        size * 0.5 - self.view.pan / self.view.zoom.max(1e-3)
+        let zoom = self.view.zoom;
+        let divisor = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1e-3 };
+        size * 0.5 - self.view.pan / divisor
     }
 
     pub fn zoom_by(&mut self, canvas: egui::Rect, screen: egui::Pos2, factor: f32, pixels_per_point: f32) {
