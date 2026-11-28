@@ -1,11 +1,11 @@
 # Windows, Linux and macOS release-ref nightly: supervised manual go-live
 
 **Enabled for supervised manual runs, not yet qualified.** The producer (`nightly.yml`, main) and the
-signer (`nightly-sign.yml`, release) keep only their exact context guards and run when one of the reviewed
-manual actors dispatches them. There is no schedule yet. The installed policy
-[`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is the v3
-policy for `storytold/anicraft`. Once `nightly.yml` lands on `main`, populate `producer_workflow_id`
-before promoting the policy to `release`, read with:
+signer (`nightly-sign.yml`, on the dedicated `nightly-signer` branch) keep only their exact context
+guards and run when one of the reviewed manual actors dispatches them. There is no schedule yet. The
+installed policy [`.github/nightly-signing-policy.json`](../.github/nightly-signing-policy.json) is the
+v3 policy for `storytold/anicraft`. Its `producer_workflow_id` is `nightly.yml`'s registration on
+`main`, read with:
 
 ```bash
 gh api repos/storytold/anicraft/actions/workflows/nightly.yml --jq .id
@@ -14,27 +14,39 @@ gh api repos/storytold/anicraft/actions/workflows/nightly.yml --jq .id
 The callers pass no platform secrets. The unsigned reusable caller's maximum OIDC/attestation
 permissions are for its isolated attester; its compiler narrows to contents and Actions read
 only, with no OIDC, attestation write, release environment or platform signing secrets.
-Shared tooling is pinned to `605d58766e8f536564da8fc81d3676ac86816dea`, the craft-common-actions
-main commit that merged [#339](https://github.com/storytold/craft-common-actions/pull/339) (bounded
-lineage compares and an issue reread at the end of candidate admission) on top of
-[#342](https://github.com/storytold/craft-common-actions/pull/342) (policy v3, the `platforms` input
-and the Linux and macOS legs). Both callers name it in `uses` and `tooling-revision`. A pin is reviewed
-source availability, not provider, queue, native signing or crypto qualification.
+Shared tooling is pinned to `be00e5ccd18b68e950c8a08532f2230e7c3d0cba`, the craft-common-actions
+main commit that merged [#371](https://github.com/storytold/craft-common-actions/pull/371) (the
+candidate is admitted on the built commit's own Sonar analysis, not main's latest) after
+[#370](https://github.com/storytold/craft-common-actions/pull/370) (the Windows and macOS nightly
+registry rows for the 14 apps) and
+[#369](https://github.com/storytold/craft-common-actions/pull/369) (shared helper checkouts kept out
+of the app's clean-source check, and macOS on `macos-15`), following
+[#364](https://github.com/storytold/craft-common-actions/pull/364) (the signer may run on the
+policy's signer branch) and [#363](https://github.com/storytold/craft-common-actions/pull/363) (the
+multi-app pipeline, which makes the signer's `app-name` input required and admits any reviewed
+registry app), with #342 (`a4f6fd51`, policy v3 and the `platforms` input) and #339 (`605d5876`)
+earlier. Both callers name it in `uses` and `tooling-revision`. A pin is reviewed source
+availability, not provider, queue, native signing or crypto qualification.
 Existing stable workflows are unchanged.
 
-**The shared-workflow port is a prerequisite.** At this pin both reusable workflows admit only
-PhotoCraft: `nightly-unsigned.yml` requires `inputs.app-name == 'photocraft'` and
-`github.repository == 'storytold/photocraft'` on its build jobs, and `nightly-release.yml` requires the
-same repository in `validate` and every signing job (its concurrency group is
-`craft-release-ref-signer-photocraft`). A AniCraft dispatch therefore builds and signs nothing until
-`storytold/craft-common-actions` admits `storytold/anicraft`. No dispatch can produce a release before
-that port, and both callers' `uses`, `tooling-revision` and the policy pins must move to the same
-reviewed revision together. The port is craft-common-actions #363 ("run the shared nightly pipeline for
-any reviewed registry app"); until it merges these callers are inert.
-
 **First runs.** The first runs are manual dispatches in this order: `nightly.yml` on `main` (only a
-listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `release` with that
-producer run ID and attempt, by a listed manual actor.
+listed manual actor passes the producer's plan step), then `nightly-sign.yml` on `nightly-signer`
+with that producer run ID and attempt, by a listed manual actor.
+
+**Signer branch.** The signer runs on `refs/heads/nightly-signer`, not on the stable `release`
+branch, so nightly signer files never need a stable release sync. The policy's `release_branch`
+names it and the signer's guard requires it; this app has no automatic dispatch transport, so
+nothing else targets the branch. The branch only fast-forwards to reviewed main commits, through the
+settings script's `advance` (no queued signer run, a trust-closure scan, then the full diff of
+`.github/` and `packaging/`), and the existing `release` environment must admit `nightly-signer`
+alongside `release` before the first dispatch (a repository settings change, not a workflow one).
+Its trust closure is all of `.github/` and `packaging/`, including `packaging/env.sh`, which
+`import-cert.sh` sources with the Apple keys. On that branch only the pinned `nightly-sign.yml`
+caller may reach an environment: no app workflow binds one, and the only caller of the shared stable
+`release.yml` is `release.yml`, whose callee must carry the stable-only environment guard. The
+contract tests check the in-repo part on every main PR; the settings scan also resolves the callee.
+Stable releases still come only from `refs/heads/release`. History does not carry over a switch
+between `release` and `nightly-signer`, so the switch happens before the first publication.
 
 **Manual actors.** `bflatastic`, `dylanmtaylor`, `echelon`, `FredApps` and `skylartaylor`, in the
 producer's `manual-actors` and the policy's `manual_actors`. The list mirrors the release-managers
@@ -54,15 +66,14 @@ the signer caller has no platform input.
 
 ## Installed policy values and their sources
 
-Read on 2026-11-24; re-read anything that may have moved (and populate `producer_workflow_id` once
-`nightly.yml` is registered on `main`, plus any Sonar `debt` if needed) before the policy is promoted
-to `release`.
+Read on 2026-11-24, with `producer_workflow_id` filled on 2026-11-25; re-read anything that may have
+moved (plus any Sonar `debt` if needed) before `nightly-signer` is advanced to it.
 
 | Field | Value | Source |
 |---|---|---|
 | `repository_id` | `1419518094` | `gh api repos/storytold/anicraft --jq .id` |
-| `producer_workflow_id` | `null` (pending `nightly.yml` on `main`) | `gh api repos/storytold/anicraft/actions/workflows/nightly.yml --jq .id` after `nightly.yml` reaches `main` |
-| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `605d5876…` (craft-common-actions #339) | The callers' pin |
+| `producer_workflow_id` | `429745835` | `gh api repos/storytold/anicraft/actions/workflows/nightly.yml --jq .id` on `main` |
+| `producer_tooling_revision`, `signer_tooling_revision`, `producer_workflow_ref` | `be00e5cc…` (the exact-analysis admission, #371 after #370 and #369, following #364 on #363) | The callers' pin |
 | `manual_actors` / `automatic_signer_actors` | the five release managers / `[]` | release-managers team (id 19837241) members who can push; equals the producer caller's `manual-actors` |
 | `max_age_seconds`, `max_artifact_bytes` | `86400`, `2147483648` | Go-live checklist |
 | `platforms` | three rows | Storytold stable signing identities (`Learning Machines Inc`, Linux OpenPGP fingerprint `2B76741B414AAD6CD33E631213A005C0B9D7C3ED`, Apple Team ID `DJ6XS33FX8`) |
@@ -74,8 +85,8 @@ to `release`.
 - `.github/workflows/nightly.yml`: default-main registration of the unsigned producer, named
   `AniCraft unsigned nightly`, enabled for manual dispatch by `manual-actors`; no signing secrets
   may be passed or inherited.
-- `.github/workflows/nightly-sign.yml`: top-level release registration, enabled for manual dispatch,
-  and identical on `main` and `release` after reviewed promotion. It rejects wrong repository/event/actual
+- `.github/workflows/nightly-sign.yml`: top-level signer registration, enabled for manual dispatch on
+  `nightly-signer`, which carries a reviewed main commit. It rejects wrong repository/event/actual
   branch, including same-name tags. Its constant whole-run concurrency is distinct from stable,
   cancellation is off and `queue: max` must be hosted-qualified. The caller itself passes no
   credentials; only the shared callee's sign jobs bind the `release` environment.
@@ -83,11 +94,11 @@ to `release`.
   `storytold/craft-common-actions`. Both must resolve to a **real reviewed public immutable
   commit**; the defining workflow SHA and tooling input must match.
 - `.github/nightly-linux-signing-key.asc` must be committed with the stable Linux public key
-  (`2B76741B414AAD6CD33E631213A005C0B9D7C3ED`) before Linux signing runs on `release`.
+  (`2B76741B414AAD6CD33E631213A005C0B9D7C3ED`) before Linux signing runs on `nightly-signer`.
 
 ## Local regression checks
 
 `python3 packaging/nightly-release-tests.py` verifies the nightly workflow contracts, exact context
-guards, manual actor lists, signer serialization (`anicraft-nightly-release`, `queue: max`,
+guards, manual actor lists, signer serialization (`anicraft-nightly-release`,
 `cancel-in-progress: false`), no-cache/no-platform-secret boundaries, shared tooling pin consistency,
 and `.github/nightly-signing-policy.json` schema and field invariants.
