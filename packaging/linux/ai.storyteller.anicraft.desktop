@@ -1,8 +1,11 @@
 [Desktop Entry]
 Type=Application
 Name=AniCraft
+Name[ru]=AniCraft
 GenericName=Animation Studio
+GenericName[ru]=Анимационная студия
 Comment=Draw and animate 2D vector art on a timeline
+Comment[ru]=Рисование и анимация 2D-векторной графики на шкале времени
 Exec=anicraft %f
 TryExec=anicraft
 Icon=ai.storyteller.anicraft
@@ -13,4 +16,5 @@ StartupNotify=false
 StartupWMClass=ai.storyteller.anicraft
 Categories=Graphics;2DGraphics;VectorGraphics;
 Keywords=animation;animator;timeline;keyframe;tween;vector;drawing;cartoon;motion;
+Keywords[ru]=анимация;аниматор;шкала времени;таймлайн;ключевой кадр;твин;вектор;рисование;мультфильм;движение;
 MimeType=application/x-anicraft;application/x-fla;application/x-xfl;

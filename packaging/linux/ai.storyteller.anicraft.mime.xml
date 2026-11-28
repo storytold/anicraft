@@ -5,6 +5,7 @@
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
   <mime-type type="application/x-anicraft">
     <comment>AniCraft document</comment>
+    <comment xml:lang="ru">Документ AniCraft</comment>
     <!-- A JSON file (crates/engine/src/format.rs), so text tools can still open it. -->
     <sub-class-of type="application/json"/>
     <icon name="ai.storyteller.anicraft"/>
@@ -12,11 +13,13 @@
   </mime-type>
   <mime-type type="application/x-fla">
     <comment>FLA document</comment>
+    <comment xml:lang="ru">Документ FLA</comment>
     <generic-icon name="x-office-document"/>
     <glob pattern="*.fla"/>
   </mime-type>
   <mime-type type="application/x-xfl">
     <comment>XFL document</comment>
+    <comment xml:lang="ru">Документ XFL</comment>
     <generic-icon name="x-office-document"/>
     <glob pattern="*.xfl"/>
   </mime-type>
