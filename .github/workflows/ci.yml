@@ -21,6 +21,7 @@ jobs:
     # Tracks @main so suite-wide CI fixes reach every app without a PR in each repository.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
+      os: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && '["artcraft-k8s-main"]' || '["ubuntu-24.04"]' }}
       # Same craft-fonts commit as release.yml.
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       # mesa-vulkan-drivers: lavapipe, a software Vulkan adapter, so the GPU stage's parity
@@ -38,7 +39,7 @@ jobs:
   licenses:
     timeout-minutes: 20
     name: Licences, bans and sources (cargo deny)
-    runs-on: ubuntu-24.04
+    runs-on: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && 'artcraft-k8s-main' || 'ubuntu-24.04' }}
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@1d88384fd173af6ecb012dfd0264a306b711241a # v2.22.4
