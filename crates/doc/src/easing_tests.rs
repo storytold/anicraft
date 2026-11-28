@@ -363,3 +363,15 @@ fn a_sampled_ease_becomes_a_custom_curve_through_its_samples() {
     assert_eq!(short.points().len(), 3);
     assert!((short.apply(0.5) - 0.8).abs() < 1e-3);
 }
+
+/// An Animate file's tween `acceleration` runs the other way from Classic Ease's strength:
+/// Flash 8's own exported frames of a tween at +100 start slowly and speed up, and at −100
+/// start quickly and slow down.
+#[test]
+fn an_animate_acceleration_eases_the_way_flash_draws_it() {
+    let starts_slowly = Easing::from_flash_acceleration(100.0);
+    let starts_quickly = Easing::from_flash_acceleration(-100.0);
+    assert!(starts_slowly.apply(0.25) < 0.25, "{starts_slowly:?}");
+    assert!(starts_quickly.apply(0.25) > 0.25, "{starts_quickly:?}");
+    assert_eq!(Easing::from_flash_acceleration(0.0), Easing::Linear);
+}

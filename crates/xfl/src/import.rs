@@ -915,7 +915,7 @@ impl<'a> Builder<'a> {
     fn easing(&mut self, f: &X) -> (Easing, Vec<(EaseGroup, Easing)>) {
         let native_tween = craft_xfl::tween::FrameTween::new(f);
         let acc = native_tween.acceleration().unwrap_or(0.0).clamp(-100.0, 100.0);
-        let classic = if acc == 0.0 { Easing::Linear } else { Easing::Classic(acc) };
+        let classic = Easing::from_flash_acceleration(acc);
         if native_tween.has_custom_ease() != Some(true) {
             return (classic, Vec::new());
         }

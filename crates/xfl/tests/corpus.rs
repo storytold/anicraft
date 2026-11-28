@@ -260,7 +260,7 @@ fn colour_effects_come_across_in_every_style() {
 fn tweens_keep_their_kinds_eases_and_hints() {
     let (doc, _) = import("tweens");
     let t = |l: usize| doc.timeline(0).layers[l].keyframes[0].tween.clone().expect("a tween");
-    assert_eq!((t(0).kind, t(0).easing), (TweenKind::Classic, Easing::Classic(-100.0)));
+    assert_eq!((t(0).kind, t(0).easing), (TweenKind::Classic, Easing::Classic(100.0)));
     assert_eq!(t(1).easing, Easing::CubicBezier(0.7, 0.0, 0.3, 1.0), "a one-segment custom ease is a cubic Bézier");
     // Per-property custom eases (ADR 0081): position's of three segments, exactly, overshooting
     // and settling; scale's of one; the rest linear.
@@ -277,7 +277,7 @@ fn tweens_keep_their_kinds_eases_and_hints() {
     let el = anicraft_doc::evaluate_layer_elements(&doc.timeline(0).layers[5], 6).unwrap().1[0].clone();
     let m = el.transform.decompose();
     assert!(m.tx > 180.0 && (m.sx - (1.0 + 0.5 * Easing::CubicBezier(0.8, 0.0, 0.9, 0.5).apply(0.5))).abs() < 1e-3, "{m:?}");
-    assert_eq!((t(3).kind, t(3).easing), (TweenKind::Shape, Easing::Classic(50.0)));
+    assert_eq!((t(3).kind, t(3).easing), (TweenKind::Shape, Easing::Classic(-50.0)));
     let hints = &doc.timeline(0).layers[3].keyframes[0].hints;
     assert_eq!(hints.len(), 1);
     assert!(hints[0].start.distance(anicraft_geom::Vec2::new(20.0, 120.0)) < 0.01 && hints[0].end.distance(anicraft_geom::Vec2::new(270.0, 115.0)) < 0.01, "{hints:?}");

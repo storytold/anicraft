@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+* **Previous Keyframe and Next Keyframe** (backlog P-026, #51; by DadStay, from #619): Control ›
+  Previous Keyframe (Alt+,) and Next Keyframe (Alt+.) move the playhead to the active layer's
+  nearest keyframe that way, and stay put when there is none. From the command line and MCP,
+  `timeline.prev_keyframe` and `timeline.next_keyframe` also take `layer`, `layers` or
+  `all_layers`.
+* **Eased tweens from Animate files ease the right way** (#163; by rcoenen, #663). A classic or
+  shape tween's ease in an imported `.fla` or XFL file played back the wrong way round: one
+  that should start slowly and speed up started quickly and slowed down, and the other way
+  about. Both importers now read the ease as Flash draws it, checked against the frames the
+  maker of a Flash 8 test file published beside it. A document imported before this keeps the
+  old direction; open the Animate file again.
+* **A genuine Flash 8 file is tested on every change** (by rcoenen, #661; the file by
+  goodtestingtube, MIT): the legacy `.fla` import was checked only against published samples
+  that can't be committed. Not a change you will see.
+
 ## 0.3.0 (2026-11-28)
 
 The first release since 0.2.1 (2026-11-12). It carries everything listed below, from the Flash 8 to

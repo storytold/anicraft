@@ -35,6 +35,8 @@ pub fn specs() -> Vec<CommandSpec> {
         c("timeline.goto", "Go to Frame", "", None, "{frame}", false, goto),
         c("timeline.next_frame", "Next Frame", "Control", Some("."), "{} (on the last frame it stays there)", false, |s, _| step(s, 1)),
         c("timeline.prev_frame", "Previous Frame", "Control", Some(","), "{} (on the first frame it stays there)", false, |s, _| step(s, -1)),
+        c("timeline.prev_keyframe", "Previous Keyframe", "Control", Some("Alt+,"), "{layer? | layers?: [..] | all_layers?: true} (the active layer's keyframes unless told otherwise; before the first one it stays there)", false, |s, p| step_keyframe(s, p, false)),
+        c("timeline.next_keyframe", "Next Keyframe", "Control", Some("Alt+."), "{layer? | layers?: [..] | all_layers?: true} (the active layer's keyframes unless told otherwise; after the last one it stays there)", false, |s, p| step_keyframe(s, p, true)),
         c("timeline.first_frame", "Go to First Frame", "Control", Some("Home"), "{}", false, |s, _| {
             s.set_frame(0);
             Ok(json!({"frame": 0}))
@@ -835,6 +837,22 @@ fn step(s: &mut Session, d: i64) -> Result<Value> {
     let f = (now + d).clamp(0, last.max(now));
     s.set_frame(f as u32);
     Ok(json!({"frame": s.frame}))
+}
+
+/// The playhead to the nearest keyframe before or after it on the layers asked for (the active
+/// layer, as the reference app steps; `all_layers` for any layer's). With none that way it stays,
+/// as Next and Previous Frame stop at the ends.
+fn step_keyframe(s: &mut Session, p: &Value, next: bool) -> Result<Value> {
+    let tl = s.timeline();
+    let ids: Vec<LayerId> = if opt_bool(p, "all_layers")?.unwrap_or(false) { tl.layers.iter().map(|l| l.id).collect() } else { target_layers(s, p)? };
+    // Folders hold no keyframes, so they add nothing here.
+    let starts = ids.iter().filter_map(|id| tl.layer(*id)).flat_map(|l| l.keyframes.iter().map(|k| k.start));
+    let cur = s.frame;
+    let chosen = if next { starts.filter(|&f| f > cur).min() } else { starts.filter(|&f| f < cur).max() };
+    if let Some(f) = chosen {
+        s.set_frame(f);
+    }
+    Ok(json!({"frame": s.frame, "moved": chosen.is_some()}))
 }
 
 pub(crate) fn new_layer(s: &mut Session, p: &Value) -> Result<Value> {

@@ -37,7 +37,7 @@ AniCraft is an independent, open-source project, and is not affiliated with or e
 | Colour | 8 | 1 | 2 | 2 |
 | Text | 8 | 5 | 5 | 2 |
 | Symbols and Library | 13 | 3 | 4 | 0 |
-| Timeline | 16 | 2 | 9 | 0 |
+| Timeline | 17 | 2 | 8 | 0 |
 | Tweens and the Motion Editor | 12 | 2 | 4 | 0 |
 | Bones and rigging | 8 | 2 | 3 | 0 |
 | Camera | 5 | 1 | 0 | 0 |
@@ -52,12 +52,12 @@ AniCraft is an independent, open-source project, and is not affiliated with or e
 | Accessibility | 4 | 2 | 1 | 0 |
 | Preferences and shortcuts | 6 | 2 | 0 | 1 |
 | Automation | 4 | 2 | 1 | 1 |
-| **All** | **198** | **53** | **70** | **27** |
+| **All** | **199** | **53** | **69** | **27** |
 
 The counts are of the rows below, so they weigh a small feature like a large one. The backlog,
 not this table, says what matters most.
 
-**Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md)): 0 yes, 0 no (window 0, os 0, engine-gap 0), 0 partial, 348 unknown.**
+**Headless ([RFC-0052](https://github.com/storytold/craft-contrib/blob/main/rfcs/0052-headless-reach.md)): 1 yes, 0 no (window 0, os 0, engine-gap 0), 0 partial, 347 unknown.**
 The **Headless** column at the end of each table says whether `anicraft-cli` and its MCP server (`anicraft-cli mcp`) can do the feature without the desktop window. An empty cell is `unknown`, the starting value. A row can be `yes` only when it cites a command id from the registry the CLI and the MCP server load (see the [command reference](guide/reference/commands.md)); no row is marked `yes` yet (a few rows already cite ids, such as `align.match_width`, and can be checked first), and `yes` is never written without one. A checked row that isn't reachable says `no (<reach>)` or `partial (<reach>)`, where the reach is `window` (needs the desktop window, a dialog or the pointer), `os` (needs an OS or online service the engine doesn't wrap) or `engine-gap` (could be a command, isn't one yet). A `partial` row's notes also say which part a headless client can do. Update the counts here when you mark rows.
 
 ## Workspace and panels
@@ -262,7 +262,7 @@ The **Headless** column at the end of each table says whether `anicraft-cli` and
 | Paste and Overwrite Frames; Paste Motion | **missing** | P-041. |
 | Undo and redo buttons on the timeline | **missing** | P-050 ([#369](https://github.com/storytold/anicraft/issues/369)). Edit › Undo and the History panel do it. |
 | Auto-keyframe while editing in a tween | **done** | |
-| Keyframe navigation (previous and next keyframe) | **missing** | P-026 ([#51](https://github.com/storytold/anicraft/issues/51)). |
+| Keyframe navigation (previous and next keyframe) | **done** | Control › Previous Keyframe and Next Keyframe (Alt+, and Alt+.), on the active layer; `all_layers` for any layer's. | yes (`timeline.prev_keyframe`, `timeline.next_keyframe`) |
 | Layer parenting view | **done** | [ADR 0113](adr/0113-layer-parenting.md). |
 | Camera and depth controls in the timeline header | **done** | |
 

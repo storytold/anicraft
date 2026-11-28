@@ -40,3 +40,5 @@ People who have contributed to AniCraft. The repository starts from one initial 
 * ViktorBystrov72: stage zoom measured in device pixels, Hide Edges, and fitting the stage to an imported SVG (#590, #588, #587).
 * Neel Patel (N-NeelPatel): Convert Lines to Fills in a shape's properties (#562).
 * rcoenen: an imported Animate file that keeps its name, and the macOS crash on closing the window, with the move to egui 0.37 (#596, #594).
+* rcoenen: eased tweens from Animate files that ease the way Flash draws them, and a genuine Flash 8 file as a test fixture (#663, #661).
+* DadStay: Previous Keyframe and Next Keyframe (from #619).

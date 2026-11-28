@@ -73,7 +73,7 @@ the changelog.
 | P-023 | Motion tweens from Animate files come in as motion tweens, with curves, eases and paths | Import, tweens | L | | xfl |
 | P-024 | Tools panel: tools grouped under one button with a flyout, a panel that reflows as it widens ([#198](https://github.com/storytold/anicraft/issues/198)), tool keys as the reference app's ([#246](https://github.com/storytold/anicraft/issues/246), [#168](https://github.com/storytold/anicraft/issues/168)) | Workspace | M | | shell |
 | P-025 | Colour: live preview on the artwork while pointing at a swatch ([#436](https://github.com/storytold/anicraft/issues/436)), swatches whose uses follow a change | Colour | S, M | | shell |
-| P-026 | Frame Picker panel for a graphic's frame ([#452](https://github.com/storytold/anicraft/issues/452)); previous and next keyframe ([#51](https://github.com/storytold/anicraft/issues/51)) | Workspace, timeline | M | | shell |
+| P-026 | Frame Picker panel for a graphic's frame ([#452](https://github.com/storytold/anicraft/issues/452); a first version is in outside PR [#619](https://github.com/storytold/anicraft/issues/619)). Done: Previous and Next Keyframe ([#51](https://github.com/storytold/anicraft/issues/51)) | Workspace | M | | shell |
 | P-027 | Effects on a layer and on a frame: colour effect, blend mode and filters, in Properties, Layer Properties for several layers, every export, and from Animate files ([#464](https://github.com/storytold/anicraft/issues/464), [#60](https://github.com/storytold/anicraft/issues/60)) | Layers, filters | L, ADR | | doc |
 | P-028 | The Brush feels right: raw pressure-sensitive ink (outside PR [#336](https://github.com/storytold/anicraft/issues/336), [#287](https://github.com/storytold/anicraft/issues/287)); art and pattern brushes later | Tools | M | P-003 | stage |
 | P-029 | Stage view: turn the view (the Rotation tool), spring-loaded zoom, Time Scrub (from outside PR [#394](https://github.com/storytold/anicraft/issues/394)) | Workspace, tools | S each | [#394](https://github.com/storytold/anicraft/issues/394) split | stage |
@@ -86,7 +86,7 @@ the changelog.
 | P-031 | Scripts: arrays, objects, `switch`, string methods, event bubbling and fields, sound from scripts ([#3](https://github.com/storytold/anicraft/issues/3)); a debugger later; ActionScript 1.0 and 2.0 last ([#293](https://github.com/storytold/anicraft/issues/293)) | Interactivity | L | | player |
 | P-032 | Strokes: gradient and bitmap strokes, ragged, stipple and hatched styles, scale modes, a hairline style | Drawing model, colour | M | | render |
 | P-033 | Typography: justified text, superscript and subscript, indents and margins, vertical text, spell checking; a direction setting for a paragraph with alignment to its start, and right-to-left text a script sets in the HTML page (left from P-008, [ADR 0130](adr/0130-mixed-directions-and-fallback-faces.md)) | Text | M (splits) | | text |
-| P-034 | A right-to-left interface, and Hebrew ([#45](https://github.com/storytold/anicraft/issues/45)) | Preferences | M | | shell |
+| P-034 | A right-to-left interface, and Hebrew ([#45](https://github.com/storytold/anicraft/issues/45), outside PR [#627](https://github.com/storytold/anicraft/issues/627)) | Preferences | M, ADR | a way to see it without a catalog (a right-to-left pseudo-locale) | shell |
 | P-035 | The HTML page and Test Movie, complete: 9-slice, bent bitmaps, stream sounds after a go-to, links that click, masks in hit tests, scaling choices, a preloader; Test Movie full screen and zoom | Publishing, interactivity | M (splits) | | player |
 | P-036 | Publish formats: an animated SVG in one file (outside PR [#9](https://github.com/storytold/anicraft/issues/9)), SVG sequence and file name patterns in Publish Settings, JPEG, a texture atlas, publish settings read from Animate files, per-sound settings | Publishing | M (splits) | | engine |
 | P-037 | More formats in: AIFF, FLAC and ADPCM WAV sounds; GIF, BMP, WebP bitmaps; numbered images as frames | Import | S each | craft-libs readers | audio, doc |
@@ -113,6 +113,7 @@ the changelog.
 | P-053 | Platforms: a native menu bar on macOS, one running AniCraft taking a second document, self-update for portable copies; store listings need the person | Preferences | M | | platform |
 | P-054 | Sound and data long tail: more mouth shapes, audio driving the camera and filters, an output device choice, data bindings that survive copy and paste, cell editing | Sound, automation | S each | | audio, engine |
 | P-055 | A first full translation and a translated guide | Preferences | M | storytold/craft-i18n | docs |
+| P-061 | Arrays of a symbol along a line, a grid, a circle or a spiral, and turning one into timeline animation (outside PR [#660](https://github.com/storytold/anicraft/issues/660)) | (beyond parity) | L, ADR | a product decision; its changes to stage tiles, the GPU renderer and motion tweens split out and measured | shell |
 
 ### Team
 
@@ -205,6 +206,72 @@ As of 2026-11-24 (46 open):
 | [#573](https://github.com/storytold/anicraft/issues/573) | A click on an empty cell past a layer's frames selects it ([#567](https://github.com/storytold/anicraft/issues/567)) | (done) | **superseded by** | Merged with its commit. |
 | [#572](https://github.com/storytold/anicraft/issues/572) | A swatch picked closes the colour picker ([#570](https://github.com/storytold/anicraft/issues/570)) | (done) | **superseded by** | Merged with its commit. |
 | [#562](https://github.com/storytold/anicraft/issues/562) | A line to a fill from Shape properties ([#530](https://github.com/storytold/anicraft/issues/530)) | (done) | **superseded by** | Merged with its commit: the command was there ([ADR 0109](adr/0109-shape-commands-picker-eyedropper-and-transformation-origins.md)); the button puts it where the reference app has it. |
+| [#663](https://github.com/storytold/anicraft/issues/663) | Eased tweens from Animate files ease the way Flash draws them | (P-039, done) | **merged, fixed** | Merged with its commit. An Animate file's `acceleration` runs the other way from the Classic Ease slider: a positive value starts slowly. Checked on the frames the maker of the Flash 8 test file published beside it ([#661](https://github.com/storytold/anicraft/issues/661)). Its checks failed on the corpus goldens, which still drew the old direction; redrawn on top, with a test on the real file. |
+| [#661](https://github.com/storytold/anicraft/issues/661) | A genuine Flash 8 file as a committed fixture | (P-039, done) | **merged** | Merged with its commit. The file passes fixture rule 3 of `standards/clean-room.md`: its maker drew it in their own copy of Flash 8 and wrote that it is MIT licensed (on `standards/licences.md`); the bytes are the attachment's (sha256 checked again here), with no sound, bitmaps, fonts, paths or names in them. Left out, as the PR says: the maker's XFL copies and exported frames, whose licence was not stated. |
+| [#627](https://github.com/storytold/anicraft/issues/627) | The Hebrew interface and right-to-left layout | P-034 | **planned** | We want it, and its bidi through `craft-text` and its logical names for screen readers are the right parts. Not ready: it puts strings into visual order before egui sees them, and only where `theme::text` is used, so about 340 tooltips, 120 plain buttons and most painted text would read backwards beside text that reads right; a button labelled through `theme::text` gets the reversed string as its accessible name; a long label loses its start, not its end, when it is cut; text fields are untouched; only form rows, section headers and the menu bar mirror. It also reformats code it does not change, and declares Hebrew to macOS before a catalog exists (storytold/craft-i18n has no `he/anicraft.tsv`). Needs: one place every drawn string passes through (or egui's own bidi, which [localisation.md](localisation.md) waits for), a right-to-left pseudo-locale so the whole window can be screenshot and checked without a catalog, a list of what mirrors and what does not (the timeline and the stage should not), and an ADR. |
+| [#660](https://github.com/storytold/anicraft/issues/660) | Arrays of a symbol (line, grid, circle, spiral) that can become timeline animation | P-061 | **held** | Beyond parity: the reference app has no array panel, so whether AniCraft gets one is a product decision for the person, as with [#445](https://github.com/storytold/anicraft/issues/445). It is also not ready by its own account: playing an ordinary filtered motion tween shows two frames at once across stage tiles, which `main` does not do, and the cause is not found. 15,800 lines in 71 files, with changes to the stage tiles, the GPU renderer, recovery and motion-tween evaluation that every document passes through; those would each need to be a PR of their own, measured, before a panel is built on them. |
+| [#619](https://github.com/storytold/anicraft/issues/619) | A suite of some twenty features in one commit | P-026 and others | **planned, in parts** | One commit of 16,000 lines in 132 files, 212 commits behind `main`, can't be reviewed or merged whole, and its features share model changes (new fields on elements, shapes, strokes, keyframes and documents) that tie them together. Taken now, by hand, with the author credited: Previous and Next Keyframe (P-026, [#51](https://github.com/storytold/anicraft/issues/51)). Each of the rest is welcome as a PR of its own, and what each needs is in the list under this table. |
+
+What each part of [#619](https://github.com/storytold/anicraft/issues/619) needs, read against
+`main` on 2026-11-28 (nothing here was built: the commit no longer applies):
+
+* **Previous and Next Keyframe (P-026):** taken.
+* **Frame Picker panel (P-026):** wanted. `frame_picker.frames` walks every frame of the symbol
+  (up to 100,000) and answers with all of them, so it needs a bound; `frame_picker.pick` repeats
+  `element.set_loop` and should be that command with a keyframe option; the panel recomputes
+  its frames on every repaint, has raw sizes and no arrow-key path through its grid, and builds
+  an element with a field (`transform_3d`) that only the 3D part of the same commit adds.
+* **Twelve mouth shapes (P-054):** not as it is. [ADR 0114](adr/0114-audio-to-keyframes-and-lip-sync.md)
+  keeps five shapes because telling `d`, `l` and `r` apart needs recognition we don't have; the
+  thresholds here are met by the synthetic tones of their own test, which would show artists a
+  result the analysis can't give (AGENTS.md rule 15). The twelve names also follow the reference
+  app's own set.
+* **Reverse Frames, Distribute to Keyframes, Convert to Frame-by-Frame (P-021):** wanted, each
+  with a fix: Distribute to Keyframes deletes every later keyframe in its range; Reverse Frames
+  rebuilds keyframes from a hand-copied field list and drops motion tweens; the conversion
+  depends on the auto-rig part. Its Distribute to Layers repeats the one `main` has
+  ([#579](https://github.com/storytold/anicraft/issues/579)), and Insert › New Symbol is in
+  outside PR [#668](https://github.com/storytold/anicraft/issues/668).
+* **Motion presets, copy and paste motion (P-041):** wanted. Pasting writes a motion tween onto
+  a keyframe that may hold several objects, which `motion.create` refuses; two lints are
+  silenced; there is no interface.
+* **A sound's in and out points and Split Audio (P-022):** wanted, and the model is right
+  (bounded, defaulted, sanitised). Split loses the part before the cut on a repeating sound and
+  leaves a looping one whole; the HTML export plays the untrimmed sound; the trim handles and
+  the read from Animate files are not there.
+* **Effects on a layer and on a keyframe (P-027):** wanted, and evaluation is the shape the
+  status section below asks for. The HTML export drops them, nothing is read from Animate
+  files, the dialog adds filters it can't edit, and it needs its ADR. Filters on graphic symbols
+  reverse [ADR 0091](adr/0091-filters-second-slice.md) and are a decision of their own.
+* **Swatches whose uses follow a change (P-025):** not this design. Every shape keeps a copy of
+  the paint and a tag, and an edit rewrites the document; the Paint Bucket changes a fill
+  without clearing its tag, so the next swatch edit undoes the artist's colour. It needs an ADR
+  choosing between this and a reference resolved when the frame is evaluated.
+* **Lasso and Polygon Lasso (P-018); Smooth, Straighten, Optimize (P-020):** outside PRs
+  [#624](https://github.com/storytold/anicraft/issues/624) and
+  [#623](https://github.com/storytold/anicraft/issues/623) each do one of these alone and are
+  the ones to review first. Here the lasso reuses the merge cutter and is bounded; the
+  simplifier recurses as deep as the outline is long. The Magic Wand picks every shape of a
+  near colour on the layer, which is not the tool (a joined region of a bitmap). Distort has
+  no handles on the stage and maps gradients by an approximation it does not mention.
+* **Turning the view (P-029):** wanted, as a command: here the angle is written by the panel
+  itself, so automation and the keyboard can't reach it, and the grid and rulers switch off.
+* **Gradient and bitmap strokes (P-032):** wanted; the model change is small and defaulted, but
+  only the CPU renderer reads it: SVG, HTML and Lottie write the plain colour and say nothing.
+* **3D rotation (P-044):** wanted, after its ADR: here the vanishing point and the angle of
+  view belong to each element, where the reference app keeps them on the document, and HTML and
+  Lottie drop the turn.
+* **Vectors pasted from the clipboard (P-038):** the nearest to ready: small, bounded, one undo
+  step, tested. As its own PR, once it is shown not to take a paste meant for a text field.
+* **An art brush:** no interface; a part of P-028 when that is reached.
+* **Photoshop files (P-038):** a format reader belongs in storytold/craft-libs (AGENTS.md rule 9,
+  and `parity.md` says so), from the published specification, cited with its edition. This one
+  reads carefully but has no allowance for the whole file: each of 512 layers may ask for
+  8192 × 8192 pixels.
+* **Auto-rig from a silhouette:** declined as it is. It is beyond parity; it starts a Python
+  script that is not in the repository (rule 11) and waits on it with no time limit; without
+  the script it answers with fixed joints and a confidence of 0.72 (rule 15); its panel names
+  other projects' models; and it has no tests.
 
 ## Feature requests and where they are
 
@@ -222,7 +289,7 @@ can close; the lead closes issues, not this page.
 | [#502](https://github.com/storytold/anicraft/issues/502) | Split Audio and trim handles | P-022 |
 | [#198](https://github.com/storytold/anicraft/issues/198), [#168](https://github.com/storytold/anicraft/issues/168) | Tools panel that cascades; closer to the reference app's interface | P-024 |
 | [#436](https://github.com/storytold/anicraft/issues/436), [#199](https://github.com/storytold/anicraft/issues/199) | Live colour preview; a palette on the squares (the palette is delivered) | P-025 |
-| [#452](https://github.com/storytold/anicraft/issues/452), [#51](https://github.com/storytold/anicraft/issues/51) | Frame Picker; keyframe navigation | P-026 |
+| [#452](https://github.com/storytold/anicraft/issues/452), [#51](https://github.com/storytold/anicraft/issues/51) | Frame Picker; keyframe navigation ([#51](https://github.com/storytold/anicraft/issues/51) is delivered: Control › Previous Keyframe and Next Keyframe) | P-026 |
 | [#464](https://github.com/storytold/anicraft/issues/464), [#60](https://github.com/storytold/anicraft/issues/60) | Layer properties and layer effects | P-027 |
 | [#287](https://github.com/storytold/anicraft/issues/287), [#290](https://github.com/storytold/anicraft/issues/290) | Paintbrush response; tablet pressure | P-028, P-014 |
 | [#44](https://github.com/storytold/anicraft/issues/44), [#120](https://github.com/storytold/anicraft/issues/120) | Grid and snapping details ([#120](https://github.com/storytold/anicraft/issues/120), line snapping, is delivered by [ADR 0045](adr/0045-raw-points-and-raw-shapes-inside-symbols.md)) | P-030 |

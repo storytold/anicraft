@@ -1214,7 +1214,7 @@ fn a_synthetic_timeline_decodes_its_layers_keyframes_tweens_and_instances() {
     assert_eq!(first.label, "start");
     let tween = first.tween.as_ref().expect("a classic tween");
     assert_eq!(tween.kind, TweenKind::Classic);
-    assert_eq!(tween.easing, anicraft_doc::Easing::Classic(-50.0));
+    assert_eq!(tween.easing, anicraft_doc::Easing::Classic(50.0));
     let second = &anim.keyframes[1];
     assert_eq!(second.label, "", "a comment is not a label");
     let shape_tween = second.tween.as_ref().expect("a shape tween");

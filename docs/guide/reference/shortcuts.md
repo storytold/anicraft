@@ -161,6 +161,8 @@ This page is generated from the editor's shortcut map, so it always matches the 
 |---|---|---|
 | Next Frame | . | . |
 | Previous Frame | , | , |
+| Previous Keyframe | Alt+, | ⌥, |
+| Next Keyframe | Alt+. | ⌥. |
 | Go to First Frame | Home, Shift+, | Home, ⇧, |
 | Go to Last Frame | End, Shift+. | End, ⇧. |
 | Previous Scene | Shift+PageUp | ⇧PageUp |
