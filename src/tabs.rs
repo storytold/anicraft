@@ -417,6 +417,10 @@ fn already_open(app: &App, id: &str, params: &Value) -> Option<usize> {
         return None;
     }
     let path = match id {
+        // In a browser an opened file is one just picked or dropped, known only by its name:
+        // a second file may share it (a backup from another folder), and even the same file
+        // may have changed on disk since. It always opens, in a tab of its own.
+        "file.open" if platform::WEB => return None,
         "file.open" => PathBuf::from(params.get("path")?.as_str()?),
         "file.open_recent" => match (params.get("index").and_then(Value::as_u64), params.get("path").and_then(Value::as_str)) {
             (Some(i), _) => app.s.recent.entries().get(usize::try_from(i).ok()?)?.path.clone(),

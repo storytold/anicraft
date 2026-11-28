@@ -2,8 +2,9 @@
 
 AniCraft also runs in a web browser: the same program, built for WebAssembly
 (`wasm32-unknown-unknown`), drawing into a page with WebGL2. How it is built, and why, is in
-[ADR 0036](adr/0036-web-build.md). Nothing is hosted yet and the releases don't carry it yet; you
-build it and serve it yourself. `packaging/web/package.sh` builds it and zips it as the release
+[ADR 0036](adr/0036-web-build.md), and how it is checked in a real browser in
+[ADR 0137](adr/0137-the-web-editor-is-checked-in-a-real-browser.md). Nothing is hosted yet and the
+releases don't carry it yet (see [Releases](#releases)); you build it and serve it yourself. `packaging/web/package.sh` builds it and zips it as the release
 download `dist/release/anicraft-web-<version>.zip`, the static site to unzip onto a web server.
 
 ## Build
@@ -27,7 +28,7 @@ scripts\build-web.ps1         # Windows PowerShell
 |---|---|
 | `index.html` | the page (from `packaging/web/index.html`) |
 | `anicraft.js` | wasm-bindgen's loader |
-| `anicraft_bg.wasm` | the editor, about 9 MB (3.3 MB gzipped) |
+| `anicraft_bg.wasm` | the editor, about 21.5 MB (6.8 MB gzipped) |
 | `anicraft.png` | the page icon |
 | `guide/` | the user guide as HTML pages (`anicraft-cli guide`), opened by Help › User Guide |
 
@@ -51,7 +52,12 @@ autosave) work. On another host, serve over HTTPS for the same reason. Compressi
 
 * **Opening and importing** use the browser's file picker. **Saving and exporting** download
   the file: Save asks for the file name the first time, then downloads under that name. The
-  browser picks the folder, usually Downloads.
+  browser picks the folder, usually Downloads. An export of several files (a PNG or SVG
+  sequence, a sprite sheet with its frame map, a publish) arrives as one ZIP named after its
+  folder, `frames.zip`: a browser drops most of a run of separate downloads.
+* **A file you open always opens**, in a tab of its own, even when a document of the same name
+  is open: the browser tells the page a file's name and nothing else, so two different files
+  can share one.
 * **Autosave** keeps recovery copies in the browser's storage for the site. If a tab closes or
   crashes with unsaved work, the next start offers to restore it, as the desktop app does after
   a crash. Copies of tabs that are still open are never offered. Browsers keep only a few MB per
@@ -64,7 +70,12 @@ autosave) work. On another host, serve over HTTPS for the same reason. Compressi
   screen's pictures. A recent file reopens while the page still holds it; after a reload it
   shows as missing (the browser never gives its path back): open it again with Open.
 * **Leaving the page** with unsaved changes asks first.
-* **Shortcuts** are the desktop ones; on a Mac they use ⌘.
+* **Shortcuts** are the desktop ones; on a Mac they use ⌘. The editor's keys are the editor's:
+  F5 inserts a frame and Ctrl+R imports, where a page would reload, and Alt+F opens the
+  editor's File menu. Keys the editor doesn't use stay the browser's (F12, Ctrl+T, Alt+D), and
+  so do the keys you unbind in Edit › Keyboard Shortcuts. No page can have Ctrl+N, Ctrl+T or
+  Ctrl+W (⌘ on a Mac): the browser keeps them, so use File › New and File › Close, or the
+  command palette (Ctrl+K). To reload the page, use the browser's button.
 * **Sound playback** uses Web Audio (ADR 0095): playback, scrubbing, previews and Test Movie,
   with the playhead following the sound. The browser opens sound on the first play (a click).
   Where a browser has no Web Audio, playback is silent with a notice.
@@ -78,13 +89,42 @@ autosave) work. On another host, serve over HTTPS for the same reason. Compressi
 | Installing plug-ins | Plug-ins live in a folder on the computer. Use the desktop app. |
 | Fonts on your computer | A page can't see them. Text uses the bundled faces. |
 | XFL folders | A browser can't hand over a folder. Open the `.fla` instead. |
-| PNG sequence as one file | Each frame downloads on its own. Your browser may ask once to allow several downloads. |
 | Large autosaves | Limited by the browser's storage (about 5 MB). |
 | Parallel rendering | The web has no threads here, so exports render one frame at a time. |
 
+## Releases
+
+`packaging/web/package.sh` makes `dist/release/anicraft-web-<version>.zip`, the static site to
+unzip onto a web server, and the Web CI job runs it on every pull request. Releases will carry
+it once `has-web` is switched on in `.github/workflows/release.yml` (the family release workflow
+then runs that script and attaches the zip); that is a workflow change of its own
+([#316](https://github.com/storytold/anicraft/issues/316)).
+
 ## What was verified, and how
 
-There was no browser on the build machine. These checks ran instead:
+**In a real browser** ([ADR 0137](adr/0137-the-web-editor-is-checked-in-a-real-browser.md)):
+`scripts/web-check.sh` (`.ps1` on Windows) builds `web/` and runs `tests/web_browser.rs`, which
+serves the folder on this computer and drives headless Chrome, Chromium or Edge as an artist
+would, by keyboard: the editor starts; Save downloads the document; a file with the open
+document's name opens through the browser's picker; Import to Stage (Ctrl+R) brings a picture
+in; F5 inserts a frame and the page is not reloaded; a PNG sequence from the command palette
+arrives as one ZIP; after a reload (which asks first, with unsaved work) the preferences are
+read back and one edit leaves a recovery copy in the site's storage; and the page reported no
+error. It takes about 20 s after the build.
+
+```sh
+scripts/web-check.sh                                   # build, then check
+ANICRAFT_WEB_DIR=unzipped-release scripts/web-check.sh # check a bundle you already have
+ANICRAFT_BROWSER=/usr/bin/chromium scripts/web-check.sh
+```
+
+Not checked by it: Firefox and Safari, sound, drag and drop from the desktop, and how the
+canvas looks. To check those by hand: build, serve, then in the page open a `.anicraft` file,
+draw, drop a picture and a sound from the desktop onto the stage, play (the sound is heard),
+save (a download arrives), close the tab with unsaved work, reopen it (Restore is offered), and
+export a GIF.
+
+**Without a browser**, as before:
 
 * every crate builds for wasm32, and clippy is clean for it;
 * `crates/engine/tests/wasm.rs` runs inside WebAssembly in Node: a frame renders with no
@@ -94,11 +134,6 @@ There was no browser on the build machine. These checks ran instead:
   panic;
 * natively, `crates/engine/src/web_tests.rs` runs every file command against the in-memory
   store the browser uses.
-
-Only a browser can confirm the canvas, the picker, downloads, storage, Web Locks and the
-leave-page prompt. To check them by hand: build, serve, then in the page open a `.anicraft` file,
-draw, save (a download arrives), close the tab with unsaved work, reopen it (Restore is
-offered), and export a GIF.
 
 Run the WebAssembly tests yourself (Node and the wasm-bindgen CLI installed):
 

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+* **The web editor, tried in a real browser** (M8, backlog P-007, ADR 0137; #55, #56). We ran
+  the browser build in Chrome the way an artist would and fixed what broke.
+  * **F5 inserts a frame instead of reloading the page.** The browser used to act on the
+    editor's shortcuts first: F5 and Ctrl+R (Import to Stage) reloaded the page, Ctrl+D
+    bookmarked it, Alt+F opened the browser's menu. The editor now keeps the keys it uses;
+    the rest (F12, Ctrl+T, Alt+D) stay the browser's. Ctrl+N and Ctrl+W can't be had by any
+    page: use the File menu or the command palette.
+  * **A PNG or SVG sequence arrives whole, as one ZIP.** It used to be one download per frame,
+    and the browser quietly dropped most of them (10 to 18 of 48). A sprite sheet with its
+    frame map is one ZIP too.
+  * **A file with the name of an open document opens**, in its own tab. It was refused as
+    "already open", so a backup from another folder couldn't be opened.
+  * Saving, opening, importing and exporting (#55) and preferences kept across a reload (#56)
+    are now checked in headless Chrome by `scripts/web-check.sh`. Releases don't carry the web
+    build yet (#316): the zip is made, the release workflow has to be told to attach it.
+
 ## 0.3.0 (2026-11-28)
 
 The first release since 0.2.1 (2026-11-12). It carries everything listed below, from the Flash 8 to

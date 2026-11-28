@@ -211,6 +211,35 @@ pub fn menu_bar_keys() -> bool {
     keys_os() != Os::Mac
 }
 
+/// In a browser: whether the editor takes this key press from the browser, which would
+/// otherwise act on it (F5 reloads the page, Ctrl+R too, Ctrl+D bookmarks it, Alt+F opens the
+/// browser's menu). `bound` is every chord the editor acts on; `alt_menus` says Alt reaches the
+/// menu bar (ADR 0064).
+///
+/// A key is taken only when the editor uses it, so the browser keeps the rest (F12, Ctrl+T,
+/// Alt+D: the ways out of the page by keyboard). Plain typing keys are never taken (that would
+/// stop text reaching a text field), nor are cut, copy and paste, which arrive as the
+/// browser's clipboard events.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn claims_key(bound: &[(egui::Modifiers, egui::Key)], alt_menus: bool, pressed: egui::Modifiers, key: Option<egui::Key>) -> bool {
+    use egui::Key;
+    let Some(key) = key else {
+        // Alt by itself focuses the browser's own menu; here it focuses the editor's.
+        return alt_menus && pressed.alt && !pressed.ctrl && !pressed.command && !pressed.shift;
+    };
+    let chorded = pressed.ctrl || pressed.command || pressed.alt;
+    if chorded && !pressed.alt && matches!(key, Key::C | Key::X | Key::V) {
+        return false;
+    }
+    let function = matches!(key, Key::F1 | Key::F2 | Key::F3 | Key::F4 | Key::F5 | Key::F6 | Key::F7 | Key::F8 | Key::F9 | Key::F10 | Key::F11 | Key::F12);
+    if !chorded && !function {
+        return false;
+    }
+    // As egui matches a shortcut: extra Shift or Alt held still presses it. But a plain letter's
+    // binding (a tool key) is not a chord to take with Alt held: on a Mac that types a character.
+    bound.iter().any(|(m, k)| *k == key && (function || m.ctrl || m.command || m.alt) && pressed.matches_logically(*m))
+}
+
 pub fn set_mac_glyphs(available: bool) {
     MAC_GLYPHS.store(available, Ordering::Relaxed);
 }
@@ -1249,12 +1278,40 @@ pub fn picked_file() -> Option<Picked> {
     None
 }
 
+/// Files a command wrote: each one's path and bytes.
+pub type Written = Vec<(PathBuf, Vec<u8>)>;
+
 /// In a browser: offers each file a command saved or exported as a download.
 #[cfg_attr(not(target_arch = "wasm32"), allow(unused_variables))]
-pub fn deliver(files: Vec<(PathBuf, Vec<u8>)>) {
+pub fn deliver(files: Written) {
     #[cfg(target_arch = "wasm32")]
     for (path, data) in files {
         crate::web::download(&path, &data);
+    }
+}
+
+/// In a browser: what one command wrote, as one download. A single file goes as it is; several
+/// (a PNG or SVG sequence, a sprite sheet with its data, a publish) go in one ZIP, because a
+/// browser lets a page start only a few downloads in a row and silently drops the rest (Chrome
+/// kept 10 to 18 of a 48-frame sequence). The archive is named `name`, or after the folder the
+/// files share, or after the first file. When they don't fit a ZIP the files come back as they
+/// were, to send one by one after all, with why.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub fn as_one_download(files: Written, name: Option<&str>) -> (Written, Option<String>) {
+    use std::path::Component;
+    if files.len() < 2 {
+        return (files, None);
+    }
+    let folder = |p: &Path| match (p.components().next(), p.components().nth(1)) {
+        (Some(Component::Normal(f)), Some(_)) => Some(f.to_string_lossy().into_owned()),
+        _ => None,
+    };
+    let shared = files.first().and_then(|(p, _)| folder(p)).filter(|f| files.iter().all(|(p, _)| folder(p).as_ref() == Some(f)));
+    let first = files.first().and_then(|(p, _)| p.file_stem()).map(|s| s.to_string_lossy().into_owned());
+    let name = name.map(str::to_string).or(shared).or(first).filter(|n| !n.is_empty()).unwrap_or_else(|| "export".to_string()); // i18n-exempt: a file name
+    match anicraft_engine::publish::zip(&files) {
+        Ok(z) => (vec![(PathBuf::from(format!("{name}.zip")), z)], None),
+        Err(e) => (files, Some(e)),
     }
 }
 
@@ -1410,6 +1467,43 @@ mod tests {
         assert_eq!(split_suggestion("animation.anicraft"), (None, "animation.anicraft".to_string()), "a bare name: the platform picks the folder");
         let gone = dir.join("anicraft-no-such-folder-here").join("walk.anicraft");
         assert_eq!(split_suggestion(&gone.display().to_string()).0, None, "a folder that isn't there is not offered");
+    }
+
+    /// The web editor takes from the browser exactly the keys it acts on: F5 must insert a
+    /// frame, not reload the page, while typing, the clipboard and the browser's own keys stay.
+    #[test]
+    fn the_browser_keeps_every_key_the_editor_does_not_use() {
+        use egui::{Key, Modifiers};
+        let bound = [(Modifiers::NONE, Key::F5), (Modifiers::COMMAND, Key::R), (Modifiers::NONE, Key::V), (Modifiers::COMMAND | Modifiers::SHIFT, Key::V), (Modifiers::ALT, Key::F)];
+        let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+        let claims = |m: Modifiers, k: Key| claims_key(&bound, true, m, Some(k));
+        assert!(claims(Modifiers::NONE, Key::F5) && claims(ctrl, Key::R) && claims(Modifiers::ALT, Key::F));
+        assert!(claims(Modifiers::SHIFT, Key::F5), "as egui matches it: Shift held still presses F5");
+        assert!(!claims(Modifiers::NONE, Key::F12) && !claims(ctrl, Key::T) && !claims(Modifiers::ALT, Key::D), "unused keys are the browser's");
+        assert!(!claims(Modifiers::NONE, Key::V), "a tool letter is typing in a text field");
+        assert!(!claims(Modifiers::ALT, Key::V), "and with Alt it types a character on a Mac");
+        assert!(!claims(ctrl, Key::V) && !claims(ctrl | Modifiers::SHIFT, Key::V), "paste arrives as the browser's event");
+        assert!(claims_key(&bound, true, Modifiers::ALT, None), "Alt alone is the editor's menu bar");
+        assert!(!claims_key(&bound, false, Modifiers::ALT, None), "but not on a Mac, where Alt opens no menu");
+    }
+
+    /// One command's files leave the browser as one download: a browser drops most of a run
+    /// of downloads, so a sequence must be one archive holding every frame.
+    #[test]
+    fn several_exported_files_are_one_archive() {
+        let file = |p: &str| (PathBuf::from(p), p.as_bytes().to_vec());
+        let one = as_one_download(vec![file("movie.gif")], None).0;
+        assert_eq!(one, vec![file("movie.gif")], "a single file is not wrapped");
+        let frames: Vec<_> = (0..48).map(|i| file(&format!("frames/frame_{i:05}.png"))).collect();
+        let (zipped, failed) = as_one_download(frames.clone(), None);
+        assert_eq!(failed, None);
+        assert_eq!(zipped.len(), 1);
+        assert_eq!(zipped[0].0, PathBuf::from("frames.zip"), "named after the folder the frames share");
+        let listed = |name: &str| zipped[0].1.windows(name.len()).any(|w| w == name.as_bytes());
+        assert!(frames.iter().all(|(p, _)| listed(&p.display().to_string().replace('\\', "/"))), "every frame is in it");
+        let sheet = as_one_download(vec![file("sprites.png"), file("sprites.json")], None).0;
+        assert_eq!(sheet[0].0, PathBuf::from("sprites.zip"), "no shared folder: after the first file");
+        assert_eq!(as_one_download(frames, Some("walk")).0[0].0, PathBuf::from("walk.zip"));
     }
 
     #[test]
