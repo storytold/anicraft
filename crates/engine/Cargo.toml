@@ -25,7 +25,6 @@ rayon.workspace = true
 web-time.workspace = true
 craft-gif.workspace = true
 craft-image-codecs.workspace = true
-craft-apng-container.workspace = true
 craft-webp.workspace = true
 regex.workspace = true
 # CSV and TSV data tables (ADR 0118).

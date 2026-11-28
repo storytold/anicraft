@@ -277,7 +277,7 @@ fn still(kind: Kind) -> Result<Encoded> {
 /// The shared container owns PNG chunks, CRCs and APNG sequence validation.
 /// Frame selection, compression and exact rational timing remain AniCraft policy.
 fn apng_file(w: u32, h: u32, plays: u32, frames: &[(&Encoded, (u16, u16))]) -> Result<Vec<u8>> {
-    use craft_apng_container::apng::Frame;
+    use craft_image_codecs::apng::Frame;
     // Bound the output by the already-compressed payloads plus exact framing.
     // Pixel/frame budgets are enforced before rendering, unchanged by this adapter.
     let budget = frames
@@ -298,7 +298,7 @@ fn apng_file(w: u32, h: u32, plays: u32, frames: &[(&Encoded, (u16, u16))]) -> R
             data: &f.data,
         })
         .collect();
-    craft_apng_container::apng::encode(w, h, plays, &frames, budget).map_err(|e| EngineError::Format(e.to_string()))
+    craft_image_codecs::apng::encode(w, h, plays, &frames, budget).map_err(|e| EngineError::Format(e.to_string()))
 }
 
 /// The animated WebP container is shared; frame selection, delta rectangles and timing
